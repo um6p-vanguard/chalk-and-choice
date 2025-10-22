@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<form method='post'><input name='question'>{% for i in range(1,5) %}<input name='opt{{i}}'>{% endfor %}<input name='correct'><button>Create</button>{% if error %}<p>{{error}}</p>{% endif %}</form>{% endblock %}
