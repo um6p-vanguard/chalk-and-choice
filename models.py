@@ -62,3 +62,26 @@ class Vote(db.Model):
     __table_args__ = (
         UniqueConstraint('poll_id', 'student_id', name='uq_vote_poll_student'),
     )
+
+
+class Form(db.Model):
+    __tablename__ = "forms"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    schema_json = db.Column(JSONText, nullable=False)  # SurveyJS JSON
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
+    creator = db.relationship('User')
+
+class FormResponse(db.Model):
+    __tablename__ = "form_responses"
+    id = db.Column(db.Integer, primary_key=True)
+    form_id = db.Column(db.Integer, db.ForeignKey('forms.id', ondelete="CASCADE"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), index=True, nullable=True)
+    student_name = db.Column(db.String(120), nullable=True)
+    payload_json = db.Column(JSONText, nullable=False)  # submitted answers
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    form = db.relationship('Form', backref=db.backref('responses', cascade="all,delete-orphan"))
+    student = db.relationship('Student')

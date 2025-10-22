@@ -40,6 +40,7 @@
           <span>Instructor: <strong>{{ user.name }}</strong> (<a href="{{ url_for('user_logout') }}">logout</a>)</span>
           <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
           <a href="{{ url_for('poll_new') }}">New Poll</a>
+          <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
         {% else %}
           <a href="{{ url_for('user_login') }}">Instructor login</a>
         {% endif %}
@@ -50,7 +51,7 @@
     {% block content %}{% endblock %}
     <div class="sp"></div>
 
-    <div class="muted">Offline/online classroom polling — Render Starter + SQLite disk.</div>
+    <div class="muted">SASE Poll login</div>
   </div>
 </body>
 </html>

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>New Form</h3>
+  <p class="muted">Paste a SurveyJS JSON schema. We’ll host and collect responses.</p>
+  {% if error %}<p style="color:#fda4af;">{{ error }}</p>{% endif %}
+
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Title</label>
+    <input type="text" name="title" required placeholder="e.g., Week 5 Feedback">
+
+    <div class="sp"></div>
+    <label>Survey JSON</label>
+    <textarea name="schema_json" rows="18" style="width:100%;padding:10px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;" placeholder='{"title":"...","pages":[...]}' required>{{ schema_json }}</textarea>
+
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Create</button>
+    <a class="btn" href="{{ url_for('forms_list') }}" style="margin-left:8px;">Cancel</a>
+  </form>
+</div>
+{% endblock %}

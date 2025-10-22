@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Forms</h3>
+  <p><a class="btn btn-primary" href="{{ url_for('forms_new') }}">New Form</a></p>
+  {% if forms %}
+    <table>
+      <thead><tr><th>Title</th><th>Code</th><th>Created</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for f in forms %}
+          <tr>
+            <td>{{ f.title }}</td>
+            <td>{{ f.code }}</td>
+            <td class="muted">{{ f.created_at }}</td>
+            <td>
+              <a href="{{ url_for('form_render', code=f.code) }}">Open</a> ·
+              <a href="{{ url_for('forms_results', code=f.code) }}">Results</a>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No forms yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

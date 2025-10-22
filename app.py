@@ -5,7 +5,7 @@ from flask import (Flask, render_template, request, redirect, url_for,
                    session, make_response, jsonify, abort, Response,
                    send_file)
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, Poll, Vote, Student, User
+from models import db, Poll, Vote, Student, User, Form, FormResponse
 import qrcode
 from itsdangerous import URLSafeSerializer
 import time
@@ -420,6 +420,87 @@ def poll_stream(code):
                 last = blob
             time.sleep(1.5)
     return Response(event_stream(), mimetype="text/event-stream")
+
+
+# --------- FORMS: create, render, submit, results, list ----------
+
+@app.route("/forms")
+@require_user()
+def forms_list():
+    forms = Form.query.order_by(Form.created_at.desc()).all()
+    return render_template("forms_list.html", forms=forms, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/forms/new", methods=["GET", "POST"])
+@require_user()
+def forms_new():
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = (request.form.get("title") or "").strip()
+        schema_text = request.form.get("schema_json") or ""
+        if not title or not schema_text:
+            return render_template("forms_new.html", error="Title and JSON are required.", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
+        import json
+        try:
+            schema = json.loads(schema_text)
+        except Exception as e:
+            return render_template("forms_new.html", error=f"Invalid JSON: {e}", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
+
+        code = gen_code()
+        while Form.query.filter_by(code=code).first() is not None:
+            code = gen_code()
+        f = Form(code=code, title=title, schema_json=schema, creator_user_id=current_user().id if current_user() else None)
+        db.session.add(f); db.session.commit()
+        return redirect(url_for("forms_results", code=f.code))
+    # GET
+    return render_template("forms_new.html", schema_json="", user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/f/<code>")
+def form_render(code):
+    # student-facing form renderer
+    form = Form.query.filter_by(code=code).first_or_404()
+    if not session.get("student_id"):
+        return redirect(url_for("student_login", next=url_for("form_render", code=code)))
+    # Pass form schema to template; it will load SurveyJS from CDN and POST results
+    return render_template("form_render.html", form=form, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/api/forms/<code>/responses", methods=["POST"])
+def form_submit(code):
+    form = Form.query.filter_by(code=code).first_or_404()
+    if not session.get("student_id"):
+        abort(401)
+    # Optional but recommended CSRF for JSON POST: expect header X-CSRF
+    token = request.headers.get("X-CSRF", "")
+    try:
+        if not hmac.compare_digest(token, csrf_token()):
+            abort(400, "bad csrf")
+    except Exception:
+        abort(400, "bad csrf")
+
+    data = request.get_json(silent=True) or {}
+    stu = current_student()
+    resp = FormResponse(
+        form_id=form.id,
+        student_id=stu.id if stu else None,
+        student_name=stu.name if stu else None,
+        payload_json=data
+    )
+    db.session.add(resp); db.session.commit()
+    return jsonify({"ok": True})
+
+@app.route("/forms/<code>/results")
+@require_user()
+def forms_results(code):
+    form = Form.query.filter_by(code=code).first_or_404()
+    rows = []
+    for r in form.responses:
+        rows.append({
+            "name": r.student_name or "(anonymous)",
+            "when": r.created_at,
+            "payload": r.payload_json
+        })
+    return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
+
 
 
 @app.route("/export/<code>.csv")
