@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator, TEXT
+from sqlalchemy import UniqueConstraint
 
 db = SQLAlchemy()
 
@@ -41,6 +42,8 @@ class Poll(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
     creator = db.relationship('User')
+    # NEW: gate voting without deleting the poll
+    is_open = db.Column(db.Boolean, nullable=False, default=True)
 
 class Vote(db.Model):
     __tablename__ = 'votes'
@@ -54,3 +57,8 @@ class Vote(db.Model):
 
     poll = db.relationship('Poll', backref=db.backref('votes', cascade="all,delete-orphan"))
     student = db.relationship('Student')
+
+    # NEW: one vote per (poll, student) at the DB layer
+    __table_args__ = (
+        UniqueConstraint('poll_id', 'student_id', name='uq_vote_poll_student'),
+    )

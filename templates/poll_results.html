@@ -1,1 +1,136 @@
-{% extends 'base.html' %}{% block content %}Results{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Results</h3>
+
+  <p class="q">{{ poll.question|e }}</p>
+  <p class="muted">
+    Code: <strong>{{ poll.code }}</strong> ·
+    Status: <strong>{{ "OPEN" if poll.is_open else "CLOSED" }}</strong> ·
+    Options: {{ poll.options|length }}
+  </p>
+
+  {# --- Summary bars --- #}
+  {% set total = counts|sum %}
+  {% if total == 0 %}
+    <p class="muted">No votes yet.</p>
+  {% endif %}
+
+  <div id="results-bars">
+    {% for opt in poll.options %}
+      {% set count = counts[loop.index0] %}
+      {% set pct = (100 * count / total) if total else 0 %}
+      <div style="margin:12px 0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <div>
+            {% if poll.correct_index is not none and loop.index0 == poll.correct_index %}
+              <strong>✅ {{ opt|e }}</strong>
+            {% else %}
+              {{ opt|e }}
+            {% endif %}
+          </div>
+          <div class="muted">{{ count }} ({{ '%.1f'|format(pct) }}%)</div>
+        </div>
+        <div style="background:#0b1220;border:1px solid #334155;border-radius:8px;height:20px;">
+          <div
+            style="background:var(--accent, #22c55e);height:20px;width: {{ '%.2f'|format(pct) }}%; border-radius:8px; transition: width .3s;">
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {# --- Accuracy --- #}
+  {% if accuracy is not none %}
+    <p><strong>Accuracy:</strong> {{ '%.1f'|format(accuracy * 100) }}% ({{ total }} responses)</p>
+  {% else %}
+    <p class="muted">Set a correct option index to track accuracy.</p>
+  {% endif %}
+
+  <div class="sp"></div>
+
+  {# --- Instructor controls --- #}
+  <div class="row" style="gap:8px;flex-wrap:wrap;">
+    <form method="post" action="{{ url_for('poll_set_correct', code=poll.code) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Correct option index (0-based):</label>
+      <input type="text" name="correct" value="{{ poll.correct_index if poll.correct_index is not none }}" style="max-width:80px;">
+      <button class="btn" type="submit">Save</button>
+    </form>
+
+    <form method="post" action="{{ url_for('poll_open', code=poll.code) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="btn" type="submit" {% if poll.is_open %}disabled{% endif %}>Open voting</button>
+    </form>
+
+    <form method="post" action="{{ url_for('poll_close', code=poll.code) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="btn" type="submit" {% if not poll.is_open %}disabled{% endif %}>Close voting</button>
+    </form>
+
+    <a class="btn" href="{{ url_for('export_csv', code=poll.code) }}">Export CSV</a>
+    <a class="btn" href="{{ url_for('share', code=poll.code) }}">Share / QR</a>
+  </div>
+
+  <div class="sp"></div>
+
+  {# --- Per-student table --- #}
+  <div class="card" style="background:#0b1220;border:1px solid #334155;">
+    <h4>Responses ({{ total }})</h4>
+    <div style="overflow:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Student</th>
+            <th>Choice</th>
+            <th>Correct</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td>{{ r.name }}</td>
+              <td>
+                {% set idx = r.choice %}
+                {% if 0 <= idx < poll.options|length %}
+                  {{ idx }} — {{ poll.options[idx] }}
+                {% else %}
+                  {{ idx }}
+                {% endif %}
+              </td>
+              <td>
+                {% if poll.correct_index is not none %}
+                  {{ "Yes" if r.correct else "No" }}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+              <td class="muted">{{ r.when }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# --- Live updates via SSE (instructor-only endpoint) --- #}
+<script>
+(function(){
+  // Auto-refresh the page when server pushes new tallies.
+  // Simple & durable for live classes.
+  try {
+    const es = new EventSource("{{ url_for('poll_stream', code=poll.code) }}");
+    es.onmessage = function(ev){
+      // We could diff the DOM, but reloading is more robust for now.
+      location.reload();
+    };
+    es.onerror = function(){ /* ignore; Render will reconnect */ };
+  } catch(e) {
+    // If SSE is blocked, fall back to a light poll every 3s
+    setInterval(function(){ fetch("{{ url_for('poll_stats', code=poll.code) }}").then(()=>location.reload()); }, 3000);
+  }
+})();
+</script>
+{% endblock %}

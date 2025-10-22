@@ -1,1 +1,40 @@
-{% extends 'base.html' %}{% block content %}Welcome. <a href='{{ url_for('user_login') }}'>Instructor login</a>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Welcome</h2>
+  <p>Collect named multiple-choice answers from students’ phones. Works on a local network or via Render.</p>
+
+  {% if user %}
+    <h3>Your polls</h3>
+    {% if polls %}
+      <table>
+        <thead>
+          <tr><th>Question</th><th>Code</th><th>Options</th><th>Correct</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for p in polls %}
+            <tr>
+              <td>{{ p.question }}</td>
+              <td>{{ p.code }}</td>
+              <td>{{ p.options|length }}</td>
+              <td>{{ p.correct_index if p.correct_index is not none else "-" }}</td>
+              <td>
+                <a href="{{ url_for('share', code=p.code) }}">Share</a> ·
+                <a href="{{ url_for('poll_results', code=p.code) }}">Results</a> ·
+                <a href="{{ url_for('poll_edit', code=p.code) }}">Edit</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted">No polls yet.</p>
+    {% endif %}
+    <div class="sp"></div>
+    <a class="btn btn-primary" href="{{ url_for('poll_new') }}">New Poll</a>
+  {% else %}
+    <p class="muted">Login as an instructor to create and manage polls.</p>
+    <a class="btn" href="{{ url_for('user_login') }}">Instructor login</a>
+  {% endif %}
+</div>
+{% endblock %}

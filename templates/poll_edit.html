@@ -1,1 +1,36 @@
-{% extends 'base.html' %}{% block content %}Edit{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3>Edit Poll</h3>
+  {% if error %}<p style="color:#fda4af;">{{ error }}</p>{% endif %}
+
+  <form method="post">
+    {% if csrf_token is defined %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
+
+    <label>Question</label>
+    <input type="text" name="question" value="{{ poll.question }}" required>
+
+    <div class="sp"></div>
+    <label>Options (2–8)</label>
+    <div class="grid">
+      {% for i in range(0,8) %}
+        <input type="text" name="opt{{ i+1 }}" placeholder="Option {{ i+1 }}"
+               value="{{ poll.options[i] if i < poll.options|length else '' }}">
+      {% endfor %}
+    </div>
+
+    <div class="sp"></div>
+    <label>Correct option index (0-based). Leave empty for no grading.</label>
+    <input type="text" name="correct" value="{{ poll.correct_index if poll.correct_index is not none }}">
+
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Save</button>
+  </form>
+
+  <div class="sp"></div>
+  <form method="post" action="{{ url_for('poll_delete', code=poll.code) }}" onsubmit="return confirm('Delete this poll?');">
+    {% if csrf_token is defined %}<input type="hidden" name="csrf" value="{{ csrf_token() }}">{% endif %}
+    <button class="btn" type="submit">Delete Poll</button>
+  </form>
+</div>
+{% endblock %}

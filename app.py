@@ -1,16 +1,39 @@
 
 import os, io, base64, hashlib, secrets, argparse, csv, functools
 from datetime import timedelta
-from flask import Flask, render_template, request, redirect, url_for, session, make_response, jsonify, abort, send_file
+from flask import (Flask, render_template, request, redirect, url_for,
+                   session, make_response, jsonify, abort, Response,
+                   send_file)
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, Poll, Vote, Student, User
 import qrcode
 from itsdangerous import URLSafeSerializer
+import time
+import json
+import hmac, hashlib  # add
 
 APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
 DB_PATH = os.path.abspath(os.environ.get("CLASSVOTE_DB", "classvote.db"))
 DB_URI  = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")
+
+
+
+def _csrf_key():
+    if "csrf_key" not in session:
+        session["csrf_key"] = secrets.token_hex(16)
+    return session["csrf_key"]
+
+def csrf_token():
+    secret = APP_SECRET.encode()
+    key = _csrf_key().encode()
+    return hmac.new(secret, key, hashlib.sha256).hexdigest()
+
+def verify_csrf(form_field="csrf"):
+    sent = request.form.get(form_field, "")
+    return hmac.compare_digest(sent, csrf_token())
+
+
 
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
@@ -215,37 +238,105 @@ def current_student():
     if not sid: return None
     return Student.query.get(sid)
 
-@app.route("/poll/<code>", methods=["GET","POST"])
+@app.route("/poll/<code>", methods=["GET", "POST"])
 def poll_view(code):
     poll = Poll.query.filter_by(code=code).first_or_404()
+
+    # If voting is closed, block POSTs immediately
+    if request.method == "POST" and not poll.is_open:
+        return render_template(
+            "poll_view.html",
+            poll=poll,
+            error="Voting is closed.",
+            already=False,
+            user=current_user(),
+            student_name=session.get("student_name"),
+        )
+
+    # Require a logged-in student (by name)
     if not session.get("student_id"):
         nxt = url_for("poll_view", code=code)
         return redirect(url_for("student_login", next=nxt))
-    token, resp = ensure_voter_cookie(None)
+
+    # Optional CSRF check (only if verify_csrf helper is present)
     if request.method == "POST":
-        existing = Vote.query.filter_by(poll_id=poll.id, voter_token_hash=token_hash(token)).first()
-        if existing:
-            return render_template("poll_view.html", poll=poll, already=True, user=current_user(), student_name=session.get("student_name"))
         try:
-            choice = int(request.form.get("choice","-1"))
-        except: choice = -1
-        if choice < 0 or choice >= len(poll.options):
-            return render_template("poll_view.html", poll=poll, error="Pick an option", user=current_user(), student_name=session.get("student_name"))
+            if not verify_csrf():
+                abort(400, "bad csrf")
+        except NameError:
+            # verify_csrf not defined; skip (you can remove this block once you add CSRF helpers)
+            pass
+
+    # Ensure the device/browser has a stable voter cookie
+    token, _ = ensure_voter_cookie(None)
+
+    if request.method == "POST":
+        # 1) Block repeat votes by device/browser cookie
+        existing_cookie = Vote.query.filter_by(
+            poll_id=poll.id, voter_token_hash=token_hash(token)
+        ).first()
+
+        # 2) Block repeat votes by student account (even if cookie changes)
         stu = current_student()
+        existing_student = (
+            Vote.query.filter_by(poll_id=poll.id, student_id=stu.id).first()
+            if stu
+            else None
+        )
+
+        if existing_cookie or existing_student:
+            return render_template(
+                "poll_view.html",
+                poll=poll,
+                already=True,
+                user=current_user(),
+                student_name=session.get("student_name"),
+            )
+
+        # Validate choice
+        try:
+            choice = int(request.form.get("choice", "-1"))
+        except Exception:
+            choice = -1
+
+        if choice < 0 or choice >= len(poll.options):
+            return render_template(
+                "poll_view.html",
+                poll=poll,
+                error="Pick an option",
+                user=current_user(),
+                student_name=session.get("student_name"),
+            )
+
+        # Record the vote
         v = Vote(
             poll_id=poll.id,
             choice=choice,
             voter_token_hash=token_hash(token),
             student_id=stu.id if stu else None,
-            student_name=stu.name if stu else None
+            student_name=stu.name if stu else None,
         )
-        db.session.add(v); db.session.commit()
+        db.session.add(v)
+        db.session.commit()
+
+        # Persist the voter cookie and redirect to thanks
         r = make_response(redirect(url_for("poll_thanks", code=code)))
         _, r = ensure_voter_cookie(r)
         return r
-    r = make_response(render_template("poll_view.html", poll=poll, already=False, user=current_user(), student_name=session.get("student_name")))
+
+    # GET: render the voting form (and set voter cookie if missing)
+    r = make_response(
+        render_template(
+            "poll_view.html",
+            poll=poll,
+            already=False,
+            user=current_user(),
+            student_name=session.get("student_name"),
+        )
+    )
     _, r = ensure_voter_cookie(r)
     return r
+
 
 @app.route("/poll/<code>/thanks")
 def poll_thanks(code):
@@ -288,6 +379,48 @@ def poll_stats(code):
     for v in poll.votes:
         counts[v.choice] += 1
     return jsonify(dict(counts=counts, total=sum(counts), options=poll.options, question=poll.question, correct_index=poll.correct_index))
+
+@app.route("/poll/<code>/open", methods=["POST"])
+@require_user()
+def poll_open(code):
+    if not verify_csrf(): abort(400, "bad csrf")
+    p = Poll.query.filter_by(code=code).first_or_404()
+    p.is_open = True
+    db.session.commit()
+    return redirect(url_for("poll_results", code=code))
+
+@app.route("/poll/<code>/close", methods=["POST"])
+@require_user()
+def poll_close(code):
+    if not verify_csrf(): abort(400, "bad csrf")
+    p = Poll.query.filter_by(code=code).first_or_404()
+    p.is_open = False
+    db.session.commit()
+    return redirect(url_for("poll_results", code=code))
+
+@app.route("/poll/<code>/stream")
+@require_user()  # instructor-only stream
+def poll_stream(code):
+    poll = Poll.query.filter_by(code=code).first_or_404()
+    def event_stream():
+        last = None
+        while True:
+            counts = [0]*len(poll.options)
+            for v in poll.votes:
+                counts[v.choice] += 1
+            payload = dict(
+                counts=counts,
+                total=sum(counts),
+                correct_index=poll.correct_index,
+                options=poll.options
+            )
+            blob = json.dumps(payload, separators=(",", ":"))
+            if blob != last:
+                yield f"data: {blob}\n\n"
+                last = blob
+            time.sleep(1.5)
+    return Response(event_stream(), mimetype="text/event-stream")
+
 
 @app.route("/export/<code>.csv")
 @require_user()
