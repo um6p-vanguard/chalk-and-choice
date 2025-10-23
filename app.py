@@ -614,6 +614,43 @@ def form_submit(code):
     db.session.commit()
     return jsonify({"ok": True})
 
+@app.route("/forms/<code>/qr")
+@require_user()  # instructors/admins only
+def forms_qr_page(code):
+    form = Form.query.filter_by(code=code).first_or_404()
+    form_url = request.url_root.rstrip("/") + url_for("form_render", code=form.code)
+    return render_template(
+        "forms_qr.html",
+        form=form,
+        form_url=form_url,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/forms/<code>/qr.png")
+@require_user()
+def forms_qr_png(code):
+    form = Form.query.filter_by(code=code).first_or_404()
+    target = request.url_root.rstrip("/") + url_for("form_render", code=form.code)
+
+    qr = qrcode.QRCode(
+        version=None,  # auto
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,    # tweak for print size
+        border=2,
+    )
+    qr.add_data(target)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png",
+                     as_attachment=False,
+                     download_name=f"{form.code}.png")
+
+
 @app.route("/forms/<code>/results")
 @require_user()
 def forms_results(code):

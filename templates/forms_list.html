@@ -25,6 +25,7 @@
             <td>
               <a class="btn" href="{{ url_for('form_render', code=f.code) }}">Open</a>
               <button class="btn" onclick="navigator.clipboard.writeText('{{ request.url_root.rstrip('/') }}{{ url_for('form_render', code=f.code) }}')">Copy link</button>
+              <a class="btn" href="{{ url_for('forms_qr_page', code=f.code) }}">QR</a>
             </td>
           </tr>
         {% endfor %}
