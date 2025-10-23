@@ -304,12 +304,14 @@ def poll_edit(code):
         correct_index = int(correct_raw) if (correct_raw not in (None,"") and correct_raw.isdigit()) else None
         if not question or len(options) < 2:
             return render_template("poll_edit.html", poll=p, error="Enter a question and at least 2 options.", user=current_user())
-        if correct_index is not None and (correct_index < 0 or correct_index >= len(p.options)):
+        # IMPORTANT: validate against the *new* options length
+        if correct_index is not None and (correct_index < 0 or correct_index >= len(options)):
             return render_template("poll_edit.html", poll=p, error="Correct answer index out of range.", user=current_user())
         p.question, p.options, p.correct_index = question, options, correct_index
         db.session.commit()
         return redirect(url_for("poll_results", code=p.code))
     return render_template("poll_edit.html", poll=p, user=current_user())
+
 
 @app.route("/poll/<code>/delete", methods=["POST"])
 @require_user()
