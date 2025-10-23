@@ -368,7 +368,7 @@ def poll_view(code):
     # Require a logged-in student (by name)
     if not session.get("student_id"):
         nxt = url_for("poll_view", code=code)
-        return redirect(url_for("student_login", next=nxt))
+        return redirect(url_for("login", next=nxt))
 
     # Optional CSRF check (only if verify_csrf helper is present)
     if request.method == "POST":
@@ -581,7 +581,7 @@ def form_render(code):
     # student-facing form renderer
     form = Form.query.filter_by(code=code).first_or_404()
     if not session.get("student_id"):
-        return redirect(url_for("student_login", next=url_for("form_render", code=code)))
+        return redirect(url_for("login", next=url_for("form_render", code=code)))
     # Pass form schema to template; it will load SurveyJS from CDN and POST results
     return render_template("form_render.html", form=form, user=current_user(), student_name=session.get("student_name"))
 
