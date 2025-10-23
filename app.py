@@ -34,7 +34,6 @@ def verify_csrf(form_field="csrf"):
     return hmac.compare_digest(sent, csrf_token())
 
 
-
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -49,6 +48,10 @@ def create_app(db_path=DB_URI):
     return app
 
 app = create_app()
+
+@app.context_processor
+def inject_csrf():
+    return {"csrf_token": csrf_token}
 
 def current_user():
     uid = session.get("user_id")
