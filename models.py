@@ -104,3 +104,19 @@ class FormResponse(db.Model):
 
     form = db.relationship('Form', backref=db.backref('responses', cascade="all,delete-orphan"))
     student = db.relationship('Student')
+
+class LectureSignal(db.Model):
+    __tablename__ = "lecture_signals"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
+    student_name = db.Column(db.String(120))
+    kind = db.Column(db.String(16), nullable=False)  # "ok" | "confused"
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+class LectureQuestion(db.Model):
+    __tablename__ = "lecture_questions"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
+    student_name = db.Column(db.String(120))
+    text = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

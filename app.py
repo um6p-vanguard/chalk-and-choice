@@ -7,7 +7,7 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeSerializer
 
-from models import db, Poll, Vote, Student, User, Form, FormResponse
+from models import db, Poll, Vote, Student, User, Form, FormResponse, LectureQuestion, LectureSignal
 import qrcode
 
 # --------------------------------------------------------------------
@@ -589,6 +589,57 @@ def forms_results(code):
     form = Form.query.filter_by(code=code).first_or_404()
     rows = [{"name": r.student_name or "(anonymous)", "when": r.created_at, "payload": r.payload_json} for r in form.responses]
     return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
+
+# --------------------------------------------------------------------
+# Lecture interaction
+# --------------------------------------------------------------------
+@app.route("/api/signal", methods=["POST"])
+def signal_post():
+    # Students only
+    stu = current_student()
+    if not stu:
+        abort(401)
+    # CSRF
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+
+    data = request.get_json(silent=True) or {}
+    kind = (data.get("kind") or "").lower()
+    if kind not in ("ok", "confused"):
+        abort(400, "bad kind")
+
+    s = LectureSignal(student_id=stu.id, student_name=stu.name, kind=kind)
+    db.session.add(s); db.session.commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/question", methods=["POST"])
+def question_post():
+    # Students only
+    stu = current_student()
+    if not stu:
+        abort(401)
+    # CSRF
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        abort(400, "empty")
+
+    # Optional: simple per-student throttle (1 question / 60s)
+    recent = LectureQuestion.query.filter(
+        LectureQuestion.student_id == stu.id,
+        LectureQuestion.created_at >= datetime.utcnow() - timedelta(seconds=60)
+    ).first()
+    if recent:
+        return jsonify({"ok": False, "error": "rate_limited"}), 429
+
+    q = LectureQuestion(student_id=stu.id, student_name=stu.name, text=text)
+    db.session.add(q); db.session.commit()
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Exports / landing routes
