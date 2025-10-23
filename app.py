@@ -11,6 +11,7 @@ from itsdangerous import URLSafeSerializer
 import time
 import json
 import hmac, hashlib  # add
+import datetime
 
 APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
 DB_PATH = os.path.abspath(os.environ.get("CLASSVOTE_DB", "classvote.db"))
@@ -55,20 +56,33 @@ def inject_csrf():
 
 def current_user():
     uid = session.get("user_id")
-    return User.query.get(uid) if uid else None
+    if not uid: return None
+    return User.query.get(uid)
 
 def require_user(role=None):
-    def decorator(fn):
-        @functools.wraps(fn)
+    def deco(fn):
         def wrapper(*args, **kwargs):
             u = current_user()
-            if not u:
-                return redirect(url_for("user_login", next=request.path))
-            if role == "admin" and u.role != "admin":
-                abort(403)
+            if not u: return redirect(url_for("login", next=request.path))
+            if role and u.role != role: abort(403)
+            # Ensure student isn’t also logged in
+            if session.get("student_id"): logout_everyone(); return redirect(url_for("login"))
             return fn(*args, **kwargs)
+        wrapper.__name__ = fn.__name__
         return wrapper
-    return decorator
+    return deco
+
+def require_student():
+    def deco(fn):
+        def wrapper(*args, **kwargs):
+            s = current_student()
+            if not s: return redirect(url_for("login", next=request.path))
+            # Ensure user isn’t also logged in
+            if session.get("user_id"): logout_everyone(); return redirect(url_for("login"))
+            return fn(*args, **kwargs)
+        wrapper.__name__ = fn.__name__
+        return wrapper
+    return deco
 
 signer = URLSafeSerializer(APP_SECRET, salt="student-cookie")
 STUDENT_COOKIE = "cv_student"
@@ -119,23 +133,117 @@ def try_restore_student_from_cookie():
 def _restore_student():
     try_restore_student_from_cookie()
 
-@app.route("/user/login", methods=["GET","POST"])
-def user_login():
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    # If already logged in as either, send to dashboard
+    if current_user():
+        return redirect(url_for("dashboard_for_role"))
+    if current_student():
+        return redirect(url_for("student_home"))
+
+    error = None
     if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
         email = (request.form.get("email") or "").strip().lower()
-        password = request.form.get("password") or ""
-        u = User.query.filter_by(email=email).first()
-        if not u or not check_password_hash(u.password_hash, password):
-            return render_template("user_login.html", error="Invalid email or password", user=current_user(), student_name=session.get("student_name"))
-        session["user_id"] = u.id
-        session.permanent = True
-        return redirect(request.args.get("next") or url_for("index"))
-    return render_template("user_login.html", user=current_user(), student_name=session.get("student_name"))
+        pw    = request.form.get("password") or ""
+        next_url = request.args.get("next") or url_for("index")
+
+        # Try User first (admin/instructor), then Student
+        acct_user = User.query.filter_by(email=email).first()
+        acct_student = None if acct_user else Student.query.filter_by(email=email).first()
+
+        if acct_user:
+            if not acct_user.check_password(pw):
+                error = "Invalid credentials"
+            else:
+                logout_everyone()  # ensure exclusivity
+                session["user_id"] = acct_user.id
+                session["user_role"] = acct_user.role
+                acct_user.last_login = datetime.utcnow()
+                db.session.commit()
+                if acct_user.first_login:
+                    session["must_change_pw"] = {"kind":"user", "id":acct_user.id}
+                    return redirect(url_for("password_new"))
+                return redirect(url_for("dashboard_for_role"))
+        elif acct_student:
+            if not acct_student.check_password(pw):
+                error = "Invalid credentials"
+            else:
+                logout_everyone()
+                session["student_id"] = acct_student.id
+                acct_student.last_login = datetime.utcnow()
+                db.session.commit()
+                if acct_student.first_login:
+                    session["must_change_pw"] = {"kind":"student", "id":acct_student.id}
+                    return redirect(url_for("password_new"))
+                return redirect(url_for("student_home"))
+        else:
+            error = "Account not found"
+
+    return render_template("login.html", error=error, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/logout")
+def logout():
+    logout_everyone()
+    return redirect(url_for("login"))
+
+@app.route("/password/new", methods=["GET","POST"])
+def password_new():
+    must = session.get("must_change_pw")
+    if not must:
+        # allow manual password change only if logged in
+        if not (current_user() or current_student()):
+            return redirect(url_for("login"))
+    error = None
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        pw1 = request.form.get("password1") or ""
+        pw2 = request.form.get("password2") or ""
+        if pw1 != pw2:
+            error = "Passwords do not match"
+        elif len(pw1) < 8:
+            error = "Use at least 8 characters"
+        else:
+            # Decide which account to update
+            if must:
+                if must["kind"] == "user":
+                    u = User.query.get(must["id"])
+                    if not u: abort(400)
+                    u.set_password(pw1)
+                    u.first_login = False
+                    db.session.commit()
+                    session.pop("must_change_pw", None)
+                    session["user_id"] = u.id; session["user_role"] = u.role
+                    return redirect(url_for("dashboard_for_role"))
+                else:
+                    s = Student.query.get(must["id"])
+                    if not s: abort(400)
+                    s.set_password(pw1)
+                    s.first_login = False
+                    db.session.commit()
+                    session.pop("must_change_pw", None)
+                    session["student_id"] = s.id
+                    return redirect(url_for("student_home"))
+            else:
+                # Manual change if you add a “Change password” link later
+                acc = current_user() or current_student()
+                if hasattr(acc, "set_password"):
+                    acc.set_password(pw1)
+                    db.session.commit()
+                    return redirect(url_for("index"))
+                abort(400)
+    return render_template("password_new.html", error=error, user=current_user(), student_name=session.get("student_name"))
+
 
 @app.route("/user/logout")
 def user_logout():
     session.pop("user_id", None)
     return redirect(url_for("index"))
+
+def logout_everyone():
+    session.pop("user_id", None)
+    session.pop("user_role", None)
+    session.pop("student_id", None)
 
 @app.route("/")
 def index():
@@ -160,6 +268,7 @@ def student_login():
         resp = set_student_cookie(resp, stu)
         return resp
     return render_template("student_login.html", user=current_user(), student_name=session.get("student_name"))
+
 
 @app.route("/student/logout")
 def student_logout():
@@ -528,6 +637,22 @@ def export_csv(code):
         w.writerow([poll.code, poll.question, v.student_name or "", v.choice, choice_text, int(correct), v.created_at.isoformat()])
     mem = io.BytesIO(buf.getvalue().encode("utf-8"))
     return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=f"{poll.code}.csv")
+
+
+
+@app.route("/dashboard")
+@require_user()
+def dashboard_for_role():
+    u = current_user()
+    if u.role == "admin":
+        return redirect(url_for("poll_list"))
+    return redirect(url_for("poll_list"))
+
+@app.route("/student")
+@require_student()
+def student_home():
+    return redirect(url_for("index"))
+
 
 def main():
     parser = argparse.ArgumentParser()
