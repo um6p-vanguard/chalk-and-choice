@@ -1,29 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h3>Form Results</h3>
-  <p class="q">{{ form.title }}</p>
-  <p class="muted">Code: <strong>{{ form.code }}</strong> · Responses: <strong>{{ rows|length }}</strong></p>
-
-  {% if rows %}
-    <div style="overflow:auto;">
-      <table>
-        <thead>
-          <tr><th>Student</th><th>Time</th><th>Answers (JSON)</th></tr>
-        </thead>
-        <tbody>
-          {% for r in rows %}
-            <tr>
-              <td>{{ r.name }}</td>
-              <td class="muted">{{ r.when }}</td>
-              <td><pre style="white-space:pre-wrap;margin:0;">{{ r.payload|tojson(indent=2) }}</pre></td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <p class="muted">No responses yet.</p>
-  {% endif %}
+  <h3>{{ form.title }} — Responses ({{ rows|length }})</h3>
+  <table>
+    <thead><tr><th>When (UTC)</th><th>Student</th><th>Answers</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="muted">{{ r.when.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ r.name }}</td>
+        <td><pre style="white-space:pre-wrap;margin:0;">{{ r.payload | tojson(indent=2) }}</pre></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endblock %}

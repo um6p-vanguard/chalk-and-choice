@@ -535,31 +535,53 @@ def forms_new():
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    if not session.get("student_id"):
+    u = current_user()
+    s = current_student()
+
+    if not (u or s):
         return redirect(url_for("login", next=url_for("form_render", code=code)))
-    if not form.is_open:
-        return render_template("form_closed.html", form=form, user=current_user(),
-                               student_name=session.get("student_name"))
-    return render_template("form_render.html", form=form, user=current_user(),
-                           student_name=session.get("student_name"))
+
+    if s and not form.is_open:
+        return render_template("form_closed.html", form=form,
+                               user=u, student_name=session.get("student_name"))
+
+    can_submit = bool(s and form.is_open)
+    return render_template("form_render.html", form=form, can_submit=can_submit,
+                           user=u, student_name=session.get("student_name"))
 
 @app.route("/api/forms/<code>/responses", methods=["POST"])
 def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    if not session.get("student_id"):
+
+    # Only students can submit
+    stu = current_student()
+    if not stu:
         abort(401)
+
+    # Must be open for students
     if not form.is_open:
         abort(403, description="Form is closed")
+
+    # CSRF header check
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
-    data = request.get_json(silent=True) or {}
-    stu = current_student()
-    resp = FormResponse(form_id=form.id, student_id=stu.id if stu else None,
-                        student_name=stu.name if stu else None, payload_json=data)
-    db.session.add(resp); db.session.commit()
-    return jsonify({"ok": True})
 
+    # Enforce single submission per student per form
+    existing = FormResponse.query.filter_by(form_id=form.id, student_id=stu.id).first()
+    if existing:
+        return jsonify({"ok": False, "error": "already_submitted"}), 409
+
+    data = request.get_json(silent=True) or {}
+    resp = FormResponse(
+        form_id=form.id,
+        student_id=stu.id,
+        student_name=stu.name,
+        payload_json=data,
+    )
+    db.session.add(resp)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 @app.route("/forms/<code>/results")
 @require_user()

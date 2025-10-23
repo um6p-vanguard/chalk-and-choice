@@ -9,16 +9,26 @@
       <tbody>
         {% for f in forms %}
           <tr>
-            <td>{{ f.title }}</td>
-            <td>{{ f.code }}</td>
-            <td class="muted">{{ f.created_at }}</td>
+            <td><a href="{{ url_for('forms_results', code=f.code) }}">{{ f.title }}</a></td>
+            <td class="muted">{{ f.code }}</td>
             <td>
-              <a href="{{ url_for('form_render', code=f.code) }}">Open</a> ·
-              <a href="{{ url_for('forms_results', code=f.code) }}">Results</a>
+              {% if f.closes_at %}
+                {% if f.is_open %}
+                  <span class="muted">Open — closes {{ f.closes_at.strftime('%Y-%m-%d %H:%M UTC') }}</span>
+                {% else %}
+                  <span class="muted">Closed {{ f.closes_at.strftime('%Y-%m-%d %H:%M UTC') }}</span>
+                {% endif %}
+              {% else %}
+                <span class="muted">No expiry</span>
+              {% endif %}
+            </td>
+            <td>
+              <a class="btn" href="{{ url_for('form_render', code=f.code) }}">Open</a>
+              <button class="btn" onclick="navigator.clipboard.writeText('{{ request.url_root.rstrip('/') }}{{ url_for('form_render', code=f.code) }}')">Copy link</button>
             </td>
           </tr>
         {% endfor %}
-      </tbody>
+        </tbody>        
     </table>
   {% else %}
     <p class="muted">No forms yet.</p>

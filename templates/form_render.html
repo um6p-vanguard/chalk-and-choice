@@ -1,44 +1,90 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h3>{{ form.title }}</h3>
-  <div id="surveyContainer"></div>
+<div class="card" style="max-width:880px;">
+  <div class="row" style="justify-content:space-between;align-items:center;">
+    <h3 style="margin:0;">{{ form.title }}</h3>
+
+    {% if not can_submit %}
+      <span class="muted" style="font-size:.9rem; padding:4px 8px; border:1px solid #334155; border-radius:6px;">
+        Preview mode — submissions disabled
+      </span>
+    {% endif %}
+  </div>
+
+  <div id="surveyContainer" style="margin-top:12px;"></div>
+
+  <p id="formNotice" class="muted" style="display:none; margin-top:12px;"></p>
 </div>
 
-<!-- SurveyJS (vanilla JS): core CSS/JS first, then UI wrapper -->
+<!-- SurveyJS (vanilla) -->
 <link rel="stylesheet" href="{{ url_for('static', filename='survey/survey-core.min.css') }}">
 <script src="{{ url_for('static', filename='survey/survey.core.min.js') }}"></script>
 <script src="{{ url_for('static', filename='survey/survey-js-ui.min.js') }}"></script>
 
 <script>
 (function(){
-  // Inject schema; if DB stores it as a JSON string, parse it.
   let schema = {{ form.schema_json | tojson | safe }};
   if (typeof schema === "string") {
-    try { schema = JSON.parse(schema); } catch (e) {
-      console.error("Bad schema JSON:", e, schema);
-      schema = {};
-    }
+    try { schema = JSON.parse(schema); } catch(e) { console.error("Bad schema JSON", e); schema = {}; }
   }
 
-  // Build model and render
   const survey = new Survey.Model(schema);
-
-  // Submit to backend and then show thanks
-  survey.onComplete.add(async function(sender){
-    const payload = sender.data || {};
-    const csrf = "{{ csrf_token() }}";
-    await fetch("{{ url_for('form_submit', code=form.code) }}", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-CSRF": csrf },
-      body: JSON.stringify(payload),
-      credentials: "same-origin"
-    });
-    window.location = "{{ url_for('thanks', code=form.code) }}";
-  });
-
   const el = document.getElementById("surveyContainer");
-  // Correct vanilla render call (no SurveyUI.render here)
+  const canSubmit = {{ 'true' if can_submit else 'false' }};
+  const notice = document.getElementById("formNotice");
+
+  // If this viewer cannot submit (instructor/admin OR closed form), make read-only.
+  if (!canSubmit) {
+    survey.mode = "display";           // read-only
+    survey.showCompletedPage = false;  // don't show SurveyJS "completed" screen
+  } else {
+    // Normal submit path for students
+    survey.onComplete.add(async function(sender){
+      try {
+        const res = await fetch("{{ url_for('form_submit', code=form.code) }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF": "{{ csrf_token() }}" },
+          body: JSON.stringify(sender.data || {}),
+          credentials: "same-origin"
+        });
+
+        if (res.ok) {
+          window.location = "{{ url_for('thanks') }}";
+          return;
+        }
+
+        // Handle common server responses
+        if (res.status === 409) { // already submitted
+          notice.textContent = "You already submitted this form. Redirecting…";
+          notice.style.display = "block";
+          setTimeout(()=>{ window.location = "{{ url_for('thanks') }}"; }, 1200);
+          return;
+        }
+        if (res.status === 403) { // closed between render and submit
+          notice.textContent = "This form is now closed.";
+          notice.style.display = "block";
+          return;
+        }
+        if (res.status === 400) {
+          notice.textContent = "Submission rejected (bad request). Please refresh the page.";
+          notice.style.display = "block";
+          return;
+        }
+        if (res.status === 401) {
+          window.location = "{{ url_for('login', next=url_for('form_render', code=form.code)) }}";
+          return;
+        }
+
+        notice.textContent = "Unexpected error. Please try again later.";
+        notice.style.display = "block";
+      } catch (e) {
+        console.error(e);
+        notice.textContent = "Network error. Please try again.";
+        notice.style.display = "block";
+      }
+    });
+  }
+
   survey.render(el);
 })();
 </script>
