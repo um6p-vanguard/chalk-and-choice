@@ -487,7 +487,7 @@ def poll_stream(code):
                 # heartbeat so proxies don't kill the connection
                 yield ": keep-alive\n\n"
 
-            time.sleep(1.5)
+            time.sleep(30)
 
     # Helpful SSE headers
     resp = Response(generate(), mimetype="text/event-stream")
