@@ -5,33 +5,41 @@
   <div id="surveyContainer"></div>
 </div>
 
-<!-- SurveyJS: minimal vanilla setup -->
+<!-- SurveyJS (vanilla JS): core CSS/JS first, then UI wrapper -->
 <link href="https://unpkg.com/survey-core/defaultV2.min.css" rel="stylesheet">
 <script src="https://unpkg.com/survey-core/survey.core.min.js"></script>
 <script src="https://unpkg.com/survey-js-ui/survey-js-ui.min.js"></script>
 
 <script>
 (function(){
-  // The schema comes from Flask; we safely JSON-encode it into the page
-  const schema = {{ form.schema_json|tojson }};
+  // Inject schema; if DB stores it as a JSON string, parse it.
+  let schema = {{ form.schema_json | tojson | safe }};
+  if (typeof schema === "string") {
+    try { schema = JSON.parse(schema); } catch (e) {
+      console.error("Bad schema JSON:", e, schema);
+      schema = {};
+    }
+  }
+
+  // Build model and render
   const survey = new Survey.Model(schema);
 
+  // Submit to backend and then show thanks
   survey.onComplete.add(async function(sender){
     const payload = sender.data || {};
     const csrf = "{{ csrf_token() }}";
-    const res = await fetch("{{ url_for('form_submit', code=form.code) }}", {
+    await fetch("{{ url_for('form_submit', code=form.code) }}", {
       method: "POST",
-      headers: {"Content-Type": "application/json", "X-CSRF": csrf},
+      headers: { "Content-Type": "application/json", "X-CSRF": csrf },
       body: JSON.stringify(payload),
       credentials: "same-origin"
     });
-    // Always redirect to thank-you (reuse poll thanks)
-    window.location = "{{ url_for('poll_thanks', code='dummy') }}".replace("dummy", "{{ form.code }}");
+    window.location = "{{ url_for('poll_thanks', code=form.code) }}";
   });
 
-  // Render into container
   const el = document.getElementById("surveyContainer");
-  SurveyUI.render(survey, el);
+  // Correct vanilla render call (no SurveyUI.render here)
+  survey.render(el);
 })();
 </script>
 {% endblock %}

@@ -452,10 +452,16 @@ def forms_new():
         code = gen_code()
         while Form.query.filter_by(code=code).first() is not None:
             code = gen_code()
-        f = Form(code=code, title=title, schema_json=schema, creator_user_id=current_user().id if current_user() else None)
+        schema_text = request.form.get("schema_json") or ""
+        try:
+            schema = json.loads(schema_text)
+        except Exception as e:
+            return render_template("forms_new.html", error=f"Invalid JSON: {e}",
+                                   schema_json=schema_text, user=current_user(),
+                                   student_name=session.get("student_name"))
+        f = Form(code=code, title=title, schema_json=schema, creator_user_id=current_user().id)
         db.session.add(f); db.session.commit()
         return redirect(url_for("forms_results", code=f.code))
-    # GET
     return render_template("forms_new.html", schema_json="", user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/f/<code>")
