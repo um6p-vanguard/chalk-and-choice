@@ -32,6 +32,7 @@
       <div class="row">
         {% if user %}
           <span>Instructor{% if user.role == 'admin' %}/Admin{% endif %}: <strong>{{ user.name }}</strong></span>
+          <a href="{{ url_for('signals_dashboard') }}" style="margin-left:10px;">Signals</a>
           <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
           <a href="{{ url_for('poll_new') }}">New Poll</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>

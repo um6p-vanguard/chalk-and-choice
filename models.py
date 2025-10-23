@@ -119,4 +119,5 @@ class LectureQuestion(db.Model):
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
     student_name = db.Column(db.String(120))
     text = db.Column(db.Text, nullable=False)
+    handled = db.Column(db.Boolean, default=False, nullable=False)  # NEW
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

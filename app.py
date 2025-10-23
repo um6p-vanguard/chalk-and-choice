@@ -591,6 +591,115 @@ def forms_results(code):
     return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
 
 # --------------------------------------------------------------------
+# Lecture interaction dashboard
+# --------------------------------------------------------------------
+
+from datetime import datetime, timedelta
+from flask import Response, jsonify, render_template, request, abort
+import json, time, hmac, hashlib
+
+# ---------- Instructor dashboard page ----------
+@app.route("/signals")
+@require_user()  # instructor/admin only
+def signals_dashboard():
+    # how far back the “live” counts look (rolling window)
+    window_min = 5
+    return render_template(
+        "signals.html",
+        window_min=window_min,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+# ---------- SSE: live counts for OK/Confused + unseen questions count ----------
+@app.route("/api/signals/stream")
+@require_user()
+def signals_stream():
+    from models import LectureSignal, LectureQuestion  # avoid circulars
+
+    @stream_with_context
+    def generate():
+        yield "retry: 3000\n\n"  # polite reconnect hint
+        last_blob = None
+        try:
+            while True:
+                now = datetime.utcnow()
+                since = now - timedelta(minutes=5)
+                ok = LectureSignal.query.filter(
+                    LectureSignal.created_at >= since,
+                    LectureSignal.kind == "ok"
+                ).count()
+                confused = LectureSignal.query.filter(
+                    LectureSignal.created_at >= since,
+                    LectureSignal.kind == "confused"
+                ).count()
+                unread_q = LectureQuestion.query.filter_by(handled=False).count()
+
+                payload = {"ok": ok, "confused": confused, "unread_questions": unread_q, "window_min": 5}
+                blob = json.dumps(payload, separators=(",", ":"))
+                if blob != last_blob:
+                    yield f"data: {blob}\n\n"
+                    last_blob = blob
+                else:
+                    yield ": keep-alive\n\n"
+                time.sleep(2.5)
+        except GeneratorExit:
+            return
+
+    resp = Response(generate(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
+
+# ---------- List questions (latest first), optional filters ----------
+@app.route("/api/questions", methods=["GET"])
+@require_user()
+def questions_list():
+    from models import LectureQuestion
+    only_unhandled = (request.args.get("state") == "open")
+    q = LectureQuestion.query
+    if only_unhandled:
+        q = q.filter_by(handled=False)
+    q = q.order_by(LectureQuestion.id.desc()).limit(100)
+    items = [{
+        "id": it.id,
+        "student_name": it.student_name or "",
+        "text": it.text,
+        "handled": bool(it.handled),
+        "when": it.created_at.isoformat(timespec="seconds") + "Z"
+    } for it in q.all()]
+    return jsonify({"items": items})
+
+# ---------- Mark one question handled/unhandled ----------
+@app.route("/api/questions/<int:q_id>/handled", methods=["POST"])
+@require_user()
+def question_mark_handled(q_id):
+    from models import LectureQuestion, db
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    body = request.get_json(silent=True) or {}
+    handled = bool(body.get("handled", True))
+    it = LectureQuestion.query.get_or_404(q_id)
+    it.handled = handled
+    db.session.commit()
+    return jsonify({"ok": True, "id": it.id, "handled": it.handled})
+
+# ---------- (Optional) Clear signals window (use sparingly) ----------
+@app.route("/api/signals/clear", methods=["POST"])
+@require_user()
+def signals_clear():
+    from models import LectureSignal, db
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    # delete older-than-window to “reset” live meters
+    LectureSignal.query.filter(LectureSignal.created_at < cutoff).delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+# --------------------------------------------------------------------
 # Lecture interaction
 # --------------------------------------------------------------------
 @app.route("/api/signal", methods=["POST"])
