@@ -1,39 +1,22 @@
-
-import os, io, base64, hashlib, secrets, argparse, csv, functools
-from datetime import timedelta
-from flask import (Flask, render_template, request, redirect, url_for,
-                   session, make_response, jsonify, abort, Response,
-                   send_file)
+import os, io, base64, secrets, argparse, csv, functools, time, json, hmac, hashlib
+from datetime import datetime, timedelta
+from flask import (
+    Flask, render_template, request, redirect, url_for,
+    session, make_response, jsonify, abort, Response, send_file
+)
 from werkzeug.security import generate_password_hash, check_password_hash
+from itsdangerous import URLSafeSerializer
+
 from models import db, Poll, Vote, Student, User, Form, FormResponse
 import qrcode
-from itsdangerous import URLSafeSerializer
-import time
-import json
-import hmac, hashlib  # add
-import datetime
 
+# --------------------------------------------------------------------
+# Config
+# --------------------------------------------------------------------
 APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
 DB_PATH = os.path.abspath(os.environ.get("CLASSVOTE_DB", "classvote.db"))
 DB_URI  = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
-SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")
-
-
-
-def _csrf_key():
-    if "csrf_key" not in session:
-        session["csrf_key"] = secrets.token_hex(16)
-    return session["csrf_key"]
-
-def csrf_token():
-    secret = APP_SECRET.encode()
-    key = _csrf_key().encode()
-    return hmac.new(secret, key, hashlib.sha256).hexdigest()
-
-def verify_csrf(form_field="csrf"):
-    sent = request.form.get(form_field, "")
-    return hmac.compare_digest(sent, csrf_token())
-
+SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR links
 
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
@@ -50,43 +33,218 @@ def create_app(db_path=DB_URI):
 
 app = create_app()
 
+# --------------------------------------------------------------------
+# CSRF helpers (form + JSON header)
+# --------------------------------------------------------------------
+def _csrf_key():
+    if "csrf_key" not in session:
+        session["csrf_key"] = secrets.token_hex(16)
+    return session["csrf_key"]
+
+def csrf_token():
+    secret = APP_SECRET.encode()
+    key = _csrf_key().encode()
+    return hmac.new(secret, key, hashlib.sha256).hexdigest()
+
+def verify_csrf(form_field="csrf"):
+    sent = request.form.get(form_field, "")
+    return hmac.compare_digest(sent, csrf_token())
+
 @app.context_processor
 def inject_csrf():
     return {"csrf_token": csrf_token}
 
+# --------------------------------------------------------------------
+# Auth/session helpers
+# --------------------------------------------------------------------
 def current_user():
     uid = session.get("user_id")
-    if not uid: return None
-    return User.query.get(uid)
+    return User.query.get(uid) if uid else None
+
+def current_student():
+    sid = session.get("student_id")
+    return Student.query.get(sid) if sid else None
+
+def logout_everyone():
+    session.pop("user_id", None)
+    session.pop("user_role", None)
+    session.pop("student_id", None)
+    session.pop("student_name", None)
+    session.pop("must_change_pw", None)
 
 def require_user(role=None):
     def deco(fn):
+        @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             u = current_user()
-            if not u: return redirect(url_for("login", next=request.path))
-            if role and u.role != role: abort(403)
-            # Ensure student isn’t also logged in
-            if session.get("student_id"): logout_everyone(); return redirect(url_for("login"))
+            if not u:
+                return redirect(url_for("login", next=request.path))
+            if role and u.role != role:
+                abort(403)
+            if session.get("student_id"):
+                logout_everyone()
+                return redirect(url_for("login"))
             return fn(*args, **kwargs)
-        wrapper.__name__ = fn.__name__
         return wrapper
     return deco
 
 def require_student():
     def deco(fn):
+        @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             s = current_student()
-            if not s: return redirect(url_for("login", next=request.path))
-            # Ensure user isn’t also logged in
-            if session.get("user_id"): logout_everyone(); return redirect(url_for("login"))
+            if not s:
+                return redirect(url_for("login", next=request.path))
+            if session.get("user_id"):
+                logout_everyone()
+                return redirect(url_for("login"))
             return fn(*args, **kwargs)
-        wrapper.__name__ = fn.__name__
         return wrapper
     return deco
 
+# --------------------------------------------------------------------
+# Student "remember me" cookie (optional)
+# --------------------------------------------------------------------
 signer = URLSafeSerializer(APP_SECRET, salt="student-cookie")
 STUDENT_COOKIE = "cv_student"
 
+def set_student_cookie(resp, student):
+    token = signer.dumps({"id": student.id, "name": student.name})
+    resp.set_cookie(STUDENT_COOKIE, token, max_age=60*60*24*365, httponly=True, samesite="Lax")
+    return resp
+
+def try_restore_student_from_cookie():
+    if "student_id" in session:
+        return
+    token = request.cookies.get(STUDENT_COOKIE)
+    if not token:
+        return
+    try:
+        data = signer.loads(token)
+    except Exception:
+        return
+    sid, name = data.get("id"), data.get("name")
+    if not sid or not name:
+        return
+    stu = Student.query.get(sid)
+    if not stu or stu.name != name:
+        return
+    session["student_id"] = stu.id
+    session["student_name"] = stu.name
+    session.permanent = True
+
+@app.before_request
+def _restore_student():
+    try_restore_student_from_cookie()
+
+# --------------------------------------------------------------------
+# Login / Logout / First-login password set
+# --------------------------------------------------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user():
+        return redirect(url_for("dashboard_for_role"))
+    if current_student():
+        return redirect(url_for("student_home"))
+
+    error = None
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        email = (request.form.get("email") or "").strip().lower()
+        pw    = request.form.get("password") or ""
+        next_url = request.args.get("next") or url_for("index")
+
+        acct_user = User.query.filter_by(email=email).first()
+        acct_student = None if acct_user else Student.query.filter_by(email=email).first()
+
+        if acct_user:
+            if not acct_user.check_password(pw):
+                error = "Invalid credentials"
+            else:
+                logout_everyone()
+                session["user_id"] = acct_user.id
+                session["user_role"] = acct_user.role
+                acct_user.last_login = datetime.utcnow()
+                db.session.commit()
+                if acct_user.first_login:
+                    session["must_change_pw"] = {"kind": "user", "id": acct_user.id}
+                    return redirect(url_for("password_new"))
+                return redirect(url_for("dashboard_for_role"))
+        elif acct_student:
+            if not acct_student.check_password(pw):
+                error = "Invalid credentials"
+            else:
+                logout_everyone()
+                session["student_id"] = acct_student.id
+                session["student_name"] = acct_student.name
+                acct_student.last_login = datetime.utcnow()
+                db.session.commit()
+                if acct_student.first_login:
+                    session["must_change_pw"] = {"kind": "student", "id": acct_student.id}
+                    return redirect(url_for("password_new"))
+                return redirect(url_for("student_home"))
+        else:
+            error = "Account not found"
+
+    return render_template("login.html", error=error, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/logout")
+def logout():
+    resp = make_response(redirect(url_for("login")))
+    resp.delete_cookie(STUDENT_COOKIE)
+    logout_everyone()
+    return resp
+
+@app.route("/password/new", methods=["GET","POST"])
+def password_new():
+    must = session.get("must_change_pw")
+    if not must and not (current_user() or current_student()):
+        return redirect(url_for("login"))
+
+    error = None
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        pw1 = request.form.get("password1") or ""
+        pw2 = request.form.get("password2") or ""
+        if pw1 != pw2:
+            error = "Passwords do not match"
+        elif len(pw1) < 8:
+            error = "Use at least 8 characters"
+        else:
+            if must:
+                if must["kind"] == "user":
+                    u = User.query.get(must["id"]);  assert u
+                    u.set_password(pw1); u.first_login = False
+                    db.session.commit()
+                    session.pop("must_change_pw", None)
+                    session["user_id"] = u.id; session["user_role"] = u.role
+                    return redirect(url_for("dashboard_for_role"))
+                else:
+                    s = Student.query.get(must["id"]);  assert s
+                    s.set_password(pw1); s.first_login = False
+                    db.session.commit()
+                    session.pop("must_change_pw", None)
+                    session["student_id"] = s.id; session["student_name"] = s.name
+                    return redirect(url_for("student_home"))
+            else:
+                acc = current_user() or current_student()
+                acc.set_password(pw1); db.session.commit()
+                return redirect(url_for("index"))
+
+    return render_template("password_new.html", error=error, user=current_user(), student_name=session.get("student_name"))
+
+# --------------------------------------------------------------------
+# Home
+# --------------------------------------------------------------------
+@app.route("/")
+def index():
+    u = current_user()
+    polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
+    return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
+
+# --------------------------------------------------------------------
+# Polls
+# --------------------------------------------------------------------
 def ensure_voter_cookie(resp=None):
     token = request.cookies.get("voter_id")
     if not token:
@@ -104,184 +262,11 @@ def gen_code(n=6):
     alphabet = string.ascii_lowercase + string.digits
     return ''.join(random.choice(alphabet) for _ in range(n))
 
-def set_student_cookie(resp, student):
-    token = signer.dumps({"id": student.id, "name": student.name})
-    resp.set_cookie(STUDENT_COOKIE, token, max_age=60*60*24*365, httponly=True, samesite="Lax")
-    return resp
-
-def try_restore_student_from_cookie():
-    if "student_id" in session:
-        return
-    token = request.cookies.get(STUDENT_COOKIE)
-    if not token:
-        return
-    try:
-        data = signer.loads(token)
-    except Exception:
-        return
-    sid = data.get("id"); name = data.get("name")
-    if not sid or not name:
-        return
-    stu = Student.query.get(sid)
-    if not stu or stu.name != name:
-        return
-    session["student_id"] = stu.id
-    session["student_name"] = stu.name
-    session.permanent = True
-
-@app.before_request
-def _restore_student():
-    try_restore_student_from_cookie()
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    # If already logged in as either, send to dashboard
-    if current_user():
-        return redirect(url_for("dashboard_for_role"))
-    if current_student():
-        return redirect(url_for("student_home"))
-
-    error = None
-    if request.method == "POST":
-        if not verify_csrf(): abort(400, "bad csrf")
-        email = (request.form.get("email") or "").strip().lower()
-        pw    = request.form.get("password") or ""
-        next_url = request.args.get("next") or url_for("index")
-
-        # Try User first (admin/instructor), then Student
-        acct_user = User.query.filter_by(email=email).first()
-        acct_student = None if acct_user else Student.query.filter_by(email=email).first()
-
-        if acct_user:
-            if not acct_user.check_password(pw):
-                error = "Invalid credentials"
-            else:
-                logout_everyone()  # ensure exclusivity
-                session["user_id"] = acct_user.id
-                session["user_role"] = acct_user.role
-                acct_user.last_login = datetime.utcnow()
-                db.session.commit()
-                if acct_user.first_login:
-                    session["must_change_pw"] = {"kind":"user", "id":acct_user.id}
-                    return redirect(url_for("password_new"))
-                return redirect(url_for("dashboard_for_role"))
-        elif acct_student:
-            if not acct_student.check_password(pw):
-                error = "Invalid credentials"
-            else:
-                logout_everyone()
-                session["student_id"] = acct_student.id
-                acct_student.last_login = datetime.utcnow()
-                db.session.commit()
-                if acct_student.first_login:
-                    session["must_change_pw"] = {"kind":"student", "id":acct_student.id}
-                    return redirect(url_for("password_new"))
-                return redirect(url_for("student_home"))
-        else:
-            error = "Account not found"
-
-    return render_template("login.html", error=error, user=current_user(), student_name=session.get("student_name"))
-
-@app.route("/logout")
-def logout():
-    logout_everyone()
-    return redirect(url_for("login"))
-
-@app.route("/password/new", methods=["GET","POST"])
-def password_new():
-    must = session.get("must_change_pw")
-    if not must:
-        # allow manual password change only if logged in
-        if not (current_user() or current_student()):
-            return redirect(url_for("login"))
-    error = None
-    if request.method == "POST":
-        if not verify_csrf(): abort(400, "bad csrf")
-        pw1 = request.form.get("password1") or ""
-        pw2 = request.form.get("password2") or ""
-        if pw1 != pw2:
-            error = "Passwords do not match"
-        elif len(pw1) < 8:
-            error = "Use at least 8 characters"
-        else:
-            # Decide which account to update
-            if must:
-                if must["kind"] == "user":
-                    u = User.query.get(must["id"])
-                    if not u: abort(400)
-                    u.set_password(pw1)
-                    u.first_login = False
-                    db.session.commit()
-                    session.pop("must_change_pw", None)
-                    session["user_id"] = u.id; session["user_role"] = u.role
-                    return redirect(url_for("dashboard_for_role"))
-                else:
-                    s = Student.query.get(must["id"])
-                    if not s: abort(400)
-                    s.set_password(pw1)
-                    s.first_login = False
-                    db.session.commit()
-                    session.pop("must_change_pw", None)
-                    session["student_id"] = s.id
-                    return redirect(url_for("student_home"))
-            else:
-                # Manual change if you add a “Change password” link later
-                acc = current_user() or current_student()
-                if hasattr(acc, "set_password"):
-                    acc.set_password(pw1)
-                    db.session.commit()
-                    return redirect(url_for("index"))
-                abort(400)
-    return render_template("password_new.html", error=error, user=current_user(), student_name=session.get("student_name"))
-
-
-@app.route("/user/logout")
-def user_logout():
-    session.pop("user_id", None)
-    return redirect(url_for("index"))
-
-def logout_everyone():
-    session.pop("user_id", None)
-    session.pop("user_role", None)
-    session.pop("student_id", None)
-
-@app.route("/")
-def index():
-    u = current_user()
-    polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
-    return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
-
-@app.route("/student/login", methods=["GET","POST"])
-def student_login():
-    if request.method == "POST":
-        name = (request.form.get("name") or "").strip()
-        if not name:
-            return render_template("student_login.html", error="Enter your name", user=current_user(), student_name=session.get("student_name"))
-        stu = Student.query.filter_by(name=name).first()
-        if not stu:
-            stu = Student(name=name)
-            db.session.add(stu); db.session.commit()
-        session["student_id"] = stu.id
-        session["student_name"] = stu.name
-        session.permanent = True
-        resp = make_response(redirect(request.args.get("next") or url_for("index")))
-        resp = set_student_cookie(resp, stu)
-        return resp
-    return render_template("student_login.html", user=current_user(), student_name=session.get("student_name"))
-
-
-@app.route("/student/logout")
-def student_logout():
-    session.pop("student_id", None)
-    session.pop("student_name", None)
-    resp = make_response(redirect(url_for("index")))
-    resp.delete_cookie(STUDENT_COOKIE)
-    return resp
-
 @app.route("/poll/new", methods=["GET","POST"])
 @require_user()
 def poll_new():
     if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
         question = (request.form.get("question") or "").strip()
         options = [((request.form.get(f"opt{i}") or "").strip()) for i in range(1,9)]
         options = [o for o in options if o]
@@ -311,6 +296,7 @@ def poll_list():
 def poll_edit(code):
     p = Poll.query.filter_by(code=code).first_or_404()
     if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
         question = (request.form.get("question") or "").strip()
         options = [((request.form.get(f"opt{i}") or "").strip()) for i in range(1,9)]
         options = [o for o in options if o]
@@ -318,11 +304,9 @@ def poll_edit(code):
         correct_index = int(correct_raw) if (correct_raw not in (None,"") and correct_raw.isdigit()) else None
         if not question or len(options) < 2:
             return render_template("poll_edit.html", poll=p, error="Enter a question and at least 2 options.", user=current_user())
-        if correct_index is not None and (correct_index < 0 or correct_index >= len(options)):
+        if correct_index is not None and (correct_index < 0 or correct_index >= len(p.options)):
             return render_template("poll_edit.html", poll=p, error="Correct answer index out of range.", user=current_user())
-        p.question = question
-        p.options = options
-        p.correct_index = correct_index
+        p.question, p.options, p.correct_index = question, options, correct_index
         db.session.commit()
         return redirect(url_for("poll_results", code=p.code))
     return render_template("poll_edit.html", poll=p, user=current_user())
@@ -330,6 +314,7 @@ def poll_edit(code):
 @app.route("/poll/<code>/delete", methods=["POST"])
 @require_user()
 def poll_delete(code):
+    if not verify_csrf(): abort(400, "bad csrf")
     p = Poll.query.filter_by(code=code).first_or_404()
     db.session.delete(p); db.session.commit()
     return redirect(url_for("poll_list"))
@@ -338,89 +323,45 @@ def poll_delete(code):
 @require_user()
 def share(code):
     poll = Poll.query.filter_by(code=code).first_or_404()
+    scheme = "https" if request.is_secure or request.headers.get("X-Forwarded-Proto","").lower()=="https" else "http"
     host = SHARE_HOST or request.host
-    link = f"http://{host}{url_for('poll_view', code=poll.code)}"
+    link = f"{scheme}://{host}{url_for('poll_view', code=poll.code)}"
     img = qrcode.make(link)
     buf = io.BytesIO(); img.save(buf, format="PNG")
     data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
     return render_template("share.html", poll=poll, link=link, data_url=data_url, user=current_user(), student_name=session.get("student_name"))
 
-def current_student():
-    sid = session.get("student_id")
-    if not sid: return None
-    return Student.query.get(sid)
-
 @app.route("/poll/<code>", methods=["GET", "POST"])
 def poll_view(code):
     poll = Poll.query.filter_by(code=code).first_or_404()
 
-    # If voting is closed, block POSTs immediately
     if request.method == "POST" and not poll.is_open:
-        return render_template(
-            "poll_view.html",
-            poll=poll,
-            error="Voting is closed.",
-            already=False,
-            user=current_user(),
-            student_name=session.get("student_name"),
-        )
+        return render_template("poll_view.html", poll=poll, error="Voting is closed.", already=False, user=current_user(), student_name=session.get("student_name"))
 
-    # Require a logged-in student (by name)
     if not session.get("student_id"):
-        nxt = url_for("poll_view", code=code)
-        return redirect(url_for("login", next=nxt))
+        return redirect(url_for("login", next=url_for("poll_view", code=code)))
 
-    # Optional CSRF check (only if verify_csrf helper is present)
-    if request.method == "POST":
-        try:
-            if not verify_csrf():
-                abort(400, "bad csrf")
-        except NameError:
-            # verify_csrf not defined; skip (you can remove this block once you add CSRF helpers)
-            pass
+    if request.method == "POST" and not verify_csrf():
+        abort(400, "bad csrf")
 
-    # Ensure the device/browser has a stable voter cookie
     token, _ = ensure_voter_cookie(None)
 
     if request.method == "POST":
-        # 1) Block repeat votes by device/browser cookie
-        existing_cookie = Vote.query.filter_by(
-            poll_id=poll.id, voter_token_hash=token_hash(token)
-        ).first()
-
-        # 2) Block repeat votes by student account (even if cookie changes)
         stu = current_student()
-        existing_student = (
-            Vote.query.filter_by(poll_id=poll.id, student_id=stu.id).first()
-            if stu
-            else None
-        )
 
+        # cookie- and account-level duplicate protection
+        existing_cookie = Vote.query.filter_by(poll_id=poll.id, voter_token_hash=token_hash(token)).first()
+        existing_student = Vote.query.filter_by(poll_id=poll.id, student_id=stu.id).first() if stu else None
         if existing_cookie or existing_student:
-            return render_template(
-                "poll_view.html",
-                poll=poll,
-                already=True,
-                user=current_user(),
-                student_name=session.get("student_name"),
-            )
+            return render_template("poll_view.html", poll=poll, already=True, user=current_user(), student_name=session.get("student_name"))
 
-        # Validate choice
         try:
             choice = int(request.form.get("choice", "-1"))
         except Exception:
             choice = -1
-
         if choice < 0 or choice >= len(poll.options):
-            return render_template(
-                "poll_view.html",
-                poll=poll,
-                error="Pick an option",
-                user=current_user(),
-                student_name=session.get("student_name"),
-            )
+            return render_template("poll_view.html", poll=poll, error="Pick an option", user=current_user(), student_name=session.get("student_name"))
 
-        # Record the vote
         v = Vote(
             poll_id=poll.id,
             choice=choice,
@@ -428,35 +369,15 @@ def poll_view(code):
             student_id=stu.id if stu else None,
             student_name=stu.name if stu else None,
         )
-        db.session.add(v)
-        db.session.commit()
+        db.session.add(v); db.session.commit()
 
-        # Persist the voter cookie and redirect to thanks
-        r = make_response(redirect(url_for("thanks", code=code)))
+        r = make_response(redirect(url_for("thanks")))
         _, r = ensure_voter_cookie(r)
         return r
 
-    # GET: render the voting form (and set voter cookie if missing)
-    r = make_response(
-        render_template(
-            "poll_view.html",
-            poll=poll,
-            already=False,
-            user=current_user(),
-            student_name=session.get("student_name"),
-        )
-    )
+    r = make_response(render_template("poll_view.html", poll=poll, already=False, user=current_user(), student_name=session.get("student_name")))
     _, r = ensure_voter_cookie(r)
     return r
-
-@app.route("/thanks")
-def thanks():
-    return render_template("thanks.html", user=current_user(), student_name=session.get("student_name"))
-
-@app.route("/poll/<code>/thanks")
-def poll_thanks(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    return render_template("thanks.html", poll=poll, user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/poll/<code>/results")
 @require_user()
@@ -478,6 +399,7 @@ def poll_results(code):
 @app.route("/poll/<code>/set-correct", methods=["POST"])
 @require_user()
 def poll_set_correct(code):
+    if not verify_csrf(): abort(400, "bad csrf")
     poll = Poll.query.filter_by(code=code).first_or_404()
     val = request.form.get("correct")
     idx = int(val) if val not in (None,"") and val.isdigit() else None
@@ -514,7 +436,7 @@ def poll_close(code):
     return redirect(url_for("poll_results", code=code))
 
 @app.route("/poll/<code>/stream")
-@require_user()  # instructor-only stream
+@require_user()
 def poll_stream(code):
     poll = Poll.query.filter_by(code=code).first_or_404()
     def event_stream():
@@ -523,12 +445,7 @@ def poll_stream(code):
             counts = [0]*len(poll.options)
             for v in poll.votes:
                 counts[v.choice] += 1
-            payload = dict(
-                counts=counts,
-                total=sum(counts),
-                correct_index=poll.correct_index,
-                options=poll.options
-            )
+            payload = dict(counts=counts, total=sum(counts), correct_index=poll.correct_index, options=poll.options)
             blob = json.dumps(payload, separators=(",", ":"))
             if blob != last:
                 yield f"data: {blob}\n\n"
@@ -536,9 +453,9 @@ def poll_stream(code):
             time.sleep(1.5)
     return Response(event_stream(), mimetype="text/event-stream")
 
-
-# --------- FORMS: create, render, submit, results, list ----------
-
+# --------------------------------------------------------------------
+# Forms (SurveyJS)
+# --------------------------------------------------------------------
 @app.route("/forms")
 @require_user()
 def forms_list():
@@ -549,28 +466,18 @@ def forms_list():
 @require_user()
 def forms_new():
     if request.method == "POST":
-        if not verify_csrf():
-            abort(400, "bad csrf")
+        if not verify_csrf(): abort(400, "bad csrf")
         title = (request.form.get("title") or "").strip()
         schema_text = request.form.get("schema_json") or ""
         if not title or not schema_text:
             return render_template("forms_new.html", error="Title and JSON are required.", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
-        import json
         try:
             schema = json.loads(schema_text)
         except Exception as e:
             return render_template("forms_new.html", error=f"Invalid JSON: {e}", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
-
         code = gen_code()
         while Form.query.filter_by(code=code).first() is not None:
             code = gen_code()
-        schema_text = request.form.get("schema_json") or ""
-        try:
-            schema = json.loads(schema_text)
-        except Exception as e:
-            return render_template("forms_new.html", error=f"Invalid JSON: {e}",
-                                   schema_json=schema_text, user=current_user(),
-                                   student_name=session.get("student_name"))
         f = Form(code=code, title=title, schema_json=schema, creator_user_id=current_user().id)
         db.session.add(f); db.session.commit()
         return redirect(url_for("forms_results", code=f.code))
@@ -578,11 +485,9 @@ def forms_new():
 
 @app.route("/f/<code>")
 def form_render(code):
-    # student-facing form renderer
     form = Form.query.filter_by(code=code).first_or_404()
     if not session.get("student_id"):
         return redirect(url_for("login", next=url_for("form_render", code=code)))
-    # Pass form schema to template; it will load SurveyJS from CDN and POST results
     return render_template("form_render.html", form=form, user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/api/forms/<code>/responses", methods=["POST"])
@@ -590,22 +495,12 @@ def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
     if not session.get("student_id"):
         abort(401)
-    # Optional but recommended CSRF for JSON POST: expect header X-CSRF
     token = request.headers.get("X-CSRF", "")
-    try:
-        if not hmac.compare_digest(token, csrf_token()):
-            abort(400, "bad csrf")
-    except Exception:
+    if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
-
     data = request.get_json(silent=True) or {}
     stu = current_student()
-    resp = FormResponse(
-        form_id=form.id,
-        student_id=stu.id if stu else None,
-        student_name=stu.name if stu else None,
-        payload_json=data
-    )
+    resp = FormResponse(form_id=form.id, student_id=stu.id if stu else None, student_name=stu.name if stu else None, payload_json=data)
     db.session.add(resp); db.session.commit()
     return jsonify({"ok": True})
 
@@ -613,23 +508,17 @@ def form_submit(code):
 @require_user()
 def forms_results(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    rows = []
-    for r in form.responses:
-        rows.append({
-            "name": r.student_name or "(anonymous)",
-            "when": r.created_at,
-            "payload": r.payload_json
-        })
+    rows = [{"name": r.student_name or "(anonymous)", "when": r.created_at, "payload": r.payload_json} for r in form.responses]
     return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
 
-
-
+# --------------------------------------------------------------------
+# Exports / landing routes
+# --------------------------------------------------------------------
 @app.route("/export/<code>.csv")
 @require_user()
 def export_csv(code):
     poll = Poll.query.filter_by(code=code).first_or_404()
-    buf = io.StringIO()
-    w = csv.writer(buf)
+    buf = io.StringIO(); w = csv.writer(buf)
     w.writerow(["poll_code","question","student_name","choice_index","choice_text","correct","timestamp"])
     for v in poll.votes:
         choice_text = poll.options[v.choice] if 0 <= v.choice < len(poll.options) else ""
@@ -638,14 +527,13 @@ def export_csv(code):
     mem = io.BytesIO(buf.getvalue().encode("utf-8"))
     return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=f"{poll.code}.csv")
 
-
+@app.route("/thanks")
+def thanks():
+    return render_template("thanks.html", user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/dashboard")
 @require_user()
 def dashboard_for_role():
-    u = current_user()
-    if u.role == "admin":
-        return redirect(url_for("poll_list"))
     return redirect(url_for("poll_list"))
 
 @app.route("/student")
@@ -653,7 +541,9 @@ def dashboard_for_role():
 def student_home():
     return redirect(url_for("index"))
 
-
+# --------------------------------------------------------------------
+# Dev entry
+# --------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")

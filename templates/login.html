@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:480px;">
+  <h3>Sign in</h3>
+  {% if error %}<p style="color:#fca5a5;">{{ error }}</p>{% endif %}
+  <form method="post" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Email</label>
+    <input type="text" name="email" required autocomplete="username" placeholder="you@school.edu">
+    <div class="sp"></div>
+    <label>Password</label>
+    <input type="password" name="password" required autocomplete="current-password">
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Continue</button>
+  </form>
+  <p class="muted" style="margin-top:10px;">Use the credentials provided by your instructor. On first login, you'll be asked to set a new password.</p>
+</div>
+{% endblock %}
