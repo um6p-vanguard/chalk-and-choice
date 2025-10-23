@@ -34,7 +34,7 @@
       body: JSON.stringify(payload),
       credentials: "same-origin"
     });
-    window.location = "{{ url_for('poll_thanks', code=form.code) }}";
+    window.location = "{{ url_for('thanks', code=form.code) }}";
   });
 
   const el = document.getElementById("surveyContainer");

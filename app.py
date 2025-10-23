@@ -323,7 +323,7 @@ def poll_view(code):
         db.session.commit()
 
         # Persist the voter cookie and redirect to thanks
-        r = make_response(redirect(url_for("poll_thanks", code=code)))
+        r = make_response(redirect(url_for("thanks", code=code)))
         _, r = ensure_voter_cookie(r)
         return r
 
@@ -340,6 +340,9 @@ def poll_view(code):
     _, r = ensure_voter_cookie(r)
     return r
 
+@app.route("/thanks")
+def thanks():
+    return render_template("thanks.html", user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/poll/<code>/thanks")
 def poll_thanks(code):
