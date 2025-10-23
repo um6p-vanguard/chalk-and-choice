@@ -4,10 +4,11 @@
   <div class="row" style="justify-content:space-between;align-items:center;">
     <h3 style="margin:0;">{{ form.title }}</h3>
 
-    {% if not can_submit %}
-      <span class="muted" style="font-size:.9rem; padding:4px 8px; border:1px solid #334155; border-radius:6px;">
-        Preview mode — submissions disabled
-      </span>
+
+    {% if submitted %}
+    <div class="muted" style="margin-bottom:8px;">You’ve already submitted this form. Below is your submission.</div>
+    {% elif not can_submit %}
+    <div class="muted" style="margin-bottom:8px;">Preview mode — submissions disabled.</div>
     {% endif %}
   </div>
 
@@ -21,71 +22,57 @@
 <script src="{{ url_for('static', filename='survey/survey.core.min.js') }}"></script>
 <script src="{{ url_for('static', filename='survey/survey-js-ui.min.js') }}"></script>
 
+
 <script>
-(function(){
-  let schema = {{ form.schema_json | tojson | safe }};
-  if (typeof schema === "string") {
-    try { schema = JSON.parse(schema); } catch(e) { console.error("Bad schema JSON", e); schema = {}; }
-  }
-
-  const survey = new Survey.Model(schema);
-  const el = document.getElementById("surveyContainer");
-  const canSubmit = {{ 'true' if can_submit else 'false' }};
-  const notice = document.getElementById("formNotice");
-
-  // If this viewer cannot submit (instructor/admin OR closed form), make read-only.
-  if (!canSubmit) {
-    survey.mode = "display";           // read-only
-    survey.showCompletedPage = false;  // don't show SurveyJS "completed" screen
-  } else {
-    // Normal submit path for students
-    survey.onComplete.add(async function(sender){
-      try {
-        const res = await fetch("{{ url_for('form_submit', code=form.code) }}", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-CSRF": "{{ csrf_token() }}" },
-          body: JSON.stringify(sender.data || {}),
-          credentials: "same-origin"
-        });
-
-        if (res.ok) {
-          window.location = "{{ url_for('thanks') }}";
-          return;
+  (function(){
+    let schema = {{ form.schema_json | tojson | safe }};
+    if (typeof schema === "string") {
+      try { schema = JSON.parse(schema); } catch(e) { console.error("Bad schema JSON", e); schema = {}; }
+    }
+  
+    const survey = new Survey.Model(schema);
+    const el = document.getElementById("surveyContainer");
+    const canSubmit   = {{ 'true' if can_submit else 'false' }};
+    const submitted   = {{ 'true' if submitted else 'false' }};
+    const prevAnswers = {{ submitted_payload | tojson | safe }};
+    const notice = document.getElementById("formNotice") || (function(){
+      const p = document.createElement('p'); p.id = 'formNotice'; p.className = 'muted';
+      p.style.marginTop = '12px'; el.parentNode.appendChild(p); return p;
+    })();
+  
+    if (submitted) {
+      // Student already submitted: show read-only review with their answers
+      notice.textContent = "You’ve already submitted this form. Showing your answers.";
+      survey.mode = "display";
+      survey.showCompletedPage = false;
+      try { survey.data = prevAnswers || {}; } catch(e) {}
+    } else if (!canSubmit) {
+      // Instructor/Admin or closed form
+      notice.textContent = "Preview mode — submissions disabled.";
+      survey.mode = "display";
+      survey.showCompletedPage = false;
+    } else {
+      // Normal student path (one allowed submission, server still enforces 409)
+      survey.onComplete.add(async function(sender){
+        try {
+          const res = await fetch("{{ url_for('form_submit', code=form.code) }}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRF": "{{ csrf_token() }}" },
+            body: JSON.stringify(sender.data || {}),
+            credentials: "same-origin"
+          });
+          if (res.ok) { window.location = "{{ url_for('thanks') }}"; return; }
+          if (res.status === 409) { notice.textContent = "You already submitted. Showing your answers."; window.location.reload(); return; }
+          if (res.status === 403) { notice.textContent = "This form is now closed."; return; }
+          if (res.status === 401) { window.location = "{{ url_for('login', next=url_for('form_render', code=form.code)) }}"; return; }
+          notice.textContent = "Submission failed. Please try again.";
+        } catch(e) {
+          notice.textContent = "Network error. Please try again.";
         }
-
-        // Handle common server responses
-        if (res.status === 409) { // already submitted
-          notice.textContent = "You already submitted this form. Redirecting…";
-          notice.style.display = "block";
-          setTimeout(()=>{ window.location = "{{ url_for('thanks') }}"; }, 1200);
-          return;
-        }
-        if (res.status === 403) { // closed between render and submit
-          notice.textContent = "This form is now closed.";
-          notice.style.display = "block";
-          return;
-        }
-        if (res.status === 400) {
-          notice.textContent = "Submission rejected (bad request). Please refresh the page.";
-          notice.style.display = "block";
-          return;
-        }
-        if (res.status === 401) {
-          window.location = "{{ url_for('login', next=url_for('form_render', code=form.code)) }}";
-          return;
-        }
-
-        notice.textContent = "Unexpected error. Please try again later.";
-        notice.style.display = "block";
-      } catch (e) {
-        console.error(e);
-        notice.textContent = "Network error. Please try again.";
-        notice.style.display = "block";
-      }
-    });
-  }
-
-  survey.render(el);
-})();
-</script>
+      });
+    }
+  
+    survey.render(el);
+  })();
+  </script>
 {% endblock %}

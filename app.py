@@ -532,22 +532,53 @@ def forms_new():
         return redirect(url_for("forms_results", code=f.code))
     return render_template("forms_new.html", schema_json="", user=current_user(),
                            student_name=session.get("student_name"))
+
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
     u = current_user()
     s = current_student()
 
+    # Require someone authenticated
     if not (u or s):
         return redirect(url_for("login", next=url_for("form_render", code=code)))
 
+    # Find an existing submission if student
+    submitted = False
+    submitted_payload = None
+    if s:
+        existing = FormResponse.query.filter_by(form_id=form.id, student_id=s.id)\
+                                     .order_by(FormResponse.id.desc()).first()
+        if existing:
+            # existing.payload_json may already be a dict; if it's a string, parse it
+            pj = existing.payload_json
+            if isinstance(pj, str):
+                try:
+                    import json as _json
+                    pj = _json.loads(pj)
+                except Exception:
+                    pj = {}
+            submitted = True
+            submitted_payload = pj
+
+    # Students cannot open closed forms (unless you prefer to show "closed" page)
     if s and not form.is_open:
         return render_template("form_closed.html", form=form,
                                user=u, student_name=session.get("student_name"))
 
-    can_submit = bool(s and form.is_open)
-    return render_template("form_render.html", form=form, can_submit=can_submit,
-                           user=u, student_name=session.get("student_name"))
+    # Only students can submit; instructors/admins are always preview
+    can_submit = bool(s and form.is_open and not submitted)
+
+    return render_template(
+        "form_render.html",
+        form=form,
+        can_submit=can_submit,
+        submitted=submitted,
+        submitted_payload=submitted_payload or {},
+        user=u,
+        student_name=session.get("student_name"),
+    )
+
 
 @app.route("/api/forms/<code>/responses", methods=["POST"])
 def form_submit(code):
