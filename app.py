@@ -450,23 +450,51 @@ def poll_close(code):
     db.session.commit()
     return redirect(url_for("poll_results", code=code))
 
+from flask import stream_with_context
+
 @app.route("/poll/<code>/stream")
 @require_user()
 def poll_stream(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    def event_stream():
+    @stream_with_context
+    def generate():
         last = None
         while True:
-            counts = [0]*len(poll.options)
-            for v in poll.votes:
-                counts[v.choice] += 1
-            payload = dict(counts=counts, total=sum(counts), correct_index=poll.correct_index, options=poll.options)
+            # Re-fetch on each tick to avoid detached objects
+            p = Poll.query.filter_by(code=code).first()
+            if not p:
+                # End the stream if poll was deleted
+                yield "event: end\ndata: {}\n\n"
+                return
+
+            # Compute counts without touching p.votes relationship
+            counts = [0] * len(p.options)
+            for v in Vote.query.filter_by(poll_id=p.id).all():
+                # Guard in case an out-of-range choice slipped in
+                if 0 <= v.choice < len(counts):
+                    counts[v.choice] += 1
+
+            payload = {
+                "counts": counts,
+                "total": sum(counts),
+                "correct_index": p.correct_index,
+                "options": p.options,
+            }
             blob = json.dumps(payload, separators=(",", ":"))
             if blob != last:
                 yield f"data: {blob}\n\n"
                 last = blob
+            else:
+                # heartbeat so proxies don't kill the connection
+                yield ": keep-alive\n\n"
+
             time.sleep(1.5)
-    return Response(event_stream(), mimetype="text/event-stream")
+
+    # Helpful SSE headers
+    resp = Response(generate(), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"  # if ever behind a proxy that buffers
+    return resp
+
 
 # --------------------------------------------------------------------
 # Forms (SurveyJS)
