@@ -17,6 +17,10 @@
     <div class="sp"></div>
     <button class="btn btn-primary" type="submit">Create</button>
     <a class="btn" href="{{ url_for('forms_list') }}" style="margin-left:8px;">Cancel</a>
+
+    <label>Closes at:</label>
+    <input type="datetime-local" name="closes_at">
+    <div class="sp"></div>
   </form>
 </div>
 {% endblock %}

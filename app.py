@@ -11,6 +11,19 @@ from models import db, Poll, Vote, Student, User, Form, FormResponse
 import qrcode
 
 # --------------------------------------------------------------------
+# Utils
+# --------------------------------------------------------------------
+
+def parse_dt_local(s):
+    """Parse HTML <input type=datetime-local> to UTC naive datetime."""
+    if not s: return None
+    # Expect 'YYYY-MM-DDTHH:MM' (no timezone). Treat as UTC.
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%dT%H:%M")
+    except Exception:
+        return None
+
+# --------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------
 APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
@@ -471,40 +484,54 @@ def forms_new():
         if not verify_csrf(): abort(400, "bad csrf")
         title = (request.form.get("title") or "").strip()
         schema_text = request.form.get("schema_json") or ""
+        closes_at = parse_dt_local(request.form.get("closes_at"))
         if not title or not schema_text:
-            return render_template("forms_new.html", error="Title and JSON are required.", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
+            return render_template("forms_new.html", error="Title and JSON are required.",
+                                   schema_json=schema_text, user=current_user(),
+                                   student_name=session.get("student_name"))
         try:
             schema = json.loads(schema_text)
         except Exception as e:
-            return render_template("forms_new.html", error=f"Invalid JSON: {e}", schema_json=schema_text, user=current_user(), student_name=session.get("student_name"))
+            return render_template("forms_new.html", error=f"Invalid JSON: {e}",
+                                   schema_json=schema_text, user=current_user(),
+                                   student_name=session.get("student_name"))
         code = gen_code()
         while Form.query.filter_by(code=code).first() is not None:
             code = gen_code()
-        f = Form(code=code, title=title, schema_json=schema, creator_user_id=current_user().id)
+        f = Form(code=code, title=title, schema_json=schema,
+                 creator_user_id=current_user().id, closes_at=closes_at)
         db.session.add(f); db.session.commit()
         return redirect(url_for("forms_results", code=f.code))
-    return render_template("forms_new.html", schema_json="", user=current_user(), student_name=session.get("student_name"))
-
+    return render_template("forms_new.html", schema_json="", user=current_user(),
+                           student_name=session.get("student_name"))
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
     if not session.get("student_id"):
         return redirect(url_for("login", next=url_for("form_render", code=code)))
-    return render_template("form_render.html", form=form, user=current_user(), student_name=session.get("student_name"))
+    if not form.is_open:
+        return render_template("form_closed.html", form=form, user=current_user(),
+                               student_name=session.get("student_name"))
+    return render_template("form_render.html", form=form, user=current_user(),
+                           student_name=session.get("student_name"))
 
 @app.route("/api/forms/<code>/responses", methods=["POST"])
 def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
     if not session.get("student_id"):
         abort(401)
+    if not form.is_open:
+        abort(403, description="Form is closed")
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
     data = request.get_json(silent=True) or {}
     stu = current_student()
-    resp = FormResponse(form_id=form.id, student_id=stu.id if stu else None, student_name=stu.name if stu else None, payload_json=data)
+    resp = FormResponse(form_id=form.id, student_id=stu.id if stu else None,
+                        student_name=stu.name if stu else None, payload_json=data)
     db.session.add(resp); db.session.commit()
     return jsonify({"ok": True})
+
 
 @app.route("/forms/<code>/results")
 @require_user()

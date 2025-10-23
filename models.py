@@ -77,16 +77,21 @@ class Vote(db.Model):
         UniqueConstraint('poll_id', 'student_id', name='uq_vote_poll_student'),
     )
 
-
 class Form(db.Model):
     __tablename__ = "forms"
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(12), unique=True, index=True, nullable=False)
     title = db.Column(db.String(255), nullable=False)
-    schema_json = db.Column(JSONText, nullable=False)  # SurveyJS JSON
+    schema_json = db.Column(JSONText, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
     creator = db.relationship('User')
+    # NEW:
+    closes_at = db.Column(db.DateTime, nullable=True)
+
+    @property
+    def is_open(self):
+        return (self.closes_at is None) or (datetime.utcnow() < self.closes_at)
 
 class FormResponse(db.Model):
     __tablename__ = "form_responses"
