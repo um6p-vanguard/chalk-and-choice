@@ -3,7 +3,7 @@
 <div class="card" style="max-width:960px;">
   <div class="row" style="justify-content:space-between; align-items:center;">
     <h3 style="margin:0;">Spotlight</h3>
-    <div class="muted">Pick a random student, 2-minute talk, then peer feedback.</div>
+    <div class="muted">Your Time To Shine</div>
   </div>
 
   <div class="sp"></div>
@@ -54,7 +54,11 @@
     <h4 style="margin:0 0 6px 0;">Peer feedback poll</h4>
     <p class="muted" id="poll-label">How did NAME do?</p>
     <div style="display:flex; justify-content:center; margin:12px 0;">
-      <img id="qr-img" alt="Poll QR" style="image-rendering:pixelated; border:8px solid #0b1220; background:#fff; max-width:100%; height:auto;">
+      <img id="qr-img"
+     alt="Poll QR"
+     decoding="async"
+     style="border:8px solid #0b1220; background:#fff; width:min(60vw,320px); height:auto; image-rendering:pixelated;">
+
     </div>
     <div class="row" style="justify-content:center; gap:8px;">
       <a id="poll-open" class="btn" target="_blank" rel="noopener">Open poll</a>
@@ -206,14 +210,18 @@
     if (!r.ok){ notice.textContent = "Couldn’t finalize."; return; }
     const j = await r.json();
     // Show QR/poll
+// Show QR/poll
     const pollCard = $("#poll-card");
     pollCard.style.display = "block";
     $("#poll-label").textContent = `How did ${pickedName} do?`;
-    $("#qr-img").src = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code).replace("/share","/share"); // will display the share page when clicked
-    // prefer explicit QR PNG if you have it:
-    $("#qr-img").src = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code).replace("/share","/qr.png");
-    $("#poll-open").href = `{{ url_for('poll_view', code='CODE') }}`.replace("CODE", j.poll_code);
+
+    // Use a dedicated QR PNG endpoint (no string replace hacks)
+    const qrPngUrl = `{{ url_for('poll_qr_png', code='CODE') }}`.replace("CODE", j.poll_code);
+    $("#qr-img").src = qrPngUrl;
+
+    $("#poll-open").href  = `{{ url_for('poll_view', code='CODE') }}`.replace("CODE", j.poll_code);
     $("#poll-share").href = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code);
+
   }
 
   async function skip(){

@@ -5,7 +5,10 @@
   <p class="q">{{ poll.question|e }}</p>
 
   <div class="row" style="align-items:flex-start;">
-    <img alt="QR code" src="{{ data_url }}" style="width:200px;height:200px;border-radius:12px;border:1px solid #334155;">
+    <img src="{{ url_for('poll_qr_png', code=poll.code) }}"
+     alt="QR for {{ poll.code }}"
+     style="width:min(60vw,320px);height:auto;background:#fff;border:8px solid #0b1220;">
+
     <div>
       <p>Poll link</p>
       <code style="display:inline-block;padding:6px 10px;background:#0b1220;border:1px solid #334155;border-radius:8px;word-break:break-all;">

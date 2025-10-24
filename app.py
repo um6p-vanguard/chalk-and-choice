@@ -501,6 +501,20 @@ def poll_stream(code):
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
+@app.route("/poll/<code>/qr.png")
+@require_user()
+def poll_qr_png(code):
+    # If the QR must be viewable by students without logging in, keep this route public.
+    # If you want it gated, add @require_user() above.
+    poll_url = url_for("poll_view", code=code, _external=True)
+    img = qrcode.make(poll_url, box_size=10, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png",
+                     as_attachment=False,
+                     download_name=f"{code}.png")
+
 # --------------------------------------------------------------------
 # Spotlight
 # --------------------------------------------------------------------

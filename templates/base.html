@@ -2,33 +2,74 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>chalk-and-choice</title>
+  <title>SASE COMP101</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    :root { --bg:#0f172a; --panel:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#22c55e; }
+    :root {
+      /* Core neutrals (keep your existing dark theme) */
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: #334155;
+
+      /* Brand palette (from your list) */
+      --brand-50:  #E0E5F2; /* glaucous-900 as soft bg if needed */
+      --brand:     #637FBE; /* Glaucous (primary) */
+      --brand-2:   #5775B8; /* Glaucous alt */
+      --accent:    var(--brand); /* legacy alias */
+
+      --danger:    #D95334; /* Cinnabar */
+      --warn:      #D74A2A; /* Chili red */
+      --heat:      #E17B64; /* Burnt sienna */
+    }
+
     * { box-sizing: border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial; }
-    a { color:#93c5fd; text-decoration:none; }
-    a:hover { text-decoration:underline; }
+    body { margin:0; background:var(--bg); color:var(--text);
+           font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial; }
+
+    a { color: var(--brand-2); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
     .wrap { max-width:1000px; margin:0 auto; padding:20px; }
-    .nav { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border:1px solid #1f2937; background:#0b1220; border-radius:12px; }
+    .nav { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 16px; border:1px solid var(--border); background:#0b1220; border-radius:12px; }
     .muted { color:var(--muted); }
     .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .card { background:var(--panel); border:1px solid #1f2937; border-radius:12px; padding:20px; box-shadow:0 10px 24px rgba(0,0,0,.2); }
-    .btn { display:inline-block; padding:10px 14px; border-radius:8px; background:#0b1220; border:1px solid #334155; color:var(--text); cursor:pointer; }
-    .btn-primary { background:var(--accent); border:none; color:#052e12; font-weight:600; }
-    input[type=text], input[type=password] { width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:var(--text); }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:20px; box-shadow:0 10px 24px rgba(0,0,0,.2); }
+    .btn { display:inline-block; padding:10px 14px; border-radius:8px; background:#0b1220; border:1px solid var(--border); color:var(--text); cursor:pointer; }
+    .btn:hover { border-color: var(--brand-2); }
+
+    /* Primary buttons and progress bars pick up brand color */
+    .btn-primary { background:var(--brand); border:none; color:#0b1120; font-weight:600; }
+    .btn-primary:hover { background: var(--brand-2); }
+
+    /* Danger variant (use on destructive actions) */
+    .btn-danger { background: var(--danger); border: none; color: #150b0a; font-weight: 600; }
+    .btn-danger:hover { background: #e0765e; }
+
+    input[type=text], input[type=password], input[type=number], textarea {
+      width:100%; padding:10px; border-radius:8px; border:1px solid var(--border);
+      background:#0b1220; color:var(--text);
+    }
+
     label { display:block; margin:6px 0; font-size:.95rem; color:#cbd5e1; }
     .sp { height:16px; }
+
     table { width:100%; border-collapse:collapse; }
-    th, td { padding:8px 10px; border-bottom:1px solid #334155; text-align:left; }
+    th, td { padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; }
+
     .q { font-size:1.15rem; font-weight:600; }
+
+    /* Progress bar fill (used in poll results) */
+    .bar-fill { background: var(--brand); height:20px; border-radius:8px; transition: width .3s; }
+    .bar-fill.correct { background: var(--heat); } /* optional: highlight correct bar */
+    .text-danger { color: var(--danger); }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="nav">
-      <div><a href="{{ url_for('index') }}"><strong>chalk-and-choice</strong></a></div>
+      <div><a href="{{ url_for('index') }}"><strong>SASE COMP101</strong></a></div>
       <div class="row">
         {% if user %}
           <span>Instructor{% if user.role == 'admin' %}/Admin{% endif %}: <strong>{{ user.name }}</strong></span>
@@ -36,8 +77,8 @@
           <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
           <a href="{{ url_for('poll_new') }}">New Poll</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
-          <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
           <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
+          <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% elif student_name %}
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
