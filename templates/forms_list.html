@@ -9,6 +9,8 @@
       <tbody>
         {% for f in forms %}
           <tr>
+            <td><a href="{{ url_for('forms_results', code=f.code) }}">{{ f.title }}</a></td>
+            <td class="muted">{{ f.code }}</td>
             <td>
               <a class="btn" href="{{ url_for('form_render', code=f.code) }}">Open</a>
               <button class="btn"
