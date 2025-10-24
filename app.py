@@ -717,6 +717,16 @@ def forms_new():
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
+    now = datetime.utcnow()
+    is_expired = bool(form.closes_at and form.closes_at <= now)
+    is_open = bool(form.is_open and not is_expired)
+    if not is_open:
+        return render_template(
+            "form_closed.html",
+            form=form,
+            user=current_user(),
+            student_name=session.get("student_name"),
+        ), 403
     u = current_user()
     s = current_student()
 
@@ -761,10 +771,40 @@ def form_render(code):
     )
 
 
+@app.post("/forms/<code>/open")
+@require_user()
+def forms_open(code):
+    token = request.form.get("csrf","")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+
+    f = Form.query.filter_by(code=code).first_or_404()
+    f.is_open = True
+    db.session.commit()
+    # optional: flash("Form opened.")
+    return redirect(url_for("forms_list"))
+
+@app.post("/forms/<code>/close")
+@require_user()
+def forms_close(code):
+    token = request.form.get("csrf","")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+
+    f = Form.query.filter_by(code=code).first_or_404()
+    f.is_open = False
+    db.session.commit()
+    # optional: flash("Form closed.")
+    return redirect(url_for("forms_list"))
+
+
 @app.route("/api/forms/<code>/responses", methods=["POST"])
 def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
-
+    
+    now = datetime.utcnow()
+    if not form.is_open or (form.closes_at and form.closes_at <= now):
+        abort(403, description="Form is closed.")
     # Only students can submit
     stu = current_student()
     if not stu:
