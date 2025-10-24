@@ -604,12 +604,13 @@ def spotlight_start():
     db.session.commit()
     return jsonify({"ok": True})
 
-# ---------- Complete: stop, update stats, create poll, return QR ----------
 @app.route("/api/spotlight/complete", methods=["POST"])
 @require_user()
 def spotlight_complete():
     token = request.headers.get("X-CSRF","")
-    if not hmac.compare_digest(token, csrf_token()): abort(400, "bad csrf")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+
     data = request.get_json(silent=True) or {}
     iv = Intervention.query.get_or_404(int(data.get("intervention_id")))
     if iv.status not in ("picked","running"):
@@ -618,7 +619,7 @@ def spotlight_complete():
     iv.ended_at = datetime.utcnow()
     iv.status = "completed"
 
-    # Update StudentStats (mark round done)
+    # Update StudentStats
     ss = StudentStats.query.filter_by(student_id=iv.student_id).first()
     if not ss:
         ss = StudentStats(student_id=iv.student_id, times_spoken=0, current_round_done=False)
@@ -627,19 +628,28 @@ def spotlight_complete():
     ss.last_spoken_at = datetime.utcnow()
     ss.current_round_done = True
 
-    # Create a no-right-answer poll for peer feedback
+    # Create peer-feedback poll (no correct answer)
     question = f"How did {iv.student_name} do?"
     options = ["Excellent", "Good", "Okay", "Needs improvement"]
-    p = Poll(code=_new_code(), question=question, options=options, correct_index=None, is_open=True)
-    db.session.add(p); db.session.commit()
+
+    # Use your existing code generator, ensure uniqueness
+    code = gen_code()
+    while Poll.query.filter_by(code=code).first() is not None:
+        code = gen_code()
+
+    p = Poll(code=code, question=question, options=options, correct_index=None, is_open=True)
+    db.session.add(p)
+    db.session.commit()
 
     iv.poll_id = p.id
     db.session.commit()
 
-    # URLs for UI
-    poll_url = url_for("poll_view", code=p.code)
-    qr_url = url_for("share", code=p.code)  # or your explicit QR page
-    return jsonify({"ok": True, "poll_code": p.code, "poll_url": poll_url, "qr_url": qr_url})
+    return jsonify({
+        "ok": True,
+        "poll_code": p.code,
+        "poll_url": url_for("poll_view", code=p.code),
+        "qr_url": url_for("share", code=p.code)  # or your QR page if different
+    })
 
 # ---------- Skip (no stats) ----------
 @app.route("/api/spotlight/skip", methods=["POST"])
