@@ -7,7 +7,9 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeSerializer
 
-from models import db, Poll, Vote, Student, User, Form, FormResponse, LectureQuestion, LectureSignal
+from models import (db, Poll, Vote, Student, User, Form, 
+                    FormResponse, LectureQuestion, LectureSignal,
+                    StudentStats, Intervention)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -499,6 +501,157 @@ def poll_stream(code):
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
+# --------------------------------------------------------------------
+# Spotlight
+# --------------------------------------------------------------------
+
+
+# ---------- Fairness helper ----------
+def _eligible_students(section=None):
+    # Basic: use all students; optionally filter by section if you store it on Student
+    q = Student.query
+    if section:
+        # If you have Student.section, uncomment:
+        # q = q.filter_by(section=section)
+        pass
+    students = q.all()
+
+    # Partition by current_round_done
+    stats_map = {s.student_id: s for s in StudentStats.query.filter(StudentStats.student_id.in_([st.id for st in students])).all()}
+    pool = []
+    for st in students:
+        st_stats = stats_map.get(st.id)
+        done = bool(st_stats.current_round_done) if st_stats else False
+        if not done:
+            pool.append((st, st_stats))
+    if not pool:
+        # Reset round
+        for st in students:
+            st_stats = stats_map.get(st.id)
+            if st_stats:
+                st_stats.current_round_done = False
+            else:
+                db.session.add(StudentStats(student_id=st.id, current_round_done=False))
+        db.session.commit()
+        pool = [(st, stats_map.get(st.id)) for st in students]
+
+    # Weighted random: weight = 1 / (1 + times_spoken)
+    choices = []
+    weights = []
+    for st, st_stats in pool:
+        ts = (st_stats.times_spoken if st_stats else 0)
+        w = 1.0 / (1 + ts)
+        choices.append((st, st_stats))
+        weights.append(w)
+    # Normalize weights
+    total_w = sum(weights)
+    if total_w <= 0:
+        weights = [1.0 for _ in weights]
+        total_w = sum(weights)
+    probs = [w/total_w for w in weights]
+    pick_idx = random.choices(range(len(choices)), weights=probs, k=1)[0]
+    return choices[pick_idx][0]  # return Student
+# -------------------------------------
+
+# ---------- Page ----------
+@app.route("/spotlight")
+@require_user()
+def spotlight_page():
+    return render_template("spotlight.html",
+                           default_duration=120,
+                           user=current_user(),
+                           student_name=session.get("student_name"))
+
+# ---------- Get candidate names (for UI display) ----------
+@app.route("/api/spotlight/candidates")
+@require_user()
+def spotlight_candidates():
+    section = request.args.get("section") or None
+    q = Student.query
+    # if using sections on Student, filter here
+    names = [s.name or s.email for s in q.order_by(Student.name.asc()).all()]
+    return jsonify({"items": names})
+
+# ---------- Pick (server is source of truth) ----------
+@app.route("/api/spotlight/pick", methods=["POST"])
+@require_user()
+def spotlight_pick():
+    token = request.headers.get("X-CSRF","")
+    if not hmac.compare_digest(token, csrf_token()): abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    section = data.get("section")
+    duration = int(data.get("duration_sec") or 120)
+
+    st = _eligible_students(section=section)
+    iv = Intervention(student_id=st.id, student_name=(st.name or st.email),
+                      section=section, duration_sec=duration, status="picked")
+    db.session.add(iv); db.session.commit()
+    return jsonify({"intervention_id": iv.id, "student": {"id": st.id, "name": iv.student_name}, "duration_sec": duration})
+
+# ---------- Start timer ----------
+@app.route("/api/spotlight/start", methods=["POST"])
+@require_user()
+def spotlight_start():
+    token = request.headers.get("X-CSRF","")
+    if not hmac.compare_digest(token, csrf_token()): abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    iv = Intervention.query.get_or_404(int(data.get("intervention_id")))
+    if iv.status not in ("picked","running"):
+        return jsonify({"ok": False, "error": "bad_state"}), 400
+    if not iv.started_at:
+        iv.started_at = datetime.utcnow()
+    iv.status = "running"
+    db.session.commit()
+    return jsonify({"ok": True})
+
+# ---------- Complete: stop, update stats, create poll, return QR ----------
+@app.route("/api/spotlight/complete", methods=["POST"])
+@require_user()
+def spotlight_complete():
+    token = request.headers.get("X-CSRF","")
+    if not hmac.compare_digest(token, csrf_token()): abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    iv = Intervention.query.get_or_404(int(data.get("intervention_id")))
+    if iv.status not in ("picked","running"):
+        return jsonify({"ok": False, "error": "bad_state"}), 400
+
+    iv.ended_at = datetime.utcnow()
+    iv.status = "completed"
+
+    # Update StudentStats (mark round done)
+    ss = StudentStats.query.filter_by(student_id=iv.student_id).first()
+    if not ss:
+        ss = StudentStats(student_id=iv.student_id, times_spoken=0, current_round_done=False)
+        db.session.add(ss)
+    ss.times_spoken += 1
+    ss.last_spoken_at = datetime.utcnow()
+    ss.current_round_done = True
+
+    # Create a no-right-answer poll for peer feedback
+    question = f"How did {iv.student_name} do?"
+    options = ["Excellent", "Good", "Okay", "Needs improvement"]
+    p = Poll(code=_new_code(), question=question, options=options, correct_index=None, is_open=True)
+    db.session.add(p); db.session.commit()
+
+    iv.poll_id = p.id
+    db.session.commit()
+
+    # URLs for UI
+    poll_url = url_for("poll_view", code=p.code)
+    qr_url = url_for("share", code=p.code)  # or your explicit QR page
+    return jsonify({"ok": True, "poll_code": p.code, "poll_url": poll_url, "qr_url": qr_url})
+
+# ---------- Skip (no stats) ----------
+@app.route("/api/spotlight/skip", methods=["POST"])
+@require_user()
+def spotlight_skip():
+    token = request.headers.get("X-CSRF","")
+    if not hmac.compare_digest(token, csrf_token()): abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    iv = Intervention.query.get_or_404(int(data.get("intervention_id")))
+    iv.status = "skipped"
+    db.session.commit()
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Forms (SurveyJS)

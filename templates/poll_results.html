@@ -29,11 +29,14 @@
               {{ opt|e }}
             {% endif %}
           </div>
-          <div class="muted">{{ count }} ({{ '%.1f'|format(pct) }}%)</div>
+          <div class="muted">
+            <span id="count-{{ loop.index0 }}">{{ count }}</span>
+            ( <span id="pct-{{ loop.index0 }}">{{ '%.1f'|format(pct) }}</span>% )
+          </div>
         </div>
         <div style="background:#0b1220;border:1px solid #334155;border-radius:8px;height:20px;">
-          <div
-            style="background:var(--accent, #22c55e);height:20px;width: {{ '%.2f'|format(pct) }}%; border-radius:8px; transition: width .3s;">
+          <div id="bar-{{ loop.index0 }}"
+               style="background:var(--accent, #22c55e);height:20px;width: {{ '%.2f'|format(pct) }}%; border-radius:8px; transition: width .3s;">
           </div>
         </div>
       </div>
@@ -42,7 +45,9 @@
 
   {# --- Accuracy --- #}
   {% if accuracy is not none %}
-    <p><strong>Accuracy:</strong> {{ '%.1f'|format(accuracy * 100) }}% ({{ total }} responses)</p>
+    <p><strong>Accuracy:</strong>
+      <span id="accuracy">{{ '%.1f'|format(accuracy * 100) }}</span>% (<span id="total-count-2">{{ total }}</span> responses)
+    </p>
   {% else %}
     <p class="muted">Set a correct option index to track accuracy.</p>
   {% endif %}
@@ -76,7 +81,7 @@
 
   {# --- Per-student table --- #}
   <div class="card" style="background:#0b1220;border:1px solid #334155;">
-    <h4>Responses ({{ total }})</h4>
+    <h4>Responses (<span id="total-count">{{ total }}</span>)</h4>
     <div style="overflow:auto;">
       <table>
         <thead>
@@ -115,21 +120,80 @@
   </div>
 </div>
 
-{# --- Live updates via SSE (instructor-only endpoint) --- #}
+{# --- Live updates via SSE without reloading the page --- #}
 <script>
 (function(){
-  // Auto-refresh the page when server pushes new tallies.
-  // Simple & durable for live classes.
+  // Initial state from server render
+  const initialCounts = {{ counts | tojson }};
+  const correctIndex = {{ 'null' if poll.correct_index is none else poll.correct_index }};
+  let lastCounts = initialCounts.slice();
+  let firstMsg = true;
+
+  function arraysEqual(a,b){
+    if (a.length !== b.length) return false;
+    for (let i=0;i<a.length;i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  function updateUI(data){
+    const counts = data.counts || [];
+    const total = (counts.reduce((s,x)=>s+(+x||0),0)) || 0;
+
+    // per-option counts, pct, and bar widths
+    for (let i=0;i<counts.length;i++){
+      const c = counts[i];
+      const pct = total ? (100 * c / total) : 0;
+      const cEl = document.getElementById("count-"+i);
+      const pEl = document.getElementById("pct-"+i);
+      const bEl = document.getElementById("bar-"+i);
+      if (cEl) cEl.textContent = c;
+      if (pEl) pEl.textContent = pct.toFixed(1);
+      if (bEl) bEl.style.width = pct.toFixed(2) + "%";
+    }
+
+    // totals (two places if present)
+    const t1 = document.getElementById("total-count");
+    const t2 = document.getElementById("total-count-2");
+    if (t1) t1.textContent = total;
+    if (t2) t2.textContent = total;
+
+    // accuracy if we have a correct index
+    if (typeof correctIndex === "number" && correctIndex >= 0) {
+      const accEl = document.getElementById("accuracy");
+      if (accEl && correctIndex < counts.length) {
+        const correct = counts[correctIndex] || 0;
+        const acc = total ? (100 * correct / total) : 0;
+        accEl.textContent = acc.toFixed(1);
+      }
+    }
+  }
+
   try {
     const es = new EventSource("{{ url_for('poll_stream', code=poll.code) }}");
     es.onmessage = function(ev){
-      // We could diff the DOM, but reloading is more robust for now.
-      location.reload();
+      const data = JSON.parse(ev.data || "{}");
+      const counts = data.counts || [];
+      // Ignore the very first message if it's identical to what's already rendered
+      if (firstMsg) {
+        firstMsg = false;
+        if (arraysEqual(counts, initialCounts)) return;
+      }
+      if (!arraysEqual(counts, lastCounts)) {
+        lastCounts = counts.slice();
+        updateUI(data);
+      }
     };
-    es.onerror = function(){ /* ignore; Render will reconnect */ };
+    es.onerror = function(){ /* ignore; browser will auto-retry per retry hint */ };
   } catch(e) {
-    // If SSE is blocked, fall back to a light poll every 3s
-    setInterval(function(){ fetch("{{ url_for('poll_stats', code=poll.code) }}").then(()=>location.reload()); }, 3000);
+    // Fallback polling (no reload loop)
+    setInterval(async ()=>{
+      try{
+        const r = await fetch("{{ url_for('poll_stats', code=poll.code) }}", {cache:"no-store"});
+        if (!r.ok) return;
+        const data = await r.json();
+        if (data && Array.isArray(data.counts)) updateUI(data);
+      }catch(_){}
+    }, 3000);
   }
 })();
 </script>

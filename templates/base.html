@@ -37,6 +37,7 @@
           <a href="{{ url_for('poll_new') }}">New Poll</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
+          <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
         {% elif student_name %}
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>

@@ -121,3 +121,24 @@ class LectureQuestion(db.Model):
     text = db.Column(db.Text, nullable=False)
     handled = db.Column(db.Boolean, default=False, nullable=False)  # NEW
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class StudentStats(db.Model):
+    __tablename__ = "student_stats"
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), primary_key=True)
+    times_spoken = db.Column(db.Integer, default=0, nullable=False)
+    last_spoken_at = db.Column(db.DateTime)
+    current_round_done = db.Column(db.Boolean, default=False, nullable=False)
+
+class Intervention(db.Model):
+    __tablename__ = "interventions"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
+    student_name = db.Column(db.String(120))
+    section = db.Column(db.String(120))
+    duration_sec = db.Column(db.Integer, default=120, nullable=False)
+    started_at = db.Column(db.DateTime)
+    ended_at = db.Column(db.DateTime)
+    poll_id = db.Column(db.Integer, db.ForeignKey('polls.id', ondelete="SET NULL"))
+    status = db.Column(db.String(20), default="picked", nullable=False)  # picked|running|completed|skipped
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

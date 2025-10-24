@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:960px;">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Spotlight</h3>
+    <div class="muted">Pick a random student, 2-minute talk, then peer feedback.</div>
+  </div>
+
+  <div class="sp"></div>
+
+  <div class="row" style="gap:12px; align-items:flex-end; flex-wrap:wrap;">
+    <div>
+      <label>Duration (seconds)</label>
+      <input id="dur" type="number" min="30" max="600" step="10" value="{{ default_duration }}"
+             style="width:120px; padding:8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:var(--text);">
+    </div>
+    <!-- Hook for future section filter -->
+    <!-- <div>
+      <label>Section</label>
+      <input id="section" type="text" placeholder="Optional section…"
+             style="width:200px; padding:8px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:var(--text);">
+    </div> -->
+    <button id="btn-shuffle" class="btn">Shuffle</button>
+    <button id="btn-pick" class="btn btn-primary">Pick</button>
+    <button id="btn-skip" class="btn">Skip</button>
+  </div>
+
+  <div class="sp"></div>
+
+  <div id="display" class="card" style="text-align:center; padding:28px;">
+    <div class="muted" id="subtitle">Shuffling…</div>
+    <div id="name" style="font-size:40px; font-weight:800; margin:8px 0 2px 0;">—</div>
+    <div class="muted" id="roster-count">Loading roster…</div>
+  </div>
+
+  <div class="sp"></div>
+
+  <div class="card" id="timer-card" style="display:none;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h4 style="margin:0;">Timer</h4>
+      <div id="time" style="font-size:32px; font-weight:700;">02:00</div>
+    </div>
+    <div class="row" style="gap:8px; margin-top:8px;">
+      <button id="btn-start" class="btn btn-primary">Start</button>
+      <button id="btn-pause" class="btn" disabled>Pause</button>
+      <button id="btn-reset" class="btn">Reset</button>
+      <span class="muted" id="status">Picked</span>
+    </div>
+  </div>
+
+  <div class="sp"></div>
+
+  <div class="card" id="poll-card" style="display:none; text-align:center;">
+    <h4 style="margin:0 0 6px 0;">Peer feedback poll</h4>
+    <p class="muted" id="poll-label">How did NAME do?</p>
+    <div style="display:flex; justify-content:center; margin:12px 0;">
+      <img id="qr-img" alt="Poll QR" style="image-rendering:pixelated; border:8px solid #0b1220; background:#fff; max-width:100%; height:auto;">
+    </div>
+    <div class="row" style="justify-content:center; gap:8px;">
+      <a id="poll-open" class="btn" target="_blank" rel="noopener">Open poll</a>
+      <a id="poll-share" class="btn">Share / QR</a>
+    </div>
+  </div>
+
+  <p class="muted" id="notice" style="margin-top:10px;"></p>
+</div>
+
+<script>
+(function(){
+  const csrf = "{{ csrf_token() }}";
+  const $ = (q) => document.querySelector(q);
+  const nameEl = $("#name");
+  const subtitle = $("#subtitle");
+  const rosterCount = $("#roster-count");
+  const notice = $("#notice");
+
+  let roster = [];
+  let shuffling = false;
+  let shuffleTimer = null;
+
+  // Timer state
+  const timerCard = $("#timer-card");
+  const timeEl = $("#time");
+  const statusEl = $("#status");
+  const btnStart = $("#btn-start");
+  const btnPause = $("#btn-pause");
+  const btnReset = $("#btn-reset");
+  let remaining = parseInt($("#dur").value || "120", 10);
+  let ticking = false;
+  let tickHandle = null;
+  let interventionId = null;
+  let pickedName = null;
+
+  function fmt(sec){
+    sec = Math.max(0, sec|0);
+    const m = String(Math.floor(sec/60)).padStart(2,"0");
+    const s = String(sec%60).padStart(2,"0");
+    return m+":"+s;
+  }
+  function setTime(sec){ timeEl.textContent = fmt(sec); }
+
+  async function loadRoster(){
+    try{
+      const r = await fetch("{{ url_for('spotlight_candidates') }}", { credentials: "same-origin" });
+      const j = await r.json();
+      roster = Array.isArray(j.items) ? j.items.filter(Boolean) : [];
+      rosterCount.textContent = roster.length ? (roster.length + " students") : "No students found";
+    }catch(e){
+      roster = [];
+      rosterCount.textContent = "Couldn’t load roster";
+    }
+  }
+
+  function doShuffle(ms=1200){
+    if (!roster.length) return;
+    shuffling = true;
+    subtitle.textContent = "Shuffling…";
+    const started = performance.now();
+    const step = () => {
+      if (!shuffling) return;
+      const i = Math.floor(Math.random() * roster.length);
+      nameEl.textContent = roster[i];
+      if (performance.now() - started >= ms) {
+        shuffling = false;
+        return;
+      }
+      shuffleTimer = setTimeout(step, 70);
+    };
+    step();
+  }
+
+  async function pick(){
+    notice.textContent = "";
+    if (!roster.length){ notice.textContent = "No roster available."; return; }
+    // Animation first for UX
+    doShuffle(1400);
+    // Server decides
+    const body = {
+      duration_sec: parseInt($("#dur").value || "120", 10),
+      // section: $("#section")?.value || null
+    };
+    const r = await fetch("{{ url_for('spotlight_pick') }}", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "X-CSRF": csrf },
+      body: JSON.stringify(body),
+      credentials: "same-origin"
+    });
+    if (!r.ok){ notice.textContent = "Pick failed."; return; }
+    const j = await r.json();
+    pickedName = j.student.name;
+    interventionId = j.intervention_id;
+    setTimeout(() => {
+      nameEl.textContent = pickedName;
+      subtitle.textContent = "Selected";
+      remaining = j.duration_sec || 120;
+      setTime(remaining);
+      timerCard.style.display = "block";
+      statusEl.textContent = "Picked";
+    }, 1500);
+  }
+
+  function startTimer(){
+    if (!interventionId){ notice.textContent = "Pick a student first."; return; }
+    if (ticking) return;
+    ticking = true;
+    btnPause.disabled = false;
+    statusEl.textContent = "Running";
+    fetch("{{ url_for('spotlight_start') }}", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "X-CSRF": csrf },
+      body: JSON.stringify({ intervention_id: interventionId }),
+      credentials: "same-origin"
+    }).catch(()=>{});
+    tickHandle = setInterval(() => {
+      remaining -= 1;
+      setTime(remaining);
+      if (remaining <= 0) complete();
+    }, 1000);
+  }
+  function pauseTimer(){
+    if (!ticking) return;
+    ticking = false;
+    clearInterval(tickHandle);
+    statusEl.textContent = "Paused";
+  }
+  function resetTimer(){
+    ticking = false;
+    clearInterval(tickHandle);
+    remaining = parseInt($("#dur").value || "120", 10);
+    setTime(remaining);
+    statusEl.textContent = "Picked";
+  }
+
+  async function complete(){
+    if (!interventionId) return;
+    ticking = false;
+    clearInterval(tickHandle);
+    statusEl.textContent = "Completed";
+    // Ask server to finish + create poll
+    const r = await fetch("{{ url_for('spotlight_complete') }}", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "X-CSRF": csrf },
+      body: JSON.stringify({ intervention_id: interventionId }),
+      credentials: "same-origin"
+    });
+    if (!r.ok){ notice.textContent = "Couldn’t finalize."; return; }
+    const j = await r.json();
+    // Show QR/poll
+    const pollCard = $("#poll-card");
+    pollCard.style.display = "block";
+    $("#poll-label").textContent = `How did ${pickedName} do?`;
+    $("#qr-img").src = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code).replace("/share","/share"); // will display the share page when clicked
+    // prefer explicit QR PNG if you have it:
+    $("#qr-img").src = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code).replace("/share","/qr.png");
+    $("#poll-open").href = `{{ url_for('poll_view', code='CODE') }}`.replace("CODE", j.poll_code);
+    $("#poll-share").href = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code);
+  }
+
+  async function skip(){
+    if (!interventionId){ notice.textContent = "Nothing to skip."; return; }
+    await fetch("{{ url_for('spotlight_skip') }}", {
+      method: "POST",
+      headers: { "Content-Type":"application/json", "X-CSRF": csrf },
+      body: JSON.stringify({ intervention_id: interventionId }),
+      credentials: "same-origin"
+    }).catch(()=>{});
+    // Reset UI
+    pickedName = null; interventionId = null;
+    timerCard.style.display = "none";
+    $("#poll-card").style.display = "none";
+    subtitle.textContent = "Shuffling…";
+    nameEl.textContent = "—";
+  }
+
+  // Bind UI
+  $("#btn-shuffle").addEventListener("click", ()=> doShuffle(1200));
+  $("#btn-pick").addEventListener("click", pick);
+  $("#btn-skip").addEventListener("click", skip);
+  btnStart.addEventListener("click", startTimer);
+  btnPause.addEventListener("click", pauseTimer);
+  btnReset.addEventListener("click", resetTimer);
+
+  // init
+  setTime(remaining);
+  loadRoster();
+})();
+</script>
+{% endblock %}
