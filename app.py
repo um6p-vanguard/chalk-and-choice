@@ -457,42 +457,46 @@ from flask import stream_with_context
 def poll_stream(code):
     @stream_with_context
     def generate():
-        last = None
-        while True:
-            # Re-fetch on each tick to avoid detached objects
-            p = Poll.query.filter_by(code=code).first()
-            if not p:
-                # End the stream if poll was deleted
-                yield "event: end\ndata: {}\n\n"
-                return
+        # Tell EventSource to retry after 3s if the connection drops
+        yield "retry: 3000\n\n"
+        last_blob = None
+        try:
+            while True:
+                # Re-fetch each tick; never keep ORM instances across yields
+                p = Poll.query.filter_by(code=code).first()
+                if not p:
+                    yield "event: end\ndata: {}\n\n"
+                    return
 
-            # Compute counts without touching p.votes relationship
-            counts = [0] * len(p.options)
-            for v in Vote.query.filter_by(poll_id=p.id).all():
-                # Guard in case an out-of-range choice slipped in
-                if 0 <= v.choice < len(counts):
-                    counts[v.choice] += 1
+                # Tally without touching lazy relationships
+                counts = [0] * len(p.options)
+                for v in Vote.query.filter_by(poll_id=p.id).all():
+                    if 0 <= v.choice < len(counts):
+                        counts[v.choice] += 1
 
-            payload = {
-                "counts": counts,
-                "total": sum(counts),
-                "correct_index": p.correct_index,
-                "options": p.options,
-            }
-            blob = json.dumps(payload, separators=(",", ":"))
-            if blob != last:
-                yield f"data: {blob}\n\n"
-                last = blob
-            else:
-                # heartbeat so proxies don't kill the connection
-                yield ": keep-alive\n\n"
+                payload = {
+                    "counts": counts,
+                    "total": sum(counts),
+                    "correct_index": p.correct_index,
+                    "options": p.options,
+                }
+                blob = json.dumps(payload, separators=(",", ":"))
 
-            time.sleep(2.5)
+                if blob != last_blob:
+                    yield f"data: {blob}\n\n"
+                    last_blob = blob
+                else:
+                    # heartbeat so proxies don’t kill the stream
+                    yield ": keep-alive\n\n"
 
-    # Helpful SSE headers
+                time.sleep(2.5)
+        except GeneratorExit:
+            # client disconnected; exit quietly
+            return
+
     resp = Response(generate(), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"  # if ever behind a proxy that buffers
+    resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
 
