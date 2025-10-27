@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Learning Outcomes{% endblock %}
+{% block content %}
+<div class="container">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="m-0">Learning Outcomes</h2>
+    <a class="btn btn-primary" href="{{ url_for('admin_lo_create', q=q) }}">Create new</a>
+  </div>
+
+  <form class="row g-2 mb-3" method="get" action="{{ url_for('admin_lo_list') }}">
+    <div class="col-auto">
+      <input class="form-control" type="text" name="q" placeholder="Search code or title…" value="{{ q }}">
+    </div>
+    <div class="col-auto">
+      <select class="form-select" name="per_page">
+        {% for n in [10,20,50,100] %}
+        <option value="{{n}}" {% if per_page==n %}selected{% endif %}>{{n}} / page</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-outline-secondary" type="submit">Search</button>
+    </div>
+  </form>
+
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th style="width:12rem">Code</th>
+          <th>Title</th>
+          <th style="width:40%">Description</th>
+          <th style="width:12rem">Created</th>
+          <th style="width:12rem">Creator</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lo in items %}
+        <tr>
+          <td><code>{{ lo.code }}</code></td>
+          <td>{{ lo.title }}</td>
+          <td class="text-muted">
+            {% if lo.description %}
+              {{ lo.description[:140] }}{% if lo.description|length > 140 %}…{% endif %}
+            {% endif %}
+          </td>
+          <td>{{ lo.created_at.strftime("%Y-%m-%d %H:%M") if lo.created_at else "" }}</td>
+          <td>{{ lo.creator.name if lo.creator else "" }}</td>
+        </tr>
+        {% endfor %}
+        {% if not items %}
+        <tr><td colspan="5" class="text-center text-muted py-4">No learning outcomes found.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <nav aria-label="pagination">
+    <ul class="pagination">
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_lo_list', page=1, per_page=per_page, q=q) }}">« First</a>
+      </li>
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_lo_list', page=page-1, per_page=per_page, q=q) }}">‹ Prev</a>
+      </li>
+      <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ last_page }}</span></li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_lo_list', page=page+1, per_page=per_page, q=q) }}">Next ›</a>
+      </li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_lo_list', page=last_page, per_page=per_page, q=q) }}">Last »</a>
+      </li>
+    </ul>
+  </nav>
+</div>
+{% endblock %}

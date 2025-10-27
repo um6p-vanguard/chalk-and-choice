@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Create Learning Outcome{% endblock %}
+{% block content %}
+<div class="container" style="max-width: 720px">
+  <h2>Create Learning Outcome</h2>
+
+  <form method="post" action="{{ url_for('admin_lo_create', q=request.args.get('q')) }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+    <div class="mb-3">
+      <label class="form-label">Code</label>
+      <input type="text" name="code" class="form-control {% if errors.get('code') %}is-invalid{% endif %}"
+             maxlength="32" value="{{ code }}">
+      {% if errors.get('code') %}<div class="invalid-feedback">{{ errors['code'] }}</div>{% endif %}
+      <div class="form-text">Short identifier (e.g., <code>LO1</code>, <code>IO_STRINGS</code>).</div>
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Title</label>
+      <input type="text" name="title" class="form-control {% if errors.get('title') %}is-invalid{% endif %}"
+             maxlength="255" value="{{ title }}">
+      {% if errors.get('title') %}<div class="invalid-feedback">{{ errors['title'] }}</div>{% endif %}
+    </div>
+
+    <div class="mb-3">
+      <label class="form-label">Description</label>
+      <textarea name="description" class="form-control" rows="5">{{ description }}</textarea>
+    </div>
+
+    <div class="d-flex gap-2">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <a class="btn btn-outline-secondary" href="{{ url_for('admin_lo_list', q=request.args.get('q')) }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

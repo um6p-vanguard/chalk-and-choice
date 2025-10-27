@@ -4,13 +4,74 @@ from flask import (
     Flask, render_template, request, redirect, url_for,
     session, make_response, jsonify, abort, Response, send_file
 )
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeSerializer
 
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention)
+                    StudentStats, Intervention, LearningOutcome,
+                    Task, Quest, TaskPrereq, TaskOutcome, QuestBadge,
+                    QuestPrereq, QuestOutcome)
 import qrcode
+
+
+
+# --------------------------------------------------------------------
+# Task Config
+# --------------------------------------------------------------------
+
+TASK_CONFIG_SCHEMAS = {
+    "CODE": {
+        "fields": [
+            {"key": "language", "label": "Language", "type": "select",
+             "choices": ["python", "javascript", "cpp", "java"], "default": "python"},
+            {"key": "judge", "label": "Judge", "type": "select",
+             "choices": ["io", "unit", "custom"], "default": "io"},
+            {"key": "timeout_ms", "label": "Timeout (ms)", "type": "number", "min": 0, "default": 2000},
+            {"key": "memory_mb", "label": "Memory (MB)", "type": "number", "min": 16, "default": 256},
+            {"key": "allowed_imports", "label": "Allowed imports (comma-separated)", "type": "text", "default": ""},
+            {"key": "show_samples", "label": "Show sample testcases", "type": "checkbox", "default": True},
+        ]
+    },
+    "MCQ": {
+        "fields": [
+            {"key": "options_raw", "label": "Options (one per line, e.g. 'A) Option text')", "type": "textarea",
+             "default": "A) ...\nB) ..."},
+            {"key": "correct_ids", "label": "Correct IDs (comma-separated, e.g. 'B' or 'A,C')", "type": "text", "default": ""},
+            {"key": "randomize", "label": "Randomize options", "type": "checkbox", "default": True},
+            {"key": "multiple_correct", "label": "Allow multiple correct", "type": "checkbox", "default": False},
+        ]
+    },
+    "TEXT": {
+        "fields": [
+            {"key": "min_words", "label": "Min words", "type": "number", "min": 0, "default": 80},
+            {"key": "max_words", "label": "Max words", "type": "number", "min": 0, "default": 300},
+            {"key": "keywords_csv", "label": "Required keywords (comma-separated)", "type": "text", "default": ""},
+        ]
+    },
+    "REFLECTION": {
+        "fields": [
+            {"key": "min_words", "label": "Min words", "type": "number", "min": 0, "default": 80},
+            {"key": "max_words", "label": "Max words", "type": "number", "min": 0, "default": 300},
+        ]
+    },
+    "VISIT": {
+        "fields": [
+            {"key": "url", "label": "URL to visit", "type": "text", "default": ""},
+            {"key": "min_seconds", "label": "Minimum seconds on page", "type": "number", "min": 0, "default": 60},
+            {"key": "require_evidence", "label": "Require evidence (screenshot/link)", "type": "checkbox", "default": True},
+        ]
+    },
+    "FILE_UPLOAD": {
+        "fields": [
+            {"key": "allowed_mime", "label": "Allowed MIME types (comma-separated)", "type": "text", "default": "application/pdf"},
+            {"key": "max_bytes", "label": "Max file size (bytes)", "type": "number", "min": 0, "default": 1048576},
+            {"key": "multiple", "label": "Allow multiple files", "type": "checkbox", "default": False},
+        ]
+    },
+}
+
 
 # --------------------------------------------------------------------
 # Utils
@@ -43,6 +104,10 @@ def create_app(db_path=DB_URI):
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     db.init_app(app)
     with app.app_context():
+        from sqlalchemy import event
+        @event.listens_for(db.engine, "connect")
+        def _fk_pragma(dbapi_conn, _):
+            dbapi_conn.execute("PRAGMA foreign_keys=ON")
         db.create_all()
     return app
 
@@ -94,14 +159,25 @@ def require_user(role=None):
             u = current_user()
             if not u:
                 return redirect(url_for("login", next=request.path))
-            if role and u.role != role:
+
+            allowed = None
+            if role is None:
+                allowed = None
+            elif isinstance(role, (list, tuple, set)):
+                allowed = set(role)
+            else:
+                allowed = {role}
+
+            if allowed and u.role not in allowed:
                 abort(403)
+
             if session.get("student_id"):
                 logout_everyone()
                 return redirect(url_for("login"))
             return fn(*args, **kwargs)
         return wrapper
     return deco
+
 
 def require_student():
     def deco(fn):
@@ -1038,6 +1114,574 @@ def question_post():
     q = LectureQuestion(student_id=stu.id, student_name=stu.name, text=text)
     db.session.add(q); db.session.commit()
     return jsonify({"ok": True})
+
+# --------------------------------------------------------------------
+# Learning Outcomes
+# --------------------------------------------------------------------
+
+@app.route("/admin/learning-outcomes")
+@require_user(("ADMIN", "MENTOR"))   # if you didn't update require_user yet, temporarily use @require_user("ADMIN")
+def admin_lo_list():
+    q = (request.args.get("q") or "").strip()
+    page = max(int(request.args.get("page", 1) or 1), 1)
+    per_page = min(max(int(request.args.get("per_page", 20) or 20), 5), 100)
+
+    query = LearningOutcome.query
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            db.or_(
+                LearningOutcome.code.like(like),
+                LearningOutcome.title.like(like),
+            )
+        )
+
+    total = query.count()
+    items = (query
+             .order_by(LearningOutcome.code.asc())
+             .limit(per_page)
+             .offset((page - 1) * per_page)
+             .all())
+
+    last_page = max((total + per_page - 1) // per_page, 1)
+    has_prev = page > 1
+    has_next = page < last_page
+
+    return render_template(
+        "learning_outcomes_list.html",
+        items=items, total=total, page=page, per_page=per_page,
+        last_page=last_page, has_prev=has_prev, has_next=has_next, q=q
+    )
+
+@app.route("/admin/learning-outcomes/new", methods=["GET", "POST"])
+@require_user(("ADMIN", "MENTOR"))
+def admin_lo_create():
+    errors = {}
+    code = (request.form.get("code") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    description = (request.form.get("description") or "").strip()
+
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+
+        # server-side validation
+        if not code or len(code) > 32:
+            errors["code"] = "Code is required (≤ 32 chars)."
+        if not title or len(title) > 255:
+            errors["title"] = "Title is required (≤ 255 chars)."
+
+        if not errors:
+            lo = LearningOutcome(
+                code=code,
+                title=title,
+                description=description or None,
+                creator_user_id=current_user().id if current_user() else None,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            db.session.add(lo)
+            try:
+                db.session.commit()
+                # success → back to list (preserve search if present)
+                dest = url_for("admin_lo_list", q=request.args.get("q") or None)
+                return redirect(dest)
+            except IntegrityError:
+                db.session.rollback()
+                errors["code"] = "This code already exists."
+
+    return render_template(
+        "learning_outcomes_new.html",
+        code=code, title=title, description=description, errors=errors
+    )
+
+
+# --------------------------------------------------------------------
+# Tasks
+# --------------------------------------------------------------------
+
+def build_config_from_form(type_val: str, form) -> dict:
+    """Turn typed form inputs into a normalized config dict."""
+    schema = TASK_CONFIG_SCHEMAS.get(type_val, {})
+    fields = schema.get("fields", [])
+    cfg = {}
+
+    # simple helpers
+    def _csv(s): return [x.strip() for x in (s or "").split(",") if x.strip()]
+    def _int(name, default=None):
+        raw = form.get(name, "")
+        if raw == "" and default is not None:
+            return default
+        return int(raw)
+
+    for f in fields:
+        k = f["key"]; t = f["type"]
+        if t == "checkbox":
+            cfg[k] = (form.get(k) == "on")
+        elif t == "number":
+            val = form.get(k)
+            cfg[k] = int(val) if val not in (None, "") else f.get("default")
+        elif t in ("text", "textarea"):
+            cfg[k] = form.get(k, f.get("default", ""))
+
+        elif t == "select":
+            v = form.get(k, f.get("default"))
+            if "choices" in f and v not in f["choices"]:
+                v = f.get("default")
+            cfg[k] = v
+
+    # Post-process per type
+    if type_val == "CODE":
+        if cfg.get("allowed_imports"):
+            cfg["allowed_imports"] = _csv(cfg["allowed_imports"])
+    elif type_val == "MCQ":
+        # options_raw → [{"id":"A","text":"..."}, ...]
+        lines = [ln.strip() for ln in (cfg.get("options_raw") or "").splitlines() if ln.strip()]
+        options = []
+        auto_ids = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        n = 0
+        for ln in lines:
+            opt_id, text = None, ln
+            # Accept "A) ..." or "A. ..." or "A - ..." patterns
+            if len(ln) >= 3 and ln[1] in ").-" and ln[0].isalpha():
+                opt_id, text = ln[0].upper(), ln[3:].strip()
+            else:
+                opt_id, text = auto_ids[n], ln
+            options.append({"id": opt_id, "text": text})
+            n += 1
+        cfg["options"] = options
+        cfg["correct"] = [cid.strip().upper() for cid in _csv(cfg.get("correct_ids", ""))]
+        # cleanup raw helpers
+        cfg.pop("options_raw", None)
+        cfg.pop("correct_ids", None)
+    elif type_val == "TEXT":
+        cfg["min_words"] = _int("min_words", 0)
+        cfg["max_words"] = _int("max_words", 0)
+        cfg["keywords"] = _csv(cfg.get("keywords_csv", ""))
+        cfg.pop("keywords_csv", None)
+    elif type_val == "REFLECTION":
+        cfg["min_words"] = _int("min_words", 0)
+        cfg["max_words"] = _int("max_words", 0)
+    elif type_val == "VISIT":
+        cfg["min_seconds"] = _int("min_seconds", 0)
+    elif type_val == "FILE_UPLOAD":
+        cfg["max_bytes"] = _int("max_bytes", 0)
+        if cfg.get("allowed_mime"):
+            cfg["allowed_mime"] = _csv(cfg["allowed_mime"])
+    return cfg
+
+
+@app.route("/admin/tasks")
+@require_user(("ADMIN", "MENTOR"))
+def admin_task_list():
+    q = (request.args.get("q") or "").strip()
+    page = max(int(request.args.get("page", 1) or 1), 1)
+    per_page = min(max(int(request.args.get("per_page", 20) or 20), 5), 100)
+    quest_id = request.args.get("quest_id")
+    type_filter = (request.args.get("type") or "").strip()
+
+    query = Task.query.join(Quest, Task.quest_id == Quest.id, isouter=True)
+
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Task.slug.like(like), Task.title.like(like)))
+    if quest_id and quest_id.isdigit():
+        query = query.filter(Task.quest_id == int(quest_id))
+    if type_filter:
+        query = query.filter(Task.type == type_filter)
+
+    total = query.count()
+    items = (query
+             .order_by(Quest.code.asc(), Task.order_in_quest.asc())
+             .limit(per_page)
+             .offset((page - 1) * per_page)
+             .all())
+
+    last_page = max((total + per_page - 1) // per_page, 1)
+    has_prev = page > 1
+    has_next = page < last_page
+
+    # for filters
+    quests = Quest.query.order_by(Quest.code.asc()).all()
+    quest_map = {q.id: q for q in quests} 
+    types = list(Task.type.type.enums)  # ["CODE","MCQ",...]
+
+    return render_template(
+        "tasks_list.html",
+        items=items, total=total, page=page, per_page=per_page,
+        last_page=last_page, has_prev=has_prev, has_next=has_next, q=q,
+        quests=quests, quest_id=quest_id, types=types, type_filter=type_filter,
+        quest_map=quest_map
+    )
+
+@app.route("/admin/tasks/new", methods=["GET", "POST"])
+@require_user(("ADMIN", "MENTOR"))
+def admin_task_create():
+    errors = {}
+    # form fields
+    quest_id  = (request.form.get("quest_id") or "").strip()
+    slug      = (request.form.get("slug") or "").strip()
+    title     = (request.form.get("title") or "").strip()
+    description = (request.form.get("description") or "").strip()
+    type_val  = (request.form.get("type") or "").strip()
+    xp        = request.form.get("xp") or "10"
+    stars     = request.form.get("stars") or "10"
+    difficulty= (request.form.get("difficulty") or "").strip()
+    must_pass = True if request.form.get("must_pass") == "on" else False
+    min_score_to_pass = request.form.get("min_score_to_pass") or "1.00"
+    order_in_quest    = request.form.get("order_in_quest") or "1"
+    lo_ids    = request.form.getlist("lo_ids")               # optional LO mapping
+    selected_prereqs = request.form.getlist("prereq_task_ids")  # same-quest prereqs
+
+    # for selects
+    quests = Quest.query.order_by(Quest.code.asc()).all()
+    types  = list(Task.type.type.enums)  # ["CODE","MCQ","TEXT","REFLECTION","VISIT","FILE_UPLOAD"]
+    los    = LearningOutcome.query.order_by(LearningOutcome.code.asc()).all()
+    schemas = TASK_CONFIG_SCHEMAS
+
+    # possible prereqs depend on selected quest
+    possible_prereqs = []
+    if quest_id.isdigit():
+        possible_prereqs = (Task.query
+            .filter(Task.quest_id == int(quest_id))
+            .order_by(Task.order_in_quest.asc(), Task.slug.asc())
+            .all())
+
+    # POST: validate + create
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+
+        if request.form.get("preview") == "1":
+        # Do NOT validate or persist; just re-render with the new type/prereqs
+            return render_template(
+                "tasks_new.html",
+                errors={},  # no errors on preview
+                quests=quests, types=types, los=los, schemas=schemas,
+                possible_prereqs=possible_prereqs,
+                selected_prereqs=request.form.getlist("prereq_task_ids"),
+                quest_id=quest_id, slug=slug, title=title, description=description,
+                type_val=type_val, xp=xp, stars=stars, difficulty=difficulty,
+                must_pass=must_pass, min_score_to_pass=min_score_to_pass,
+                order_in_quest=order_in_quest, lo_ids=lo_ids
+            )
+        # Basic validation
+        if not quest_id.isdigit():
+            errors["quest_id"] = "Select a quest."
+        if not slug or len(slug) > 64:
+            errors["slug"] = "Slug is required (≤ 64 chars)."
+        if not title or len(title) > 255:
+            errors["title"] = "Title is required (≤ 255 chars)."
+        if type_val not in types:
+            errors["type"] = "Invalid type."
+
+        # Numeric fields
+        try:
+            xp_i = max(0, int(xp))
+        except Exception:
+            errors["xp"] = "XP must be a non-negative integer."
+        try:
+            stars_i = max(0, int(stars))
+        except Exception:
+            errors["stars"] = "Stars must be a non-negative integer."
+        try:
+            diff_i = int(difficulty) if difficulty else None
+            if diff_i is not None and not (1 <= diff_i <= 5):
+                raise ValueError
+        except Exception:
+            errors["difficulty"] = "Difficulty must be 1..5 or blank."
+        try:
+            order_i = max(1, int(order_in_quest))
+        except Exception:
+            errors["order_in_quest"] = "Order must be a positive integer."
+        try:
+            msp = float(min_score_to_pass)
+            if not (0.0 <= msp <= 1.0):
+                raise ValueError
+        except Exception:
+            errors["min_score_to_pass"] = "Threshold must be between 0.0 and 1.0."
+
+        # Build config dict from typed schema fields (no raw JSON)
+        config_obj = {}
+        if type_val:
+            try:
+                config_obj = build_config_from_form(type_val, request.form)
+            except Exception:
+                errors["config"] = "Could not parse configuration inputs."
+
+        if not errors:
+            t = Task(
+                quest_id=int(quest_id),
+                slug=slug,
+                title=title,
+                description=description or None,
+                type=type_val,
+                xp=xp_i,
+                stars=stars_i,
+                difficulty=diff_i,
+                must_pass=must_pass,
+                min_score_to_pass=msp,
+                order_in_quest=order_i,
+                creator_user_id=current_user().id if current_user() else None,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+                config=config_obj,
+            )
+            db.session.add(t)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                # unique (quest_id, slug)
+                errors["slug"] = "This slug already exists in the selected quest."
+
+            if not errors:
+                # Link learning outcomes (optional)
+                for lo_id in lo_ids:
+                    if lo_id.isdigit():
+                        db.session.add(TaskOutcome(task_id=t.id, lo_id=int(lo_id), weight=1))
+
+                # Validate & insert same-quest prerequisites
+                valid_ids = []
+                if selected_prereqs:
+                    rows = (Task.query.with_entities(Task.id)
+                            .filter(Task.quest_id == t.quest_id,
+                                    Task.id.in_([int(x) for x in selected_prereqs if x.isdigit()]))
+                            .all())
+                    valid_ids = [row.id for row in rows]
+
+                for pid in valid_ids:
+                    if pid != t.id:  # guard (shouldn't happen at create)
+                        db.session.add(TaskPrereq(task_id=t.id, prereq_task_id=pid))
+
+                db.session.commit()
+                return redirect(url_for("admin_task_list", quest_id=t.quest_id))
+
+    # GET or validation errors → re-render form
+    return render_template(
+        "tasks_new.html",
+        errors=errors,
+        quests=quests, types=types, los=los, schemas=schemas,
+        possible_prereqs=possible_prereqs, selected_prereqs=selected_prereqs,
+        quest_id=quest_id, slug=slug, title=title, description=description,
+        type_val=type_val, xp=xp, stars=stars, difficulty=difficulty,
+        must_pass=must_pass, min_score_to_pass=min_score_to_pass,
+        order_in_quest=order_in_quest, lo_ids=lo_ids
+    )
+
+@app.route("/tasks/<int:task_id>")
+def task_view(task_id: int):
+    # TODO: gate by @require_student() when you hook auth
+    task = Task.query.get_or_404(task_id)
+    quest = Quest.query.get(task.quest_id) if task.quest_id else None
+
+    # learning outcomes for header chips
+    from models import TaskOutcome, LearningOutcome
+    lo_ids = db.session.query(TaskOutcome.lo_id).filter(TaskOutcome.task_id == task.id).all()
+    los = []
+    if lo_ids:
+        ids = [x[0] for x in lo_ids]
+        los = LearningOutcome.query.filter(LearningOutcome.id.in_(ids)).all()
+
+    return render_template("tasks/show.html", task=task, quest=quest, learning_outcomes=los)
+
+@app.route("/tasks/<int:task_id>/submit", methods=["POST"])
+def task_submit(task_id: int):
+    # POC: trusts client-provided score; do not use in production
+    if not verify_csrf(): abort(400, "bad csrf")
+    task = Task.query.get_or_404(task_id)
+
+    from models import Submission, StudentTaskGrade  # if using student auth, pull current student
+    # For the POC, let’s store under a synthetic student (id=1) or skip if you already have require_student
+    student_id = session.get("student_id") or 1
+
+    code = (request.form.get("code") or "")
+    lang = (request.form.get("language") or "python")
+    try:
+        score = float(request.form.get("score") or "0")
+    except Exception:
+        score = 0.0
+
+    sub = Submission(
+        task_id=task.id, student_id=student_id, status="PASSED" if score >= float(task.min_score_to_pass) else "FAILED",
+        score=score, payload={"code": code, "language": lang}
+    )
+    db.session.add(sub)
+    db.session.commit()
+    # redirect back to task view
+    return redirect(url_for("task_view", task_id=task.id))
+
+
+# --------------------------------------------------------------------
+# Quests
+# --------------------------------------------------------------------
+
+QUEST_COMPLETION_SCHEMA = {
+    "fields": [
+        {"key": "mode", "label": "Completion mode", "type": "select",
+         "choices": ["ALL_REQUIRED_TASKS", "AT_LEAST_K_TASKS", "AT_LEAST_XP", "AT_LEAST_STARS"],
+         "default": "ALL_REQUIRED_TASKS"},
+        {"key": "k", "label": "K (tasks to pass) — used with AT_LEAST_K_TASKS", "type": "number", "min": 0, "default": 0},
+        {"key": "xp", "label": "XP threshold — used with AT_LEAST_XP", "type": "number", "min": 0, "default": 0},
+        {"key": "stars", "label": "Stars threshold — used with AT_LEAST_STARS", "type": "number", "min": 0, "default": 0},
+        {"key": "must_pass_by_default", "label": "Tasks required by default", "type": "checkbox", "default": True},
+    ]
+}
+
+def build_quest_completion_from_form(form) -> dict:
+    cfg = {}
+    schema = QUEST_COMPLETION_SCHEMA["fields"]
+    for f in schema:
+        k = f["key"]; t = f["type"]
+        if t == "checkbox":
+            cfg[k] = (form.get(k) == "on")
+        elif t == "number":
+            raw = form.get(k)
+            cfg[k] = int(raw) if raw not in (None, "") else f.get("default", 0)
+        elif t == "select":
+            v = form.get(k, f.get("default"))
+            if v not in f["choices"]:
+                v = f.get("default")
+            cfg[k] = v
+    return cfg
+
+@app.route("/admin/quests")
+@require_user(("ADMIN", "MENTOR"))
+def admin_quest_list():
+    q = (request.args.get("q") or "").strip()
+    page = max(int(request.args.get("page", 1) or 1), 1)
+    per_page = min(max(int(request.args.get("per_page", 20) or 20), 5), 100)
+    published = request.args.get("published")  # "", "1", "0"
+    optional = request.args.get("optional")    # "", "1", "0"
+
+    query = Quest.query
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(Quest.code.like(like), Quest.title.like(like)))
+    if published in ("0", "1"):
+        query = query.filter(Quest.published == (published == "1"))
+    if optional in ("0", "1"):
+        query = query.filter(Quest.is_optional == (optional == "1"))
+
+    total = query.count()
+    items = (query.order_by(Quest.code.asc())
+                  .limit(per_page).offset((page - 1) * per_page).all())
+
+    last_page = max((total + per_page - 1) // per_page, 1)
+    has_prev = page > 1
+    has_next = page < last_page
+
+    return render_template(
+        "quests_list.html",
+        items=items, total=total, page=page, per_page=per_page, last_page=last_page,
+        has_prev=has_prev, has_next=has_next, q=q, published=published, optional=optional
+    )
+
+@app.route("/admin/quests/new", methods=["GET", "POST"])
+@require_user(("ADMIN", "MENTOR"))
+def admin_quest_create():
+    errors = {}
+    # form fields
+    code = (request.form.get("code") or "").strip()
+    title = (request.form.get("title") or "").strip()
+    description = (request.form.get("description") or "").strip()
+    xp = request.form.get("xp") or "10"
+    stars = request.form.get("stars") or "10"
+    difficulty = (request.form.get("difficulty") or "").strip()
+    is_optional = (request.form.get("is_optional") == "on")
+    published = (request.form.get("published") == "on")
+    starts_at = (request.form.get("starts_at") or "").strip()
+    due_at = (request.form.get("due_at") or "").strip()
+
+    # mappings
+    lo_ids = request.form.getlist("lo_ids")
+    prereq_ids = request.form.getlist("prereq_quest_ids")  # quest prereqs (AND)
+
+    los = LearningOutcome.query.order_by(LearningOutcome.code.asc()).all()
+    # possible prereqs = all existing quests
+    possible_prereqs = Quest.query.order_by(Quest.code.asc()).all()
+
+    # completion config
+    completion_schema = QUEST_COMPLETION_SCHEMA
+    completion_cfg = build_quest_completion_from_form(request.form) if request.method == "POST" else None
+
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+
+        if not code or len(code) > 64:
+            errors["code"] = "Code is required (≤ 64 chars)."
+        if not title or len(title) > 255:
+            errors["title"] = "Title is required (≤ 255 chars)."
+
+        # ints
+        try:
+            xp_i = max(0, int(xp))
+        except Exception:
+            errors["xp"] = "XP must be a non-negative integer."
+        try:
+            stars_i = max(0, int(stars))
+        except Exception:
+            errors["stars"] = "Stars must be a non-negative integer."
+        try:
+            diff_i = int(difficulty) if difficulty else None
+            if diff_i is not None and not (1 <= diff_i <= 5):
+                raise ValueError
+        except Exception:
+            errors["difficulty"] = "Difficulty must be 1..5 or blank."
+
+        # dates (HTML datetime-local gives 'YYYY-MM-DDTHH:MM')
+        def _parse_dt(s):
+            if not s: return None
+            try:
+                return datetime.fromisoformat(s)
+            except Exception:
+                return None
+        starts_dt = _parse_dt(starts_at)
+        due_dt = _parse_dt(due_at)
+
+        if not errors:
+            qobj = Quest(
+                code=code,
+                title=title,
+                description=description or None,
+                xp=xp_i, stars=stars_i, difficulty=diff_i,
+                is_optional=is_optional, published=published,
+                starts_at=starts_dt, due_at=due_dt,
+                completion=completion_cfg or {"mode": "ALL_REQUIRED_TASKS"},
+                creator_user_id=current_user().id if current_user() else None,
+                created_at=datetime.utcnow(), updated_at=datetime.utcnow(),
+            )
+            db.session.add(qobj)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                errors["code"] = "This code already exists."
+
+            if not errors:
+                # link LOs
+                for lo_id in lo_ids:
+                    if lo_id.isdigit():
+                        db.session.add(QuestOutcome(quest_id=qobj.id, lo_id=int(lo_id), weight=1))
+                # link prerequisites (AND semantics; groups later if needed)
+                valid_preq = [int(x) for x in prereq_ids if x.isdigit()]
+                for pid in valid_preq:
+                    if pid != qobj.id:  # guard, though it can't equal at creation time
+                        db.session.add(QuestPrereq(quest_id=qobj.id, prereq_quest_id=pid))
+                db.session.commit()
+                return redirect(url_for("admin_quest_list"))
+
+    return render_template(
+        "quests_new.html",
+        errors=errors,
+        code=code, title=title, description=description,
+        xp=xp, stars=stars, difficulty=difficulty,
+        is_optional=is_optional, published=published,
+        starts_at=starts_at, due_at=due_at,
+        los=los, possible_prereqs=possible_prereqs,
+        completion_schema=completion_schema
+    )
+
+
+
 
 # --------------------------------------------------------------------
 # Exports / landing routes

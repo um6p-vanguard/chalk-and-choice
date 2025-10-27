@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Quests{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;">
+    <h2 class="m-0">Quests</h2>
+    <a class="btn btn-primary" href="{{ url_for('admin_quest_create') }}">Create quest</a>
+  </div>
+
+  <form class="card row" method="get" action="{{ url_for('admin_quest_list') }}">
+    <div class="row" style="gap:10px">
+      <input type="text" name="q" placeholder="Search code or title…" value="{{ q }}" style="flex:2">
+      <select name="published" style="flex:1">
+        <option value="">Published: All</option>
+        <option value="1" {% if published=='1' %}selected{% endif %}>Published</option>
+        <option value="0" {% if published=='0' %}selected{% endif %}>Draft</option>
+      </select>
+      <select name="optional" style="flex:1">
+        <option value="">Optional: All</option>
+        <option value="1" {% if optional=='1' %}selected{% endif %}>Optional</option>
+        <option value="0" {% if optional=='0' %}selected{% endif %}>Required</option>
+      </select>
+      <select name="per_page" style="flex:0 0 120px">
+        {% for n in [10,20,50,100] %}
+          <option value="{{n}}" {% if per_page==n %}selected{% endif %}>{{n}} / page</option>
+        {% endfor %}
+      </select>
+      <button class="btn" type="submit">Apply</button>
+    </div>
+  </form>
+
+  <div class="card" style="margin-top:12px">
+    <table>
+      <thead>
+        <tr>
+          <th>Code</th>
+          <th>Title</th>
+          <th>XP</th>
+          <th>Stars</th>
+          <th>Diff</th>
+          <th>Optional?</th>
+          <th>Published?</th>
+          <th>Starts</th>
+          <th>Due</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for qst in items %}
+        <tr>
+          <td><code>{{ qst.code }}</code></td>
+          <td>{{ qst.title }}</td>
+          <td>{{ qst.xp }}</td>
+          <td>{{ qst.stars }}</td>
+          <td>{{ qst.difficulty or '' }}</td>
+          <td>{{ 'Yes' if qst.is_optional else 'No' }}</td>
+          <td>{{ 'Yes' if qst.published else 'No' }}</td>
+          <td>{{ qst.starts_at.strftime("%Y-%m-%d %H:%M") if qst.starts_at else '' }}</td>
+          <td>{{ qst.due_at.strftime("%Y-%m-%d %H:%M") if qst.due_at else '' }}</td>
+        </tr>
+        {% endfor %}
+        {% if not items %}
+        <tr><td colspan="9" class="muted" style="text-align:center;padding:20px">No quests found.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <nav aria-label="pagination">
+    <ul class="pagination">
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_quest_list', page=1, per_page=per_page, q=q, published=published, optional=optional) }}">« First</a>
+      </li>
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_quest_list', page=page-1, per_page=per_page, q=q, published=published, optional=optional) }}">‹ Prev</a>
+      </li>
+      <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ last_page }}</span></li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_quest_list', page=page+1, per_page=per_page, q=q, published=published, optional=optional) }}">Next ›</a>
+      </li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_quest_list', page=last_page, per_page=per_page, q=q, published=published, optional=optional) }}">Last »</a>
+      </li>
+    </ul>
+  </nav>
+</div>
+{% endblock %}

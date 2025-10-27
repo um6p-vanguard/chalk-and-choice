@@ -1,0 +1,178 @@
+<form id="code-form" class="card" style="margin-top:12px" onsubmit="return false;">
+  <div class="row" style="align-items:flex-start">
+    <div style="flex: 2 1 60%">
+      <label>Language</label>
+      <select id="lang">
+        <option value="python" selected>python (Pyodide)</option>
+      </select>
+
+      <div class="sp"></div>
+      <label>Code</label>
+      <textarea id="code" rows="18" spellcheck="false"
+        style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;"></textarea>
+
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-primary" type="button" id="btn-submit">Submit (POC)</button>
+        <button class="btn" type="button" id="btn-run">Run on custom input</button>
+        <div class="muted">
+          Time limit: {{ task.config.timeout_ms or 2000 }} ms
+          • Memory: {{ task.config.memory_mb or 256 }} MB
+        </div>
+      </div>
+    </div>
+
+    <div style="flex: 1 1 40%">
+      {% if task.config.show_samples and task.config.samples %}
+      <div class="card" style="margin-bottom:12px">
+        <div class="q">Sample tests</div>
+        <div class="sp"></div>
+        {% for s in task.config.samples %}
+          <div class="row" style="justify-content:space-between">
+            <div class="muted">Sample {{ loop.index }}</div>
+            <button class="btn" type="button" onclick="runSample({{ loop.index0 }})">Run</button>
+          </div>
+          <div class="row" style="gap:12px">
+            <div style="flex:1">
+              <label>Input</label>
+              <pre class="card" style="white-space:pre-wrap">{{ s.input }}</pre>
+            </div>
+            {% if s.output is defined %}
+            <div style="flex:1">
+              <label>Expected</label>
+              <pre class="card" style="white-space:pre-wrap">{{ s.output }}</pre>
+            </div>
+            {% endif %}
+          </div>
+          <div id="sample-out-{{ loop.index0 }}" class="card" style="margin:8px 0; display:none"></div>
+          <div class="sp"></div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="card">
+        <div class="q">Custom input</div>
+        <label>STDIN</label>
+        <textarea id="stdin" rows="8" spellcheck="false"></textarea>
+        <div class="sp"></div>
+        <label>Program output</label>
+        <pre id="stdout" class="card" style="white-space:pre-wrap; min-height:120px"></pre>
+      </div>
+    </div>
+  </div>
+</form>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script>
+let pyodideReady = null;
+
+// Load Pyodide once and define _run_user in Python
+function initPyodideOnce() {
+  if (!pyodideReady) {
+    pyodideReady = loadPyodide({
+      indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/"
+    }).then((py) => {
+      // runPython is synchronous; do NOT chain .then on it
+      py.runPython(`
+import sys, io, time
+from contextlib import redirect_stdout, redirect_stderr
+
+def _run_user(code, stdin_text, timeout_ms=2000):
+    # NOTE: timeout not enforced in-browser; this is POC
+    old_stdin, old_stdout, old_stderr = sys.stdin, sys.stdout, sys.stderr
+    sys.stdin = io.StringIO(stdin_text)
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    try:
+        with redirect_stdout(out_buf), redirect_stderr(err_buf):
+            ns = {}
+            exec(code, ns, ns)
+    except Exception as e:
+        return {"ok": False, "stdout": out_buf.getvalue(), "stderr": err_buf.getvalue() + "\\n" + repr(e), "timed_out": False}
+    finally:
+        sys.stdin, sys.stdout, sys.stderr = old_stdin, old_stdout, old_stderr
+    return {"ok": True, "stdout": out_buf.getvalue(), "stderr": err_buf.getvalue(), "timed_out": False}
+      `);
+      return py;
+    });
+  }
+  return pyodideReady;
+}
+
+// Run code and convert PyProxy -> plain JS object
+async function runPython(code, stdin_text) {
+  const py = await initPyodideOnce();
+  const proxy = await py.runPythonAsync(
+    `_run_user(${JSON.stringify(code)}, ${JSON.stringify(stdin_text)}, ${ {{ task.config.timeout_ms or 2000 }} })`
+  );
+  // Convert the returned Python dict to a plain JS object
+  const result = proxy.toJs({ dict_converter: Object.fromEntries });
+  proxy.destroy(); // avoid leaks
+  return result;
+}
+
+const btnRun  = document.getElementById('btn-run');
+const btnSubmit = document.getElementById('btn-submit');
+const out     = document.getElementById('stdout');
+const codeEl  = document.getElementById('code');
+const stdinEl = document.getElementById('stdin');
+
+{% if task.config.starter %}
+codeEl.value = {{ task.config.starter | tojson | safe }};
+{% endif %}
+
+btnRun?.addEventListener('click', async () => {
+  out.textContent = "Running…";
+  try {
+    const res = await runPython(codeEl.value, stdinEl.value);
+    out.textContent = res.ok ? (res.stdout || '') : ('Error:\n' + (res.stderr || 'unknown'));
+    if (res.stderr && res.ok) out.textContent += "\n[stderr]\n" + res.stderr;
+    if (res.timed_out) out.textContent += "\n[Timed out]";
+  } catch (e) {
+    out.textContent = "Run failed: " + e;
+  }
+});
+
+window.runSample = async function(i0){
+  const box = document.getElementById('sample-out-' + i0);
+  if (box) { box.style.display = 'block'; box.textContent = 'Running…'; }
+  try {
+    const samples = {{ (task.config.samples or []) | tojson | safe }};
+    const s = samples[i0];
+    const res = await runPython(codeEl.value, s.input || "");
+    let text = res.ok ? (res.stdout || '') : ('Error:\n' + (res.stderr || 'unknown'));
+    if ("output" in s) {
+      const exp = (s.output || "");
+      const ok = text.replace(/\r\n/g,"\n") === exp.replace(/\r\n/g,"\n");
+      text = (ok ? "✓ " : "✗ ") + "Expected vs got:\n" + exp + "\n---\n" + text;
+    }
+    if (box) box.textContent = text;
+  } catch (e) {
+    if (box) box.textContent = "Run failed: " + e;
+  }
+}
+
+btnSubmit?.addEventListener('click', async () => {
+  const samples = {{ (task.config.samples or []) | tojson | safe }};
+  let passed = true, seen = 0;
+  for (const s of samples) {
+    if (!("output" in s)) continue;
+    seen++;
+    const res = await runPython(codeEl.value, s.input || "");
+    const got = (res.stdout || '').replace(/\r\n/g,"\n");
+    const exp = (s.output || '').replace(/\r\n/g,"\n");
+    if (got !== exp) { passed = false; break; }
+  }
+  const score = seen ? (passed ? 1.0 : 0.0) : 0.0;
+  out.textContent = "Submitting… (" + (passed ? "passed" : "failed") + ")";
+  try {
+    const fd = new FormData();
+    fd.append('csrf', '{{ csrf_token() }}');
+    fd.append('language', 'python');
+    fd.append('code', codeEl.value);
+    fd.append('score', String(score));
+    const resp = await fetch('{{ url_for("task_submit", task_id=task.id) }}', {method:'POST', body:fd});
+    if (resp.redirected) { window.location = resp.url; return; }
+    out.textContent = "Submission saved.";
+  } catch(e) {
+    out.textContent = "Submit failed: " + e;
+  }
+});
+</script>

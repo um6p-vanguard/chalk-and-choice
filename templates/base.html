@@ -64,6 +64,38 @@
     .bar-fill { background: var(--brand); height:20px; border-radius:8px; transition: width .3s; }
     .bar-fill.correct { background: var(--heat); } /* optional: highlight correct bar */
     .text-danger { color: var(--danger); }
+    .pagination {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      list-style: none;
+      padding: 0;
+      margin: 1rem 0;
+    }
+    .pagination .page-item {}
+    .pagination .page-link {
+      display: block;
+      padding: .4rem .7rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0b1220;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .pagination .page-link:hover {
+      border-color: var(--brand-2);
+      text-decoration: none;
+    }
+    .pagination .page-item.disabled .page-link {
+      opacity: .5;
+      pointer-events: none;
+    }
+    .pagination .page-item.active .page-link {
+      background: var(--brand);
+      color: #0b1120;
+      border-color: transparent;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="row" style="justify-content:space-between;">
+    <h2 class="m-0">Tasks</h2>
+    <a class="btn btn-primary" href="{{ url_for('admin_task_create') }}">Create task</a>
+  </div>
+
+  <!-- Filters -->
+  <form class="card row" method="get" action="{{ url_for('admin_task_list') }}">
+    <div class="row" style="gap:10px">
+      <input type="text" name="q" placeholder="Search slug or title…" value="{{ q }}" style="flex:2">
+      <select name="quest_id" style="flex:1">
+        <option value="">All quests</option>
+        {% for qst in quests %}
+          <option value="{{ qst.id }}" {% if quest_id|int == qst.id %}selected{% endif %}>
+            {{ qst.code }} — {{ qst.title }}
+          </option>
+        {% endfor %}
+      </select>
+      <select name="type" style="flex:1">
+        <option value="">All types</option>
+        {% for t in types %}
+          <option value="{{ t }}" {% if type_filter==t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <select name="per_page" style="flex:0 0 120px">
+        {% for n in [10,20,50,100] %}
+          <option value="{{n}}" {% if per_page==n %}selected{% endif %}>{{n}} / page</option>
+        {% endfor %}
+      </select>
+      <button class="btn" type="submit">Apply</button>
+    </div>
+  </form>
+
+  <div class="card" style="margin-top:12px">
+    <table>
+      <thead>
+        <tr>
+          <th>Quest</th>
+          <th>Slug</th>
+          <th>Title</th>
+          <th>Type</th>
+          <th>XP</th>
+          <th>Stars</th>
+          <th>Req?</th>
+          <th>Order</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in items %}
+        <tr>
+          <td>{{ quest_map.get(t.quest_id).code if quest_map.get(t.quest_id) else "-" }}</td>
+          <td><code>{{ t.slug }}</code></td>
+          <td>{{ t.title }}</td>
+          <td>{{ t.type }}</td>
+          <td>{{ t.xp }}</td>
+          <td>{{ t.stars }}</td>
+          <td>{{ "Yes" if t.must_pass else "No" }}</td>
+          <td>{{ t.order_in_quest }}</td>
+          <td>{{ t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "" }}</td>
+        </tr>
+        {% endfor %}
+        {% if not items %}
+        <tr><td colspan="9" class="muted" style="text-align:center;padding:20px">No tasks found.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination -->
+  <nav aria-label="pagination">
+    <ul class="pagination">
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_task_list', page=1, per_page=per_page, q=q, quest_id=quest_id, type=type_filter) }}">« First</a>
+      </li>
+      <li class="page-item {% if not has_prev %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_task_list', page=page-1, per_page=per_page, q=q, quest_id=quest_id, type=type_filter) }}">‹ Prev</a>
+      </li>
+      <li class="page-item disabled"><span class="page-link">Page {{ page }} / {{ last_page }}</span></li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_task_list', page=page+1, per_page=per_page, q=q, quest_id=quest_id, type=type_filter) }}">Next ›</a>
+      </li>
+      <li class="page-item {% if not has_next %}disabled{% endif %}">
+        <a class="page-link" href="{{ url_for('admin_task_list', page=last_page, per_page=per_page, q=q, quest_id=quest_id, type=type_filter) }}">Last »</a>
+      </li>
+    </ul>
+  </nav>
+</div>
+{% endblock %}

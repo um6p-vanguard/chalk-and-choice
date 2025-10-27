@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Task • {{ task.title }}{% endblock %}
+{% block content %}
+<div class="wrap">
+  <div class="row" style="justify-content:space-between">
+    <div>
+      {% if quest %}<div class="muted">Quest: {{ quest.code }} — {{ quest.title }}</div>{% endif %}
+      <h2 class="m-0">{{ task.title }}</h2>
+      <div class="muted">
+        {{ task.type }} • XP {{ task.xp }} • Stars {{ task.stars }}
+        {% if task.must_pass %} • <span class="text-danger">Required</span>{% endif %}
+      </div>
+    </div>
+    {% if learning_outcomes %}
+    <div class="row">
+      <div class="muted">Learning outcomes:</div>
+      {% for lo in learning_outcomes %}
+        <span class="btn" style="padding:4px 8px">{{ lo.code }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if task.description %}
+  <div class="card" style="margin-top:12px">
+    <div class="muted" style="margin-bottom:8px">Description</div>
+    <div>{{ task.description|safe }}</div>
+  </div>
+  {% endif %}
+
+  {% if task.type == "CODE" %}
+    {% include "tasks/_code_pyodide.html" %}
+  {% else %}
+    <div class="card" style="margin-top:12px">
+      Non-CODE templates will go here later.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

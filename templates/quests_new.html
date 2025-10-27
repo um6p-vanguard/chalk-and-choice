@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Create Quest{% endblock %}
+{% block content %}
+<div class="wrap" style="max-width: 900px">
+  <h2>Create Quest</h2>
+
+  <form class="card" method="post" action="{{ url_for('admin_quest_create') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+    <div class="row">
+      <div style="flex:1">
+        <label>Code</label>
+        <input type="text" name="code" maxlength="64" value="{{ code }}">
+        {% if errors.get('code') %}<div class="text-danger">{{ errors['code'] }}</div>{% endif %}
+      </div>
+      <div style="flex:2">
+        <label>Title</label>
+        <input type="text" name="title" maxlength="255" value="{{ title }}">
+        {% if errors.get('title') %}<div class="text-danger">{{ errors['title'] }}</div>{% endif %}
+      </div>
+    </div>
+
+    <label>Description</label>
+    <textarea name="description" rows="4">{{ description }}</textarea>
+
+    <div class="row">
+      <div>
+        <label>XP</label>
+        <input type="number" min="0" name="xp" value="{{ xp }}">
+        {% if errors.get('xp') %}<div class="text-danger">{{ errors['xp'] }}</div>{% endif %}
+      </div>
+      <div>
+        <label>Stars</label>
+        <input type="number" min="0" name="stars" value="{{ stars }}">
+        {% if errors.get('stars') %}<div class="text-danger">{{ errors['stars'] }}</div>{% endif %}
+      </div>
+      <div>
+        <label>Difficulty (1..5)</label>
+        <input type="number" min="1" max="5" name="difficulty" value="{{ difficulty }}">
+        {% if errors.get('difficulty') %}<div class="text-danger">{{ errors['difficulty'] }}</div>{% endif %}
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:22px">
+        <input type="checkbox" name="is_optional" {% if is_optional %}checked{% endif %}>
+        <label>Optional quest</label>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:22px">
+        <input type="checkbox" name="published" {% if published %}checked{% endif %}>
+        <label>Published</label>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Starts at</label>
+        <input type="datetime-local" name="starts_at" value="{{ starts_at }}">
+      </div>
+      <div>
+        <label>Due at</label>
+        <input type="datetime-local" name="due_at" value="{{ due_at }}">
+      </div>
+    </div>
+
+    <label>Completion policy</label>
+    <div class="card" style="padding:12px">
+      {% for f in completion_schema.fields %}
+        <div class="mb-2">
+          <label>{{ f.label }}</label>
+          {% if f.type == "select" %}
+            {% set cur = request.form.get(f.key, f.default) %}
+            <select name="{{ f.key }}">
+              {% for ch in f.choices %}
+                <option value="{{ ch }}" {% if ch==cur %}selected{% endif %}>{{ ch }}</option>
+              {% endfor %}
+            </select>
+          {% elif f.type == "number" %}
+            <input type="number" name="{{ f.key }}" {% if f.min is defined %}min="{{ f.min }}"{% endif %}
+                   value="{{ request.form.get(f.key, f.default) }}">
+          {% elif f.type == "checkbox" %}
+            {% set checked = request.form.get(f.key)=='on' or (request.method!='POST' and f.default) %}
+            <input type="checkbox" name="{{ f.key }}" {% if checked %}checked{% endif %}>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+
+    <label>Learning outcomes (optional)</label>
+    <select name="lo_ids" multiple size="6">
+      {% for lo in los %}
+        <option value="{{ lo.id }}" {% if lo.id|string in request.form.getlist('lo_ids') %}selected{% endif %}>
+          {{ lo.code }} — {{ lo.title }}
+        </option>
+      {% endfor %}
+    </select>
+
+    <label>Prerequisite quests (AND)</label>
+    <select name="prereq_quest_ids" multiple size="6">
+      {% for pq in possible_prereqs %}
+        <option value="{{ pq.id }}" {% if pq.id|string in request.form.getlist('prereq_quest_ids') %}selected{% endif %}>
+          {{ pq.code }} — {{ pq.title }}
+        </option>
+      {% endfor %}
+    </select>
+    <div class="muted">Hold Ctrl/Cmd to select multiple.</div>
+
+    <div class="sp"></div>
+    <div class="row">
+      <button class="btn btn-primary" type="submit">Save</button>
+      <a class="btn" href="{{ url_for('admin_quest_list') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
