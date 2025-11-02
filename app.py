@@ -903,7 +903,7 @@ def _filename_from_nb(nb_json, fallback: str) -> str:
 @require_student()
 def notebooks_page():
     # Embeds JupyterLite (iframe). The plugin handles load/save.
-    return render_template("notebooks.html")
+    return render_template("notebooks.html", user=current_user(), student_name=session.get("student_name"))
 
 @app.route("/my-notebooks")
 @require_student()
@@ -917,7 +917,7 @@ def my_notebooks_page():
     for nb in rows:
         fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
         items.append({"id": nb.id, "name": fname, "updated_at": nb.updated_at})
-    return render_template("my_notebooks.html", notebooks=items)
+    return render_template("my_notebooks.html", notebooks=items, user=current_user(), student_name=session.get("student_name"))
 
 # -------------------------
 # CSRF for JS clients
