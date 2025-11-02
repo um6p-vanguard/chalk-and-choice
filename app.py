@@ -1,15 +1,16 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, re
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, make_response, jsonify, abort, Response, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention)
+                    StudentStats, Intervention, Notebook)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -256,6 +257,12 @@ def index():
     u = current_user()
     polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
     return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
+
+@app.get("/api/me")
+@require_student()
+def api_me():
+    s = current_student()
+    return jsonify({"id": s.id, "name": s.name})
 
 # --------------------------------------------------------------------
 # Polls
@@ -878,6 +885,131 @@ def forms_results(code):
     form = Form.query.filter_by(code=code).first_or_404()
     rows = [{"name": r.student_name or "(anonymous)", "when": r.created_at, "payload": r.payload_json} for r in form.responses]
     return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
+
+#---------------------------------------------------------------------
+# Notebook management apis
+#---------------------------------------------------------------------
+
+def _filename_from_nb(nb_json, fallback: str) -> str:
+    """Return the saved file name from notebook metadata (chalk_name) or fallback."""
+    try:
+        meta = (nb_json.get("metadata") or {})
+        name = (meta.get("chalk_name") or "").strip()
+        return name if name else fallback
+    except Exception:
+        return fallback
+
+@app.route("/notebooks")
+@require_student()
+def notebooks_page():
+    # Embeds JupyterLite (iframe). The plugin handles load/save.
+    return render_template("notebooks.html")
+
+@app.route("/my-notebooks")
+@require_student()
+def my_notebooks_page():
+    s = current_student()
+    rows = (Notebook.query
+            .filter_by(student_id=s.id)
+            .order_by(Notebook.updated_at.desc())
+            .all())
+    items = []
+    for nb in rows:
+        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+        items.append({"id": nb.id, "name": fname, "updated_at": nb.updated_at})
+    return render_template("my_notebooks.html", notebooks=items)
+
+# -------------------------
+# CSRF for JS clients
+# -------------------------
+
+@app.get("/api/csrf")
+@require_student()
+def api_csrf():
+    return jsonify({"csrf": csrf_token()})
+
+# -------------------------
+# Notebook APIs (student-scoped)
+# -------------------------
+
+@app.get("/api/notebooks")
+@require_student()
+def notebooks_list():
+    s = current_student()
+    rows = (Notebook.query
+            .filter_by(student_id=s.id)
+            .order_by(Notebook.updated_at.desc())
+            .all())
+    res = []
+    for nb in rows:
+        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+        res.append({
+            "id": nb.id,
+            "name": fname,
+            "updated_at": nb.updated_at.isoformat()
+        })
+    return jsonify({"items": res})
+
+@app.get("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_get(nb_id: int):
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+    return jsonify({"id": nb.id, "name": name, "content": nb.content_json})
+
+@app.post("/api/notebooks")
+@require_student()
+def notebooks_create():
+    # JSON: { content: <nbformat-json> }
+    data = request.get_json(silent=True) or {}
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    content = data.get("content")
+    if not isinstance(content, dict):
+        abort(400, description="Missing/invalid content")
+    s = current_student()
+    nb = Notebook(student_id=s.id, content_json=content)
+    db.session.add(nb)
+    db.session.commit()
+    return jsonify({"id": nb.id})
+
+@app.put("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_update(nb_id: int):
+    # JSON: { content: <nbformat-json> }
+    data = request.get_json(silent=True) or {}
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    content = data.get("content")
+    if not isinstance(content, dict):
+        abort(400, description="Missing/invalid content")
+
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    nb.content_json = content
+    db.session.commit()
+    return jsonify({"ok": True})
+
+@app.delete("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_delete(nb_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    db.session.delete(nb)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Lecture interaction dashboard

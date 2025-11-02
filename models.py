@@ -142,3 +142,11 @@ class Intervention(db.Model):
     poll_id = db.Column(db.Integer, db.ForeignKey('polls.id', ondelete="SET NULL"))
     status = db.Column(db.String(20), default="picked", nullable=False)  # picked|running|completed|skipped
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+class Notebook(db.Model):
+    __tablename__ = "notebooks"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    content_json = db.Column(JSONText, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

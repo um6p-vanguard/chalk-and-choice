@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>My Notebooks</h2>
+
+<p>
+  <a class="btn" href="{{ url_for('notebooks_page') }}">Open JupyterLite</a>
+</p>
+
+<table class="table">
+  <thead>
+    <tr><th>Filename</th><th>Last Updated</th><th>Open</th><th>Delete</th></tr>
+  </thead>
+  <tbody>
+  {% for nb in notebooks %}
+    <tr>
+      <td>{{ nb.name }}</td>
+      <td>{{ nb.updated_at }}</td>
+      <td>
+        <!-- Open via query param; the /notebooks page imports this id into Lite -->
+        <a class="btn" href="{{ url_for('notebooks_page') }}?import={{ nb.id }}">Open</a>
+      </td>
+      <td>
+        <button type="button" class="btn btn-danger" onclick="delNotebook({{ nb.id }})">Delete</button>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<script>
+async function delNotebook(id){
+  if(!confirm('Delete this notebook?')) return;
+  try{
+    const csrf = await fetch("{{ url_for('api_csrf') }}", {credentials:'same-origin'})
+      .then(r=>r.json()).then(j=>j.csrf);
+    const res = await fetch(`/api/notebooks/${id}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: {'X-CSRF': csrf}
+    });
+    if(res.ok){
+      location.reload();
+    }else{
+      const txt = await res.text();
+      alert('Delete failed: ' + txt);
+    }
+  }catch(e){
+    console.error(e);
+    alert('Delete failed (network).');
+  }
+}
+</script>
+{% endblock %}
