@@ -963,7 +963,6 @@ def notebooks_get(nb_id: int):
 @app.post("/api/notebooks")
 @require_student()
 def notebooks_create():
-    # JSON: { content: <nbformat-json> }
     data = request.get_json(silent=True) or {}
     hdr = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(hdr, csrf_token()):
