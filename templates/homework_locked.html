@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>{{ hw.title }}</h2>
+<p>Your submission is complete. This homework is locked.</p>
+<a class="btn" href="{{ url_for('index') }}">Back to dashboard</a>
+{% endblock %}

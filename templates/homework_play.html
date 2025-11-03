@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>{{ hw.title }}</h2>
+<p class="muted">
+  Edit your homework. Click <em>Save to Server</em> to save progress. When done, click <em>Submit</em> (you won't be able to reopen).
+</p>
+
+<div style="margin:0 0 10px 0;">
+  <button id="saveBtn" class="btn">Save to Server</button>
+  <button id="submitBtn" class="btn btn-danger">Submit</button>
+  <span id="status" style="margin-left:10px;color:#9ecbff;"></span>
+</div>
+
+<div style="height:82vh;">
+  <iframe
+    id="jlite_frame"
+    title="JupyterLite"
+    src="about:blank"
+    style="width:100%;height:100%;border:0"
+    allow="clipboard-read; clipboard-write">
+  </iframe>
+</div>
+
+<script>
+(function(){
+  const CODE = "{{ hw.code }}";
+  const STATUS = document.getElementById('status');
+  const frame = document.getElementById('jlite_frame');
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let serverSaveBusy = false;
+  let initHooksDone = false;
+
+  function setStatus(msg, isError=false, ttl=3000){
+    STATUS.textContent = msg || '';
+    STATUS.style.color = isError ? '#ff8a80' : '#9ecbff';
+    if (msg && ttl) setTimeout(()=>{ STATUS.textContent=''; }, ttl);
+  }
+
+  async function waitForAppReady(maxMs=60000){
+    const win = frame.contentWindow;
+    const start = Date.now();
+    while (Date.now() - start < maxMs){
+      const app = win && win.jupyterapp;
+      if (app && app.serviceManager && app.serviceManager.ready){
+        try { await app.serviceManager.ready; } catch(_){}
+        return app;
+      }
+      await sleep(100);
+    }
+    return null;
+  }
+
+  function baseName(pth){ return (pth || '').split('/').pop() || 'Untitled.ipynb'; }
+  function sanitizeName(name){
+    let n = (name || 'Untitled').trim();
+    n = n.replace(/[\\\/:*?"<>|]/g, '-');
+    if (!n.toLowerCase().endsWith('.ipynb')) n += '.ipynb';
+    return n;
+  }
+
+  async function getCSRF(){
+    const r = await fetch("/api/csrf", {credentials:"same-origin"});
+    const j = await r.json(); return j.csrf;
+  }
+
+  async function clearJupyterLiteStorage(){
+    try{
+      if (typeof indexedDB.databases === 'function') {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) if (db && db.name) {
+          await new Promise(res => {
+            const req = indexedDB.deleteDatabase(db.name);
+            req.onsuccess = req.onerror = req.onblocked = () => res();
+          });
+        }
+      }
+    }catch(_){}
+    try{
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        for (const k of keys) if (k.toLowerCase().includes('jupyter')) {
+          await caches.delete(k).catch(()=>{});
+        }
+      }
+    }catch(_){}
+    try{
+      for (const k of Object.keys(localStorage)) if (/jupyter|jp-|jupyterlab|jupyterlite/i.test(k)) localStorage.removeItem(k);
+      for (const k of Object.keys(sessionStorage)) if (/jupyter|jp-|jupyterlab|jupyterlite/i.test(k)) sessionStorage.removeItem(k);
+    }catch(_){}
+  }
+
+  window.addEventListener('pagehide', () => { clearJupyterLiteStorage(); });
+  window.addEventListener('beforeunload', () => { clearJupyterLiteStorage(); });
+
+  async function cleanWorkspace(app){
+    const contents = app.serviceManager.contents;
+    async function deleteTree(path){
+      const model = await contents.get(path || '', {content: true}).catch(()=>null);
+      if (!model) return;
+      if (model.type === 'directory'){
+        for (const child of (model.content || [])){ await deleteTree(child.path); }
+        if (path) await contents.delete(path).catch(()=>{});
+      } else if (path) {
+        await contents.delete(path).catch(()=>{});
+      }
+    }
+    const root = await contents.get('', {content:true}).catch(()=>null);
+    if (root && Array.isArray(root.content)){
+      for (const item of root.content){ await deleteTree(item.path); }
+    }
+  }
+
+  // Fetch or create my personal copy of this homework and open it with the CORRECT filename
+  async function openMyHomework(app){
+    const r = await fetch(`/api/hw/${CODE}/my`, {credentials:"same-origin"});
+    if (r.status === 403){
+      setStatus("This homework is already submitted and locked.", true, 4000);
+      return false;
+    }
+    if (!r.ok){ setStatus("Could not load homework.", true); return false; }
+    const data = await r.json();
+    const nb = data.content || {};
+    nb.metadata = nb.metadata || {};
+    const desired = sanitizeName(data.name || nb.metadata.chalk_name || `Homework-${CODE}.ipynb`);
+
+    await cleanWorkspace(app);
+    const contents = app.serviceManager.contents;
+    await contents.delete(desired).catch(()=>{});
+    await contents.save(desired, {type:"notebook", format:"json", content: nb});
+    await app.commands.execute('docmanager:open', { path: desired });
+    return true;
+  }
+
+  async function saveActiveToServer(app, {ensureJupyterSaved} = {ensureJupyterSaved:true}){
+    if (serverSaveBusy) return;
+    const w = app.shell.currentWidget;
+    if(!w || !w.context || !w.context.path){ setStatus("No active notebook.", true); return; }
+    try{
+      serverSaveBusy = true;
+      if (ensureJupyterSaved) { await w.context.save(); }
+      await sleep(180);
+      const path = w.context.path;
+      const model = await app.serviceManager.contents.get(path, {content:true, type:"notebook", format:"json"});
+      const nb = model && model.content;
+      if(!nb){ setStatus("Could not read notebook JSON.", true); return; }
+      // keep filename in metadata
+      const chosen = sanitizeName(baseName(path));
+      nb.metadata = nb.metadata || {};
+      nb.metadata.chalk_name = chosen;
+      // send to homework save API
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/hw/${CODE}/save`, {
+        method: "PUT",
+        headers: {"Content-Type":"application/json","X-CSRF": csrf},
+        credentials: "same-origin",
+        body: JSON.stringify({ content: nb })
+      });
+      if(!res.ok){
+        if (res.status === 403) setStatus("Homework is locked.", true);
+        else setStatus("Save failed.", true);
+        return;
+      }
+      setStatus(`Saved: ${chosen}`, false, 1500);
+    }catch(e){
+      console.error(e);
+      setStatus("Save failed.", true);
+    }finally{
+      serverSaveBusy = false;
+    }
+  }
+
+  async function submitHomework(app){
+    // force a last save, then lock on server, clear storage, redirect
+    await saveActiveToServer(app, {ensureJupyterSaved:true});
+    const csrf = await getCSRF();
+    const res = await fetch(`/api/hw/${CODE}/submit`, {
+      method: "POST",
+      headers: {"X-CSRF": csrf},
+      credentials: "same-origin"
+    });
+    if (!res.ok){
+      setStatus("Submit failed.", true);
+      return;
+    }
+    await clearJupyterLiteStorage();
+    window.location.href = "{{ url_for('homework_locked', code=hw.code) if false else url_for('index') }}";
+  }
+
+  function installHooks(app){
+    if (initHooksDone) return;
+    initHooksDone = true;
+    const cmds = app.commands;
+    if (cmds && cmds.commandExecuted && cmds.commandExecuted.connect){
+      cmds.commandExecuted.connect((_s, args) => {
+        const id = args && args.id;
+        if (id === 'docmanager:save' || id === 'docmanager:save-as' || id === 'docmanager:save-all' || id === 'docmanager:rename'){
+          setTimeout(() => { saveActiveToServer(app, {ensureJupyterSaved:false}); }, 300);
+        }
+      });
+    }
+    document.getElementById("saveBtn").onclick = () => { saveActiveToServer(app); };
+    document.getElementById("submitBtn").onclick = () => { submitHomework(app); };
+  }
+
+  (async () => {
+    // Load JupyterLite
+    frame.src = "{{ url_for('static', filename='jlite/lab/index.html') }}";
+    frame.addEventListener("load", async () => {
+      const app = await waitForAppReady(60000);
+      if (!app){
+        const timer = setInterval(async () => {
+          const a2 = await waitForAppReady(5000);
+          if (a2){
+            clearInterval(timer);
+            installHooks(a2);
+            await openMyHomework(a2);
+          }
+        }, 1000);
+        return;
+      }
+      installHooks(app);
+      await openMyHomework(app);
+    });
+  })();
+})();
+</script>
+{% endblock %}

@@ -1,6 +1,6 @@
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator, TEXT
 from sqlalchemy import UniqueConstraint
@@ -8,6 +8,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 
 db = SQLAlchemy()
+
+def _as_naive_utc(dt):
+    """Return dt as naive UTC (or None). Handles aware/naive inputs safely."""
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt 
 
 class JSONText(TypeDecorator):
     impl = TEXT
@@ -150,3 +158,39 @@ class Notebook(db.Model):
     content_json = db.Column(JSONText, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+class Homework(db.Model):
+    __tablename__ = "homeworks"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(8), unique=True, index=True, nullable=False)  # share code
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    template_json = db.Column(JSONText, nullable=False)  # nbformat JSON
+    open_at = db.Column(db.DateTime, nullable=True)
+    due_at = db.Column(db.DateTime, nullable=True)
+    creator_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    @property
+    def is_open(self) -> bool:
+        now = datetime.utcnow()
+        open_at = _as_naive_utc(self.open_at)
+        due_at = _as_naive_utc(self.due_at)
+        if open_at and now < open_at:
+            return False
+        if due_at and now > due_at:
+            return False
+        return True
+
+class StudentHomework(db.Model):
+    __tablename__ = "student_homeworks"
+    id = db.Column(db.Integer, primary_key=True)
+    homework_id = db.Column(db.Integer, db.ForeignKey("homeworks.id"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey("students.id"), index=True, nullable=False)
+    notebook_id = db.Column(db.Integer, db.ForeignKey("notebooks.id"), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("homework_id", "student_id", name="uq_homework_student"),
+    )

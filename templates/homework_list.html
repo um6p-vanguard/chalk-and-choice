@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Homework Overview</h2>
+
+<p>
+  <a class="btn" href="{{ url_for('homework_new') }}">Create Homework</a>
+</p>
+
+<table class="table">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Code</th>
+      <th>Open</th>
+      <th>Due</th>
+      <th>Status</th>
+      <th>Copies</th>
+      <th>Submitted</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for hw in items %}
+    <tr>
+      <td>{{ hw.title }}</td>
+      <td><code>{{ hw.code }}</code></td>
+      <td>{{ hw.open_at or '—' }}</td>
+      <td>{{ hw.due_at or '—' }}</td>
+      <td>
+        {% if hw.is_open %}
+          <span style="color:#4caf50;">Open</span>
+        {% else %}
+          <span style="color:#ff8a80;">Closed</span>
+        {% endif %}
+      </td>
+      <td>{{ hw.created_count }}</td>
+      <td>{{ hw.submitted_count }}</td>
+      <td>
+        <a class="btn" href="{{ url_for('homework_share', code=hw.code) }}">Share</a>
+        <a class="btn" href="{{ url_for('homework_submissions', code=hw.code) }}">View Submissions</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

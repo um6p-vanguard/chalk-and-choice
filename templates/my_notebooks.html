@@ -1,53 +1,261 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>My Notebooks</h2>
 
-<p>
-  <a class="btn" href="{{ url_for('notebooks_page') }}">Open JupyterLite</a>
-</p>
+<style>
+  /* ---- Scoped styles for My Notebooks page ---- */
+  .nb-wrap {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .nb-card {
+    background: #0f1720; /* dark card */
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+  .nb-header {
+    display: flex; gap: 12px; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; margin-bottom: 12px;
+  }
+  .nb-title { margin: 0; font-size: 22px; letter-spacing: .2px; }
+  .nb-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-<table class="table">
-  <thead>
-    <tr><th>Filename</th><th>Last Updated</th><th>Open</th><th>Delete</th></tr>
-  </thead>
-  <tbody>
-  {% for nb in notebooks %}
-    <tr>
-      <td>{{ nb.name }}</td>
-      <td>{{ nb.updated_at }}</td>
-      <td>
-        <!-- Open via query param; the /notebooks page imports this id into Lite -->
-        <a class="btn" href="{{ url_for('notebooks_page') }}?import={{ nb.id }}">Open</a>
-      </td>
-      <td>
-        <button type="button" class="btn btn-danger" onclick="delNotebook({{ nb.id }})">Delete</button>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+  .nb-toolbar {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    margin: 8px 0 14px;
+  }
+  .nb-search {
+    display: flex; align-items: center; gap: 8px;
+    background: #062230; border: 1px solid rgba(255,255,255,.08);
+    border-radius: 10px; padding: 6px 10px; color: #e6f2f8;
+  }
+  .nb-search input {
+    border: 0; outline: none; background: transparent; color: #e6f2f8;
+    min-width: 240px;
+  }
+  .pill {
+    padding: 6px 10px; border-radius: 999px; cursor: pointer; user-select: none;
+    border: 1px solid rgba(255,255,255,.08); color: #cfe7f5; background: #0b2b3a;
+    font-size: 13px;
+  }
+  .pill.active { border-color: #4ea3ff; box-shadow: 0 0 0 3px rgba(78,163,255,.15); }
+
+  .nb-table-wrap { overflow: auto; border-radius: 10px; border: 1px solid rgba(255,255,255,.06); }
+  table.nb-table { width: 100%; border-collapse: separate; border-spacing: 0; background: #091d29; }
+  .nb-table thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: #0c2432; color: #cfe7f5; text-align: left; font-weight: 600;
+    padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+  .nb-table tbody td {
+    padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.05); color: #e6f2f8;
+    vertical-align: middle;
+  }
+  .nb-table tbody tr:hover { background: rgba(78,163,255,.06); }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    border: 1px solid transparent;
+  }
+  .chip-homework { background: rgba(122,195,255,.12); color: #9ecbff; border-color: rgba(122,195,255,.25); }
+  .chip-submitted { background: rgba(76,175,80,.18); color: #b6f5b7; border-color: rgba(76,175,80,.35); }
+  .chip-pastdue { background: rgba(255,138,128,.18); color: #ffb7b0; border-color: rgba(255,138,128,.35); }
+  .chip-pending { background: rgba(255,193,7,.16); color: #ffd77a; border-color: rgba(255,193,7,.35); }
+
+  .btn-ghost {
+    background: #0b2b3a; color: #cfe7f5; border: 1px solid rgba(255,255,255,.08);
+    padding: 8px 12px; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-ghost:hover { background: #0f3343; }
+  .btn-danger { background: #c73b2e; border: none; }
+  .btn-danger:hover { background: #b13429; }
+  .btn { cursor: pointer; }
+  .muted { color: #9bb2c4; }
+
+  .nb-empty { padding: 18px; color: #9bb2c4; }
+</style>
+
+<div class="nb-wrap">
+  <div class="nb-card">
+    <div class="nb-header">
+      <h2 class="nb-title">My Notebooks</h2>
+      <div class="nb-actions">
+        <a class="btn-ghost" href="{{ url_for('notebooks_page') }}">
+          <!-- small inline icon -->
+          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19 3H5a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2h7v-2H5V5h14v6h2V5a2 2 0 0 0-2-2m-7 8v4h4v2h-4v4l-5-5z"/></svg>
+          Open JupyterLite
+        </a>
+      </div>
+    </div>
+
+    <div class="nb-toolbar">
+      <label class="nb-search">
+        <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true"><path fill="currentColor" d="M12.1 10.9h-.7l-.2-.2c.8-.9 1.3-2.2 1.3-3.5 0-3-2.4-5.4-5.4-5.4S1.8 4.2 1.8 7.1s2.4 5.4 5.4 5.4c1.3 0 2.5-.5 3.5-1.3l.2.2v.7l4.1 4.1 1.2-1.2zM7.2 11c-2.1 0-3.7-1.7-3.7-3.7S5.1 3.6 7.2 3.6s3.7 1.7 3.7 3.7S9.3 11 7.2 11z"/></svg>
+        <input id="filterInput" type="text" placeholder="Filter by name or status…">
+      </label>
+      <div class="pill" data-filter="all">All</div>
+      <div class="pill" data-filter="homework">Homework</div>
+      <div class="pill" data-filter="personal">Personal</div>
+      <div class="pill" data-filter="submitted">Submitted</div>
+      <div class="pill" data-filter="pending">Pending</div>
+    </div>
+
+    <div class="nb-table-wrap">
+      <table class="nb-table">
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th>Last Updated</th>
+            <th>Status</th>
+            <th style="min-width:160px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="nbBody">
+        {% for nb in notebooks %}
+          {# compute status labels for filtering #}
+          {% set type_label = 'homework' if nb.is_homework else 'personal' %}
+          {% set status_label = 'submitted' if nb.submitted else ('pending' if nb.is_homework and nb.can_submit else ('pastdue' if nb.is_homework and nb.due_at and (not nb.can_submit) else '')) %}
+          <tr
+            data-name="{{ nb.name|lower }}"
+            data-type="{{ type_label }}"
+            data-status="{{ status_label }}"
+          >
+            <td>
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <strong>{{ nb.name }}</strong>
+                {% if nb.is_homework %}
+                  <span class="chip chip-homework">Homework</span>
+                {% endif %}
+                {% if nb.is_homework and nb.submitted %}
+                  <span class="chip chip-submitted">Submitted</span>
+                {% elif nb.is_homework and nb.due_at and (not nb.can_submit) %}
+                  <span class="chip chip-pastdue">Past due</span>
+                {% elif nb.is_homework and nb.can_submit %}
+                  <span class="chip chip-pending">Pending</span>
+                {% endif %}
+                {% if nb.is_homework and nb.due_at %}
+                  <small class="muted">due {{ nb.due_at }}</small>
+                {% endif %}
+              </div>
+            </td>
+            <td>{{ nb.updated_at }}</td>
+            <td>
+              {% if nb.is_homework %}
+                {% if nb.submitted %}
+                  <span class="muted">No further action</span>
+                {% elif nb.can_submit %}
+                  <span>Ready to submit</span>
+                {% else %}
+                  <span class="muted">Not submittable</span>
+                {% endif %}
+              {% else %}
+                <span class="muted">Personal</span>
+              {% endif %}
+            </td>
+            <td>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <a class="btn-ghost" href="{{ url_for('notebooks_page') }}?import={{ nb.id }}">Open</a>
+                {% if nb.is_homework %}
+                  {% if nb.submitted %}
+                    <span class="btn-ghost" style="opacity:.7; cursor:default;">Submitted</span>
+                  {% elif nb.can_submit %}
+                    <button type="button" class="btn btn-danger" onclick="submitHW('{{ nb.homework_code }}')">Submit</button>
+                  {% else %}
+                    <span class="btn-ghost" style="opacity:.7; cursor:default;">Closed</span>
+                  {% endif %}
+                {% else %}
+                  <button type="button" class="btn btn-danger" onclick="delNotebook({{ nb.id }})">Delete</button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if notebooks|length == 0 %}
+      <div class="nb-empty">No notebooks yet. Create one in JupyterLite, then save it to your account.</div>
+    {% endif %}
+  </div>
+</div>
 
 <script>
-async function delNotebook(id){
-  if(!confirm('Delete this notebook?')) return;
-  try{
-    const csrf = await fetch("{{ url_for('api_csrf') }}", {credentials:'same-origin'})
-      .then(r=>r.json()).then(j=>j.csrf);
-    const res = await fetch(`/api/notebooks/${id}`, {
-      method: 'DELETE',
-      credentials: 'same-origin',
-      headers: {'X-CSRF': csrf}
-    });
-    if(res.ok){
-      location.reload();
-    }else{
-      const txt = await res.text();
-      alert('Delete failed: ' + txt);
-    }
-  }catch(e){
-    console.error(e);
-    alert('Delete failed (network).');
+  async function delNotebook(id){
+    if(!confirm('Delete this notebook?')) return;
+    try{
+      const csrf = await fetch("{{ url_for('api_csrf') }}", {credentials:'same-origin'})
+        .then(r=>r.json()).then(j=>j.csrf);
+      const res = await fetch(`/api/notebooks/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: {'X-CSRF': csrf}
+      });
+      if(res.ok){ location.reload(); }
+      else{ alert('Delete failed: ' + await res.text()); }
+    }catch(e){ console.error(e); alert('Delete failed (network).'); }
   }
-}
+  async function submitHW(code){
+    if(!confirm('Submit this homework? You will not be able to edit it afterwards.')) return;
+    try{
+      const csrf = await fetch("{{ url_for('api_csrf') }}", {credentials:'same-origin'})
+        .then(r=>r.json()).then(j=>j.csrf);
+      const res = await fetch(`/api/hw/${code}/submit`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'X-CSRF': csrf}
+      });
+      if(res.ok){ location.reload(); }
+      else{
+        const t = await res.text();
+        alert('Submit failed: ' + t);
+      }
+    }catch(e){ console.error(e); alert('Submit failed (network).'); }
+  }
+
+  (function(){
+    const pills = Array.from(document.querySelectorAll('.pill'));
+    const input = document.getElementById('filterInput');
+    const rows  = Array.from(document.querySelectorAll('#nbBody tr'));
+
+    let currentFilter = 'all';
+
+    function applyFilters(){
+      const q = (input.value || '').trim().toLowerCase();
+      rows.forEach(tr => {
+        const name   = tr.dataset.name || '';
+        const type   = tr.dataset.type || '';
+        const status = tr.dataset.status || '';
+        const matchesQuery =
+          !q ||
+          name.includes(q) ||
+          type.includes(q) ||
+          status.includes(q);
+        let matchesFilter = true;
+        if (currentFilter === 'homework') matchesFilter = (type === 'homework');
+        else if (currentFilter === 'personal') matchesFilter = (type === 'personal');
+        else if (currentFilter === 'submitted') matchesFilter = (status === 'submitted');
+        else if (currentFilter === 'pending') matchesFilter = (status === 'pending');
+        tr.style.display = (matchesQuery && matchesFilter) ? '' : 'none';
+      });
+    }
+
+    pills.forEach(p => {
+      p.addEventListener('click', () => {
+        pills.forEach(x => x.classList.remove('active'));
+        p.classList.add('active');
+        currentFilter = p.dataset.filter || 'all';
+        applyFilters();
+      });
+    });
+    // Default to "All"
+    const allPill = pills.find(p => p.dataset.filter === 'all');
+    if (allPill) allPill.classList.add('active');
+
+    input.addEventListener('input', applyFilters);
+  })();
 </script>
+
 {% endblock %}

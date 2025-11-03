@@ -7,10 +7,11 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
-
+from sqlalchemy import or_
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention, Notebook)
+                    StudentStats, Intervention, Notebook, StudentHomework,
+                    Homework)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -149,6 +150,37 @@ def try_restore_student_from_cookie():
     session["student_name"] = stu.name
     session.permanent = True
 
+#---------------------------------------------------------------------
+# Homework helpers
+#---------------------------------------------------------------------
+
+def _active_homeworks_for_student(student):
+    """Return homeworks open for this student and not yet submitted by them."""
+    now = datetime.utcnow()  # naive UTC to match how you compare elsewhere
+    # Open window: (open_at is null or <= now) AND (due_at is null or >= now)
+    open_q = (Homework.query
+              .filter(or_(Homework.open_at == None, Homework.open_at <= now))
+              .filter(or_(Homework.due_at == None, Homework.due_at >= now))
+              .order_by(Homework.created_at.desc()))
+
+    items = []
+    for hw in open_q.all():
+        sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=student.id).first()
+        # Hide if already submitted
+        if sh and sh.submitted_at:
+            continue
+        items.append({
+            "code": hw.code,
+            "title": hw.title,
+            "description": hw.description,
+            "open_at": hw.open_at,
+            "due_at": hw.due_at,
+            "has_copy": bool(sh),
+        })
+    return items
+
+
+
 @app.before_request
 def _restore_student():
     try_restore_student_from_cookie()
@@ -256,6 +288,15 @@ def password_new():
 def index():
     u = current_user()
     polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
+    if session.get("student_id"):
+        s = current_student()
+        return render_template(
+            "index.html",
+            student_name=s.name,
+            polls=polls,
+            user=None,
+            active_homeworks=_active_homeworks_for_student(s)
+        )
     return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
 
 @app.get("/api/me")
@@ -899,6 +940,15 @@ def _filename_from_nb(nb_json, fallback: str) -> str:
     except Exception:
         return fallback
 
+def _parse_dt_local(s: str | None):
+    if not s:
+        return None
+    try:
+        # Accept HTML <input type="datetime-local"> format (naive)
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
 @app.route("/notebooks")
 @require_student()
 def notebooks_page():
@@ -914,10 +964,32 @@ def my_notebooks_page():
             .order_by(Notebook.updated_at.desc())
             .all())
     items = []
+    now = datetime.utcnow()
     for nb in rows:
+        meta = (nb.content_json.get("metadata") or {})
+        code = (meta.get("homework_code") or "").strip()
         fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
-        items.append({"id": nb.id, "name": fname, "updated_at": nb.updated_at})
+        submitted = False
+        due_at = None
+        can_submit = False
+        if code:
+            hw = Homework.query.filter_by(code=code).first()
+            sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first() if hw else None
+            submitted = bool(sh and sh.submitted_at)
+            due_at = hw.due_at if hw else None
+            can_submit = (not submitted) and (not due_at or now <= due_at)
+        items.append({
+            "id": nb.id,
+            "name": fname,
+            "updated_at": nb.updated_at,
+            "is_homework": bool(code),
+            "homework_code": code if code else None,
+            "submitted": submitted,
+            "due_at": due_at,
+            "can_submit": can_submit
+        })
     return render_template("my_notebooks.html", notebooks=items, user=current_user(), student_name=session.get("student_name"))
+
 
 # -------------------------
 # CSRF for JS clients
@@ -979,7 +1051,6 @@ def notebooks_create():
 @app.put("/api/notebooks/<int:nb_id>")
 @require_student()
 def notebooks_update(nb_id: int):
-    # JSON: { content: <nbformat-json> }
     data = request.get_json(silent=True) or {}
     hdr = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(hdr, csrf_token()):
@@ -992,9 +1063,16 @@ def notebooks_update(nb_id: int):
     nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
     if not nb:
         raise NotFound()
+
+    # If this notebook is a homework copy and already submitted, block edits
+    sh = StudentHomework.query.filter_by(notebook_id=nb.id, student_id=s.id).first()
+    if sh and sh.submitted_at:
+        abort(403, description="Homework already submitted (read-only)")
+
     nb.content_json = content
     db.session.commit()
     return jsonify({"ok": True})
+
 
 @app.delete("/api/notebooks/<int:nb_id>")
 @require_student()
@@ -1009,6 +1087,251 @@ def notebooks_delete(nb_id: int):
     db.session.delete(nb)
     db.session.commit()
     return jsonify({"ok": True})
+
+#---------------------------------------------------------------------
+# Homework management
+#---------------------------------------------------------------------
+
+@app.get("/homework/new")
+@require_user()  # instructors/admins
+def homework_new():
+    return render_template("homework_new.html", user=current_user(), student_name=session.get("student_name"))
+
+@app.post("/homework/new")
+@require_user()
+def homework_create():
+    verify_csrf()
+    title = (request.form.get("title") or "").strip() or "Homework"
+    description = (request.form.get("description") or "").strip()
+    open_at = _parse_dt_local(request.form.get("open_at"))
+    due_at  = _parse_dt_local(request.form.get("due_at"))
+
+    file = request.files.get("ipynb")
+    raw_json = request.form.get("template_json")
+
+    if not file and not raw_json:
+        abort(400, description="Upload a .ipynb or paste JSON")
+
+    try:
+        template_json = json.load(file.stream) if file else json.loads(raw_json)
+    except Exception:
+        abort(400, description="Invalid notebook JSON")
+
+    md = (template_json.get("metadata") or {})
+    if not md.get("chalk_name"):
+        md["chalk_name"] = f"{title}.ipynb" if not title.lower().endswith(".ipynb") else title
+        template_json["metadata"] = md
+
+    code = gen_code()
+    hw = Homework(
+        code=code,
+        title=title,
+        description=description,
+        template_json=template_json,
+        open_at=open_at,
+        due_at=due_at,
+        creator_user_id=current_user().id
+    )
+    db.session.add(hw)
+    db.session.commit()
+    return redirect(url_for("homework_share", code=code))
+
+@app.get("/homework")
+@require_user()
+def homework_list():
+    hws = Homework.query.order_by(Homework.created_at.desc()).all()
+    items = []
+    for hw in hws:
+        created = (StudentHomework.query
+                   .filter_by(homework_id=hw.id)
+                   .count())
+        submitted = (StudentHomework.query
+                     .filter(StudentHomework.homework_id == hw.id,
+                             StudentHomework.submitted_at.isnot(None))
+                     .count())
+
+        items.append({
+            "title": hw.title,
+            "code": hw.code,
+            "open_at": hw.open_at,
+            "due_at": hw.due_at,
+            "is_open": hw.is_open,
+            "created_count": created,
+            "submitted_count": submitted
+        })
+    return render_template("homework_list.html", items=items, user=current_user(), student_name=session.get("student_name"))
+
+@app.get("/homework/<code>/submissions")
+@require_user()
+def homework_submissions(code):
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    # join StudentHomework -> Notebook -> Student for display
+    q = (db.session.query(StudentHomework, Notebook, Student)
+         .join(Notebook, Notebook.id == StudentHomework.notebook_id)
+         .join(Student, Student.id == StudentHomework.student_id)
+         .filter(StudentHomework.homework_id == hw.id)
+         .order_by(StudentHomework.created_at.asc()))
+    items = []
+    for sh, nb, st in q.all():
+        items.append({
+            "student_id": st.id,
+            "student_name": st.name,
+            "notebook_id": nb.id,
+            "filename": _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb"),
+            "updated_at": nb.updated_at,
+            "submitted_at": sh.submitted_at
+        })
+    return render_template("homework_submissions.html", hw=hw, items=items, user=current_user(), student_name=session.get("student_name"))
+
+@app.get("/homework/<code>/share")
+@require_user()
+def homework_share(code):
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    share_url = url_for("homework_open", code=hw.code, _external=True)
+    return render_template("homework_share.html", hw=hw, share_url=share_url, user=current_user(), student_name=session.get("student_name"))
+
+# optional QR (similar to polls/forms)
+@app.get("/homework/<code>/qr.png")
+@require_user()
+def homework_qr(code):
+    from io import BytesIO
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    url = url_for("homework_open", code=code, _external=True)
+    img = qrcode.make(url, box_size=8, border=2)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+@app.get("/hw/<code>")
+@require_student()
+def homework_open(code):
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
+    if sh and sh.submitted_at:
+        return render_template("homework_locked.html", hw=hw, user=current_user(), student_name=session.get("student_name"))
+    return render_template("homework_play.html", hw=hw, user=current_user(), student_name=session.get("student_name"))
+
+@app.get("/api/hw/<code>/my")
+@require_student()
+def api_hw_my(code):
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
+
+    if sh and sh.submitted_at:
+        return jsonify({"submitted": True}), 403
+
+    # Lazy-create student's personal copy on first open
+    if not sh:
+        nb_json = json.loads(json.dumps(hw.template_json))  # deep copy
+        md = nb_json.get("metadata") or {}
+        # ensure filename metadata is present
+        if not md.get("chalk_name"):
+            md["chalk_name"] = f"{hw.title}-{s.name or s.id}.ipynb"
+            nb_json["metadata"] = md
+        # mark homework linkage (optional, helps filtering)
+        md["homework_code"] = hw.code
+        nb = Notebook(student_id=s.id, content_json=nb_json)
+        db.session.add(nb)
+        db.session.flush()
+        sh = StudentHomework(homework_id=hw.id, student_id=s.id, notebook_id=nb.id)
+        db.session.add(sh)
+        db.session.commit()
+
+    nb = Notebook.query.filter_by(id=sh.notebook_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+
+    name = _filename_from_nb(nb.content_json, f"{hw.title}-{s.id}.ipynb")
+    return jsonify({
+        "submitted": False,
+        "notebook_id": nb.id,
+        "name": name,
+        "content": nb.content_json
+    })
+
+@app.get("/api/hw/<code>/status")
+@require_student()
+def api_hw_status(code):
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
+    if not sh:
+        return jsonify({"exists": False, "submitted": False, "due_at": hw.due_at.isoformat() if hw.due_at else None})
+    return jsonify({"exists": True, "submitted": bool(sh.submitted_at), "due_at": hw.due_at.isoformat() if hw.due_at else None})
+
+
+@app.put("/api/hw/<code>/save")
+@require_student()
+def api_hw_save(code):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first_or_404()
+    if sh.submitted_at:
+        abort(403, description="Already submitted")
+
+    data = request.get_json(silent=True) or {}
+    content = data.get("content")
+    if not isinstance(content, dict):
+        abort(400, description="Missing/invalid content")
+
+    nb = Notebook.query.filter_by(id=sh.notebook_id, student_id=s.id).first_or_404()
+    nb.content_json = content
+    db.session.commit()
+    return jsonify({"ok": True, "id": nb.id})
+
+@app.post("/api/hw/<code>/submit")
+@require_student()
+def api_hw_submit(code):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first_or_404()
+
+    # lock if past due
+    if hw.due_at and datetime.utcnow() > hw.due_at:
+        abort(403, description="Past due")
+
+    if sh.submitted_at:
+        return jsonify({"ok": True, "already": True})
+
+    sh.submitted_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+# Admin: open notebook JSON (for JupyterLite import)
+@app.get("/api/admin/notebooks/<int:nb_id>")
+@require_user()
+def api_admin_notebook(nb_id: int):
+    nb = Notebook.query.get_or_404(nb_id)
+    name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+    return jsonify({"id": nb.id, "name": name, "content": nb.content_json})
+
+# Admin: download notebook
+@app.get("/admin/notebooks/<int:nb_id>/download")
+@require_user()
+def admin_download_notebook(nb_id: int):
+    nb = Notebook.query.get_or_404(nb_id)
+    name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+    buf = io.BytesIO(json.dumps(nb.content_json, ensure_ascii=False).encode("utf-8"))
+    return send_file(buf, mimetype="application/x-ipynb+json", as_attachment=True, download_name=name)
+
+# Admin JupyterLite viewer page
+@app.get("/admin/jlite")
+@require_user()
+def admin_jlite():
+    return render_template("admin_jlite.html", user=current_user(), student_name=session.get("student_name"))
+
 
 # --------------------------------------------------------------------
 # Lecture interaction dashboard

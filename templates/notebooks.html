@@ -2,11 +2,13 @@
 {% block content %}
 <h2>Jupyter Notebooks (Lite)</h2>
 <p class="muted">
-  Your work is saved to your account when you click <em>Save to Server</em> or use Jupyter’s Save (Ctrl+S).
+  Save with <em>Save to Server</em> or Jupyter’s Save (Ctrl+S).
+  If this notebook is a homework, you’ll also see <em>Submit Homework</em>.
 </p>
 
 <div style="margin:0 0 10px 0;">
   <button id="saveBtn" class="btn">Save to Server</button>
+  <button id="submitBtn" class="btn btn-danger" style="display:none">Submit Homework</button>
   <span id="status" style="margin-left:10px;color:#9ecbff;"></span>
 </div>
 
@@ -24,9 +26,13 @@
 (function(){
   const STATUS = document.getElementById('status');
   const frame = document.getElementById('jlite_frame');
+  const submitBtn = document.getElementById('submitBtn');
+  const saveBtn = document.getElementById('saveBtn');
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
   let serverSaveBusy = false;
   let initHooksDone = false;
+  let currentHomeworkCode = null; // if non-null, active file is a homework
 
   function setStatus(msg, isError=false, ttl=3000){
     STATUS.textContent = msg || '';
@@ -34,26 +40,7 @@
     if (msg && ttl) setTimeout(()=>{ STATUS.textContent=''; }, ttl);
   }
 
-  async function getMe(){
-    try{
-      const r = await fetch("/api/me", {credentials:"same-origin"});
-      if(!r.ok) return null;
-      return await r.json();
-    }catch(_){ return null; }
-  }
-
-  // Per-student isolation at entry (same as before)
-  async function ensurePerUserStorage(){
-    const me = await getMe(); if(!me) return;
-    const KEY = "chalk_student_id_v4";
-    const now = String(me.id), prev = localStorage.getItem(KEY);
-    if (prev === now) return;
-
-    await clearJupyterLiteStorage();
-    localStorage.setItem(KEY, now);
-  }
-
-  // ALSO clear storage when leaving /notebooks (prevents “duplicates on reopen”)
+  // -------- storage helpers (same as before) --------
   async function clearJupyterLiteStorage(){
     try{
       if (typeof indexedDB.databases === 'function') {
@@ -76,7 +63,6 @@
         }
       }
     }catch(_){}
-
     try{
       if ('caches' in window) {
         const keys = await caches.keys();
@@ -85,18 +71,14 @@
         }
       }
     }catch(_){}
-
     try{
       for (const k of Object.keys(localStorage)) if (/jupyter|jp-|jupyterlab|jupyterlite/i.test(k)) localStorage.removeItem(k);
       for (const k of Object.keys(sessionStorage)) if (/jupyter|jp-|jupyterlab|jupyterlite/i.test(k)) sessionStorage.removeItem(k);
     }catch(_){}
   }
-
-  // clear on exit (best-effort)
   window.addEventListener('pagehide', () => { clearJupyterLiteStorage(); });
   window.addEventListener('beforeunload', () => { clearJupyterLiteStorage(); });
 
-  // Wait for JupyterLite app to be fully ready
   async function waitForAppReady(maxMs=60000){
     const win = frame.contentWindow;
     const start = Date.now();
@@ -124,7 +106,7 @@
     const j = await r.json(); return j.csrf;
   }
 
-  // Clean the workspace before opening a notebook (so only that file shows)
+  // Clean workspace before opening an imported notebook
   async function cleanWorkspace(app){
     const contents = app.serviceManager.contents;
     async function deleteTree(path){
@@ -143,7 +125,39 @@
     }
   }
 
-  // Import server notebook by id with the CORRECT filename
+  // ---- Homework detection & UI ----
+  async function detectHomeworkAndUpdateUI(app){
+    currentHomeworkCode = null;
+    submitBtn.style.display = 'none';
+    submitBtn.disabled = false;
+
+    const w = app.shell.currentWidget;
+    if(!w || !w.context || !w.context.path) return;
+
+    // read notebook JSON to see if it has homework_code
+    const model = await app.serviceManager.contents.get(w.context.path, {content:true, type:"notebook", format:"json"}).catch(()=>null);
+    if (!model || !model.content) return;
+    const nb = model.content;
+    const md = nb.metadata || {};
+    const code = (md.homework_code || '').trim();
+
+    if (!code) return; // not a homework
+    currentHomeworkCode = code;
+    submitBtn.style.display = 'inline-block';
+
+    // Check server status to disable if already submitted
+    try{
+      const res = await fetch(`/api/hw/${code}/status`, {credentials:'same-origin'});
+      if (res.ok){
+        const j = await res.json();
+        if (j.submitted){
+          submitBtn.disabled = true;
+          setStatus("This homework is already submitted (read-only).", true, 4000);
+        }
+      }
+    }catch(_){}
+  }
+
   async function importFromServer(app, nbId){
     await cleanWorkspace(app);
     const r = await fetch(`/api/notebooks/${nbId}`, {credentials:"same-origin"});
@@ -151,21 +165,17 @@
     const data = await r.json();
     const nb = data.content || {};
     nb.metadata = nb.metadata || {};
-    nb.metadata.chalk_id = nbId;
-
-    // Prefer server-provided filename, else metadata, else a safe fallback
+    // Use stored filename (or metadata), not imported-*.ipynb
     const desired = sanitizeName(data.name || nb.metadata.chalk_name || `Notebook-${nbId}.ipynb`);
-
-    // If a file with the same name exists (shouldn't after clean), remove it
     const contents = app.serviceManager.contents;
     await contents.delete(desired).catch(()=>{});
-
     await contents.save(desired, {type:"notebook", format:"json", content: nb});
     await app.commands.execute('docmanager:open', { path: desired });
-    setStatus("Notebook loaded.", false, 2000);
+
+    await detectHomeworkAndUpdateUI(app);
   }
 
-  // Save active notebook to server; stores filename in metadata.chalk_name
+  // Save active notebook — route to HW API if it's a homework
   async function saveActiveToServer(app, {ensureJupyterSaved} = {ensureJupyterSaved:true}){
     if (serverSaveBusy) return;
     const w = app.shell.currentWidget;
@@ -174,9 +184,8 @@
     }
     try{
       serverSaveBusy = true;
-
       if (ensureJupyterSaved) { await w.context.save(); }
-      await sleep(180); // let Jupyter flush to contents service
+      await sleep(180);
 
       const path = w.context.path;
       const model = await app.serviceManager.contents.get(path, {content:true, type:"notebook", format:"json"});
@@ -185,34 +194,50 @@
 
       const chosen = sanitizeName(baseName(path));
       nb.metadata = nb.metadata || {};
-      nb.metadata.chalk_name = chosen;   // <- persist student's filename
+      nb.metadata.chalk_name = chosen;
 
       const csrf = await getCSRF();
-      const chalkId = nb.metadata.chalk_id;
 
-      if(!chalkId){
-        const r = await fetch("/api/notebooks", {
-          method: "POST",
-          headers: {"Content-Type":"application/json","X-CSRF": csrf},
-          credentials: "same-origin",
-          body: JSON.stringify({ content: nb })
-        });
-        if(!r.ok){ setStatus("Create failed.", true); return; }
-        const j = await r.json();
-        nb.metadata.chalk_id = j.id;
-
-        // write back metadata (id + name) so subsequent saves update the same row
-        await app.serviceManager.contents.save(path, {type:"notebook", format:"json", content: nb});
-        setStatus(`Saved (new): ${chosen}`, false, 2000);
-      } else {
-        const r = await fetch(`/api/notebooks/${chalkId}`, {
+      // If this is a homework, save via the homework API (enforces locking)
+      const code = (nb.metadata.homework_code || '').trim();
+      if (code){
+        const res = await fetch(`/api/hw/${code}/save`, {
           method: "PUT",
           headers: {"Content-Type":"application/json","X-CSRF": csrf},
           credentials: "same-origin",
           body: JSON.stringify({ content: nb })
         });
-        if(!r.ok){ setStatus("Update failed.", true); return; }
+        if(!res.ok){
+          if (res.status === 403) setStatus("Homework is locked (cannot save).", true);
+          else setStatus("Save failed.", true);
+          return;
+        }
         setStatus(`Saved: ${chosen}`, false, 1500);
+      } else {
+        // Regular personal notebook
+        const id = (nb.metadata && nb.metadata.chalk_id) ? nb.metadata.chalk_id : null;
+        if (!id){
+          const resp = await fetch('/api/notebooks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf },
+            credentials: 'same-origin',
+            body: JSON.stringify({ content: nb })
+          });
+          if (!resp.ok) { setStatus('Create failed.', true); return; }
+          const data = await resp.json();
+          nb.metadata.chalk_id = data.id;
+          await app.serviceManager.contents.save(path, {type:"notebook", format:"json", content: nb});
+          setStatus(`Saved (new): ${chosen}`, false, 2000);
+        } else {
+          const resp = await fetch(`/api/notebooks/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF': csrf },
+            credentials: 'same-origin',
+            body: JSON.stringify({ content: nb })
+          });
+          if (!resp.ok) { setStatus('Update failed.', true); return; }
+          setStatus(`Saved: ${chosen}`, false, 1500);
+        }
       }
     } catch(e){
       console.error(e);
@@ -222,47 +247,75 @@
     }
   }
 
-  // Hook Jupyter saves & renames so filename changes persist
-  function installSaveHooks(app){
+  async function submitHomework(app){
+    if (!currentHomeworkCode) return;
+    // force a last save through HW path, then submit
+    await saveActiveToServer(app, {ensureJupyterSaved:true});
+    const csrf = await getCSRF();
+    const res = await fetch(`/api/hw/${currentHomeworkCode}/submit`, {
+      method: "POST",
+      headers: {"X-CSRF": csrf},
+      credentials: "same-origin"
+    });
+    if (!res.ok){
+      setStatus("Submit failed.", true);
+      return;
+    }
+    // lock UI and clear storage
+    submitBtn.disabled = true;
+    setStatus("Submitted. This homework is now locked.", false, 4000);
+    await clearJupyterLiteStorage();
+  }
+
+  function installHooks(app){
     if (initHooksDone) return;
     initHooksDone = true;
+
+    // Save button
+    saveBtn.onclick = () => { saveActiveToServer(app, {ensureJupyterSaved:true}); };
+
+    // Submit button (shown only when a homework is detected)
+    submitBtn.onclick = () => { submitHomework(app); };
+
+    // Follow Jupyter's saves/renames/opens to autosync and refresh homework UI
     const cmds = app.commands;
     if (cmds && cmds.commandExecuted && cmds.commandExecuted.connect){
-      cmds.commandExecuted.connect((_sender, args) => {
+      cmds.commandExecuted.connect((_s, args) => {
         const id = args && args.id;
         if (id === 'docmanager:save' || id === 'docmanager:save-as' || id === 'docmanager:save-all' || id === 'docmanager:rename'){
-          // After Jupyter finishes saving/renaming, sync to server
-          setTimeout(() => { saveActiveToServer(app, {ensureJupyterSaved:false}); }, 300);
+          setTimeout(() => {
+            saveActiveToServer(app, {ensureJupyterSaved:false});
+            detectHomeworkAndUpdateUI(app);
+          }, 300);
+        }
+        if (id === 'docmanager:open'){
+          setTimeout(() => { detectHomeworkAndUpdateUI(app); }, 200);
         }
       });
     }
-    document.getElementById('saveBtn').onclick = () => { saveActiveToServer(app, {ensureJupyterSaved:true}); };
+
+    // Also react when the active tab changes
+    if (app.shell && app.shell.currentChanged && app.shell.currentChanged.connect){
+      app.shell.currentChanged.connect(() => { void detectHomeworkAndUpdateUI(app); });
+    }
   }
 
   (async () => {
-    await ensurePerUserStorage();
-
-    // Load Lite (same-origin) AFTER isolation
-    frame.src = "{{ url_for('static', filename='jlite/lab/index.html') }}?reset";
+    // Load Lite
+    frame.src = "{{ url_for('static', filename='jlite/lab/index.html') }}";
     frame.addEventListener("load", async () => {
       const app = await waitForAppReady(60000);
       if (!app){
-        // background retry without scaring the user
         const timer = setInterval(async () => {
           const a2 = await waitForAppReady(5000);
-          if (a2){
-            clearInterval(timer);
-            installSaveHooks(a2);
-            const id = new URLSearchParams(window.location.search).get("import");
-            if (id) await importFromServer(a2, parseInt(id, 10));
-          }
+          if (a2){ clearInterval(timer); installHooks(a2); const id = new URLSearchParams(window.location.search).get("import"); if (id) await importFromServer(a2, parseInt(id, 10)); await detectHomeworkAndUpdateUI(a2); }
         }, 1000);
         return;
       }
-
-      installSaveHooks(app);
+      installHooks(app);
       const id = new URLSearchParams(window.location.search).get("import");
       if (id) await importFromServer(app, parseInt(id, 10));
+      await detectHomeworkAndUpdateUI(app);
     });
   })();
 })();

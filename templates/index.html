@@ -1,41 +1,202 @@
 {% extends "base.html" %}
 {% block content %}
-{% if student_name and not user %}
-<div class="card" style="max-width:820px;">
-  <h3 style="margin-top:0;">Live Lecture Feedback</h3>
-  <p class="muted" style="margin-top:-6px;">Signed in as <strong>{{ student_name }}</strong></p>
 
-  <div class="row" style="gap:10px; margin:12px 0 18px;">
-    <button id="btn-ok" class="btn" style="border-color:#16a34a;">All good</button>
-    <button id="btn-confused" class="btn" style="border-color:#ef4444;">I’m confused</button>
-    <button id="btn-question" class="btn">Ask a question</button>
+<style>
+  /* ---- Unified section card styles ---- */
+  .sec-card {
+    max-width: 820px;
+    margin: 0 auto 16px auto;
+    padding: 16px 18px;
+    border-radius: 12px;
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    box-shadow: 0 6px 24px rgba(0,0,0,.35);
+  }
+  .sec-title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .2px; }
+  .sec-hint  { color: #9bb2c4; margin: 6px 0 12px 0; }
+
+  .list { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 0 0; padding: 0; }
+  .item-row {
+    display: flex; gap: 12px; align-items: center; justify-content: space-between;
+    background: #091d29; border: 1px solid rgba(255,255,255,.06); border-radius: 10px; padding: 10px 12px;
+  }
+  .item-main { min-width: 0; }
+  .item-title { margin: 0; font-weight: 600; color: #e6f2f8; }
+  .item-desc  { color: #9bb2c4; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 520px; }
+  .item-meta  { color: #9ecbff; font-size: 13px; margin-top: 4px; }
+  .item-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .pill-due {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 8px; border-radius: 999px; font-size: 12px;
+    background: rgba(122,195,255,.12); color: #9ecbff; border: 1px solid rgba(122,195,255,.25);
+  }
+  .btn-cta {
+    background: linear-gradient(180deg,#3aa0ff,#1f7bd6); color: #fff; border: none;
+    padding: 8px 12px; border-radius: 10px; font-weight: 600; text-decoration: none; display:inline-block;
+  }
+  .btn-ghost {
+    background: #0b2b3a; color: #cfe7f5; border: 1px solid rgba(255,255,255,.08);
+    padding: 8px 12px; border-radius: 10px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn-ok       { border: 1px solid rgba(22,163,74,.55); }
+  .btn-confused { border: 1px solid rgba(239,68,68,.55); }
+
+  .q-form {
+    margin-top: 10px; display: none;
+    background: #091d29; border: 1px solid rgba(255,255,255,.06);
+    border-radius: 10px; padding: 10px 12px;
+  }
+  .q-form label { display:block; margin-bottom: 6px; color: #cde1ee; font-weight: 600; }
+  .q-input {
+    width:100%; padding:10px; border-radius:8px; border:1px solid #334155;
+    background:#0b1220; color:var(--text);
+  }
+  .q-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
+  .status-line { color:#9bb2c4; margin-top:10px; display:none; }
+  .status-line.show { display:block; }
+</style>
+
+{# ------------------------------------------------------------------------
+   CASE 1: STUDENT is signed in  -> show Homework + Live Feedback
+   We expect the view to pass: student_name, active_homeworks, user=None
+------------------------------------------------------------------------- #}
+{% if student_name and not user %}
+
+  {% if active_homeworks and active_homeworks|length %}
+  <div class="sec-card">
+    <h3 class="sec-title">Assigned Homework</h3>
+    <p class="sec-hint">Open, work, and submit before the due date.</p>
+
+    <div class="list">
+      {% for hw in active_homeworks %}
+      <div class="item-row">
+        <div class="item-main">
+          <div class="item-title">{{ hw.title }}</div>
+          {% if hw.description %}
+            <div class="item-desc">{{ hw.description }}</div>
+          {% endif %}
+          <div class="item-meta">
+            {% if hw.due_at %}
+              <span class="pill-due">
+                Due <time class="due-abs" datetime="{{ hw.due_at.isoformat() }}">{{ hw.due_at }}</time>
+                <span>•</span>
+                <span class="due-rel" data-due="{{ hw.due_at.isoformat() }}">calculating…</span>
+              </span>
+            {% else %}
+              <span class="pill-due">No due date</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="item-actions">
+          <a class="btn-cta" href="{{ url_for('homework_open', code=hw.code) }}">{{ 'Resume' if hw.has_copy else 'Start' }}</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="sec-card">
+    <h3 class="sec-title">Live Lecture Feedback</h3>
+    <p class="sec-hint">Signed in as <strong>{{ student_name }}</strong>. Let your instructor know how you’re doing.</p>
+
+    <div class="item-row">
+      <div class="item-main">
+        <div class="item-title">Quick reactions</div>
+        <div class="item-desc">Send a lightweight signal during the lecture.</div>
+      </div>
+      <div class="item-actions">
+        <button id="btn-ok" class="btn-ghost btn-ok">All good</button>
+        <button id="btn-confused" class="btn-ghost btn-confused">I’m confused</button>
+        <button id="btn-question" class="btn-cta">Ask a question</button>
+      </div>
+    </div>
+
+    <form id="q-form" class="q-form">
+      <label for="q-text">Your question</label>
+      <textarea id="q-text" rows="4" class="q-input" placeholder="Type your question..."></textarea>
+      <div class="q-actions">
+        <button type="button" class="btn-ghost" id="q-cancel">Cancel</button>
+        <button type="submit" class="btn-cta">Send</button>
+      </div>
+    </form>
+
+    <p id="notice" class="status-line"></p>
   </div>
 
-  <form id="q-form" style="display:none; margin-top:6px;">
-    <label for="q-text">Your question</label>
-    <textarea id="q-text" rows="4" style="width:100%; padding:10px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:var(--text);" placeholder="Type your question..."></textarea>
-    <div class="row" style="justify-content:flex-end; gap:8px; margin-top:8px;">
-      <button type="button" class="btn" id="q-cancel">Cancel</button>
-      <button type="submit" class="btn btn-primary">Send</button>
+{# ------------------------------------------------------------------------
+   CASE 2: INSTRUCTOR / ADMIN is signed in -> no login button
+   We expect the view to pass: user=current_user(), no student_name
+------------------------------------------------------------------------- #}
+{% elif user %}
+  <div class="sec-card">
+    <h3 class="sec-title">Welcome, {{ user.name or 'Instructor' }}</h3>
+    <p class="sec-hint">Use the navigation to manage polls, signals, and homework.</p>
+    <div class="item-row" style="justify-content:flex-start;">
+      <div class="item-actions">
+        <a class="btn-cta" href="{{ url_for('homework_list') }}">Homework Submissions</a>
+        <a class="btn-ghost" href="{{ url_for('homework_new') }}">Create Homework</a>
+        <a class="btn-ghost" href="{{ url_for('signals') }}">Live Signals</a>
+      </div>
     </div>
-  </form>
+  </div>
 
-  <p id="notice" class="muted" style="display:none; margin-top:12px;"></p>
-</div>
+{# ------------------------------------------------------------------------
+   CASE 3: ANONYMOUS visitor -> show a clear, working Login CTA
+------------------------------------------------------------------------- #}
 {% else %}
-<div class="card">
-  <h3>Welcome</h3>
-  <p class="muted">Log in to participate.</p>
-  <a class="btn" href="{{ url_for('login') }}">Login</a>
-</div>
+  <div class="sec-card" role="region" aria-label="Login">
+    <h3 class="sec-title">Welcome</h3>
+    <p class="sec-hint">Log in to participate.</p>
+    <a class="btn-cta" href="{{ url_for('login') }}" id="home-login-btn">Login</a>
+  </div>
 {% endif %}
 
 <script>
 (function(){
+  // ---- Relative "due in" display ----
+  function relTime(targetISO){
+    const target = new Date(targetISO);
+    const now = new Date();
+    const ms = target - now;
+    if (isNaN(ms)) return '';
+    const sec = Math.round(ms / 1000);
+    const abs = Math.abs(sec);
+    const sign = sec >= 0 ? 1 : -1;
+
+    const mins = Math.round(abs / 60);
+    const hours = Math.round(abs / 3600);
+    const days = Math.round(abs / 86400);
+
+    if (abs < 60) return sign > 0 ? 'in seconds' : 'seconds ago';
+    if (abs < 3600) return sign > 0 ? `in ${mins} min` : `${mins} min ago`;
+    if (abs < 86400) return sign > 0 ? `in ${hours} h` : `${hours} h ago`;
+    return sign > 0 ? `in ${days} d` : `${days} d ago`;
+  }
+  function updateDue() {
+    document.querySelectorAll('.due-rel').forEach(el => {
+      const iso = el.getAttribute('data-due');
+      if (!iso) return;
+      el.textContent = relTime(iso);
+    });
+  }
+  updateDue();
+  setInterval(updateDue, 60 * 1000);
+
+  // ---- Feedback JS (student case only) ----
   const csrf = "{{ csrf_token() }}";
   const notice = document.getElementById("notice");
-  function say(msg){ notice.textContent = msg; notice.style.display = "block"; }
-  function clearMsg(){ notice.style.display = "none"; notice.textContent = ""; }
+  function say(msg){
+    if (!notice) return;
+    notice.textContent = msg;
+    notice.classList.add('show');
+  }
+  function clearMsg(){
+    if (!notice) return;
+    notice.classList.remove('show');
+    notice.textContent = "";
+  }
 
   async function postJSON(url, data){
     const res = await fetch(url, {
@@ -47,12 +208,11 @@
     return res;
   }
 
-  // Quick signals
-  const okBtn = document.getElementById("btn-ok");
+  const okBtn   = document.getElementById("btn-ok");
   const confBtn = document.getElementById("btn-confused");
-  const qBtn = document.getElementById("btn-question");
-  const qForm = document.getElementById("q-form");
-  const qText = document.getElementById("q-text");
+  const qBtn    = document.getElementById("btn-question");
+  const qForm   = document.getElementById("q-form");
+  const qText   = document.getElementById("q-text");
   const qCancel = document.getElementById("q-cancel");
 
   let cooling = false;
@@ -65,25 +225,33 @@
       if (res.ok) say(kind === "ok" ? "Got it — thanks." : "Noted. We’ll slow down.");
       else say("Couldn’t send feedback (try again).");
     }catch(e){ say("Network error. Try again."); }
-    setTimeout(()=> cooling=false, 3000); // 3s cooldown
+    setTimeout(()=> cooling=false, 3000);
   }
 
   okBtn?.addEventListener("click", () => sendSignal("ok"));
   confBtn?.addEventListener("click", () => sendSignal("confused"));
-
-  // Ask a question
-  qBtn?.addEventListener("click", () => { qForm.style.display = "block"; qText.focus(); });
-  qCancel?.addEventListener("click", () => { qForm.style.display = "none"; qText.value = ""; clearMsg(); });
+  qBtn?.addEventListener("click", () => {
+    if (!qForm) return;
+    qForm.style.display = "block";
+    qText?.focus();
+  });
+  qCancel?.addEventListener("click", () => {
+    if (!qForm) return;
+    qForm.style.display = "none";
+    if (qText) qText.value = "";
+    clearMsg();
+  });
 
   qForm?.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const text = (qText.value || "").trim();
+    const text = (qText?.value || "").trim();
     if (!text){ say("Please type a question first."); return; }
     try{
       const res = await postJSON("{{ url_for('question_post') }}", { text });
       if (res.ok){
         say("Question sent.");
-        qText.value = ""; qForm.style.display = "none";
+        if (qText) qText.value = "";
+        if (qForm) qForm.style.display = "none";
       }else if(res.status === 429){
         say("You’ve asked recently. Please wait a moment.");
       }else{

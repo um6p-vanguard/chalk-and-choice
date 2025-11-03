@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Share Homework: {{ hw.title }}</h2>
+<p>Share this link with students:</p>
+<p><a href="{{ share_url }}">{{ share_url }}</a></p>
+<p><a class="btn" href="{{ url_for('homework_submissions', code=hw.code) }}">View Submissions</a></p>
+<p>Or display the QR:</p>
+<img src="{{ url_for('homework_qr', code=hw.code) }}" alt="QR">
+{% endblock %}

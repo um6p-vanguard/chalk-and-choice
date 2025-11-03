@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .hw-card {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 20px 22px;
+    border-radius: 12px;
+    background: #0f1720;
+    box-shadow: 0 6px 24px rgba(0,0,0,.35);
+    border: 1px solid rgba(255,255,255,.06);
+  }
+  .hw-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .hw-title { margin: 0; font-size: 22px; letter-spacing: .2px; }
+  .hw-hint { color: #9bb2c4; font-size: 13px; margin-bottom: 18px; }
+
+  .form-grid {
+    display: grid; gap: 18px;
+    grid-template-columns: 1.2fr .8fr;
+  }
+  @media (max-width: 860px) { .form-grid { grid-template-columns: 1fr; } }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .label { font-weight: 600; color: #cde1ee; }
+  .hint  { color: #98aab7; font-size: 12px; }
+  .input, .area, .input-dt {
+    width: 100%; border-radius: 10px; border: 1px solid rgba(255,255,255,.08);
+    background: #062230; color: #e6f2f8;
+    padding: 10px 12px; outline: none;
+  }
+  .input:focus, .area:focus, .input-dt:focus {
+    border-color: #4ea3ff; box-shadow: 0 0 0 3px rgba(78,163,255,.2);
+  }
+  .area { min-height: 112px; resize: vertical; }
+
+  .dropzone {
+    display: grid; place-items: center; text-align: center;
+    padding: 22px; border: 2px dashed rgba(255,255,255,.12);
+    border-radius: 12px; background: #051a25; color: #cfe7f5;
+    transition: border-color .2s ease, background .2s ease;
+  }
+  .dropzone.dragover { border-color: #7ac3ff; background: #072234; }
+  .dropzone .dz-cta { font-size: 14px; margin-top: 6px; color: #a8c4d6; }
+  .dz-file { margin-top: 10px; font-size: 13px; color: #9ecbff; }
+
+  .row-actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  .btn-primary {
+    background: linear-gradient(180deg,#3aa0ff,#1f7bd6);
+    color: #fff; border: none; padding: 10px 14px; border-radius: 10px;
+    cursor: pointer; font-weight: 600;
+  }
+  .btn-secondary {
+    background: #0b2b3a; color: #cfe7f5; border: 1px solid rgba(255,255,255,.08);
+    padding: 10px 14px; border-radius: 10px; cursor: pointer;
+  }
+  .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+  .status { margin-left: 8px; font-size: 13px; color: #9ecbff; }
+  .status.error { color: #ff8a80; }
+
+  details.hw-advanced {
+    margin-top: 14px; border-top: 1px dashed rgba(255,255,255,.08);
+    padding-top: 12px;
+  }
+  details.hw-advanced > summary {
+    cursor: pointer; color: #9bb2c4; font-size: 13px; user-select: none;
+  }
+</style>
+
+<div class="hw-card">
+  <div class="hw-header">
+    <h2 class="hw-title">Create Homework</h2>
+  </div>
+  <p class="hw-hint">
+    Upload a <code>.ipynb</code> notebook as the assignment template. Students will receive their own copy.
+  </p>
+
+  <form id="hwForm" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+
+    <div class="form-grid">
+      <!-- Left column -->
+      <div class="col-left">
+        <div class="field">
+          <label for="title" class="label">Title <span style="color:#6fb6ff">*</span></label>
+          <input id="title" name="title" required class="input" placeholder="Homework 1: Intro to Python">
+          <div class="hint">This appears on the share page and student view.</div>
+        </div>
+
+        <div class="field">
+          <label for="description" class="label">Description (optional)</label>
+          <textarea id="description" name="description" class="area" placeholder="Short instructions, rubric, or links…"></textarea>
+        </div>
+
+        <details class="hw-advanced">
+          <summary>Advanced: paste notebook JSON instead of uploading a file</summary>
+          <div class="field" style="margin-top:10px;">
+            <textarea name="template_json" id="template_json" class="area" placeholder='{"cells":[...],"metadata":{...},"nbformat":4,"nbformat_minor":5}'></textarea>
+            <div class="hint">If provided, this overrides the file upload.</div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Right column -->
+      <div class="col-right">
+        <div class="field">
+          <label for="due_at" class="label">Due at (optional)</label>
+          <input type="datetime-local" id="due_at" name="due_at" class="input-dt">
+          <div class="hint">Your local time. Submission is blocked after this time.</div>
+        </div>
+
+        <div class="field">
+          <label class="label">Notebook file <span style="color:#6fb6ff">*</span></label>
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload .ipynb by clicking or dropping">
+            <div>
+              <div style="font-weight:600;">Drag & drop your <code>.ipynb</code> here</div>
+              <div class="dz-cta">or click to choose a file</div>
+              <div id="dzFile" class="dz-file" aria-live="polite"></div>
+            </div>
+            <input id="ipynb" type="file" name="ipynb" accept=".ipynb,application/x-ipynb+json,application/json" style="display:none;">
+          </div>
+          <div class="hint">Max 5&nbsp;MB. Outputs can make notebooks large—consider clearing outputs before upload.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row-actions">
+      <button id="createBtn" class="btn-primary" type="submit" disabled>Create & Share</button>
+      <button id="clearBtn" class="btn-secondary" type="button">Clear</button>
+      <span id="status" class="status" aria-live="polite"></span>
+    </div>
+  </form>
+</div>
+
+<script>
+(function(){
+  const form     = document.getElementById('hwForm');
+  const titleEl  = document.getElementById('title');
+  const dueEl    = document.getElementById('due_at');
+  const dz       = document.getElementById('dropzone');
+  const fileEl   = document.getElementById('ipynb');
+  const dzFile   = document.getElementById('dzFile');
+  const createBt = document.getElementById('createBtn');
+  const clearBt  = document.getElementById('clearBtn');
+  const statusEl = document.getElementById('status');
+  const jsonEl   = document.getElementById('template_json');
+
+  const MAX_BYTES = 15 * 1024 * 1024; // 15 MB (keep in sync with server if you changed it)
+
+  // Prevent past due dates
+  (function initMinDate(){
+    try {
+      const now = new Date();
+      now.setMinutes(now.getMinutes() - (now.getMinutes() % 5) + 5);
+      now.setSeconds(0,0);
+      const iso = new Date(now.getTime() - (now.getTimezoneOffset()*60000)).toISOString().slice(0,16);
+      dueEl.min = iso;
+    } catch(_){}
+  })();
+
+  function setStatus(msg, isError=false) {
+    statusEl.textContent = msg || '';
+    statusEl.classList.toggle('error', !!isError);
+  }
+
+  function prettySize(bytes){
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+    return (bytes/1024/1024).toFixed(2) + ' MB';
+  }
+
+  function acceptFile(file){
+    if (!file) return false;
+    const okExt = /\.ipynb$/i.test(file.name);
+    const okMime = ['application/x-ipynb+json','application/json'].includes(file.type) || file.type === '';
+    if (!okExt && !okMime){
+      setStatus('Please choose a .ipynb file.', true);
+      return false;
+    }
+    if (file.size > MAX_BYTES){
+      setStatus('File is too large (>5MB). Consider clearing outputs.', true);
+      return false;
+    }
+    return true;
+  }
+
+  function showFile(file){
+    if (!file){ dzFile.textContent = ''; return; }
+    dzFile.textContent = file.name + ' — ' + prettySize(file.size);
+    // If title is empty, suggest from filename
+    if (!titleEl.value.trim()){
+      const noExt = file.name.replace(/\.ipynb$/i,'');
+      titleEl.value = noExt;
+    }
+    setStatus('');
+  }
+
+  function updateSubmitState(){
+    const hasTitle = !!titleEl.value.trim();
+    const hasFile  = fileEl.files && fileEl.files.length > 0;
+    const hasJson  = !!(jsonEl && jsonEl.value.trim());
+    createBt.disabled = !(hasTitle && (hasFile || hasJson));
+  }
+
+  // Drag & drop handlers
+  ['dragenter','dragover'].forEach(ev =>
+    dz.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); })
+  );
+  ['dragleave','drop'].forEach(ev =>
+    dz.addEventListener(ev, (e)=>{ e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover'); })
+  );
+  dz.addEventListener('click', ()=> fileEl.click());
+  dz.addEventListener('keydown', (e)=>{ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileEl.click(); }});
+  dz.addEventListener('drop', (e)=>{
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    if (!acceptFile(f)) { fileEl.value = ''; showFile(null); updateSubmitState(); return; }
+    // Assign to hidden input
+    fileEl.files = e.dataTransfer.files;
+    showFile(f); updateSubmitState();
+  });
+
+  // Native file chooser
+  fileEl.addEventListener('change', ()=>{
+    const f = fileEl.files && fileEl.files[0];
+    if (!acceptFile(f)) { fileEl.value=''; showFile(null); }
+    else { showFile(f); }
+    updateSubmitState();
+  });
+
+  // Keep submit state in sync
+  titleEl.addEventListener('input', updateSubmitState);
+  if (jsonEl) jsonEl.addEventListener('input', ()=>{
+    // If JSON is present, we allow submit even without a file
+    updateSubmitState();
+  });
+
+  // Clear form
+  clearBt.addEventListener('click', ()=>{
+    form.reset();
+    fileEl.value = '';
+    showFile(null);
+    setStatus('');
+    updateSubmitState();
+  });
+
+  // Final client-side validation on submit
+  form.addEventListener('submit', (e)=>{
+    if (jsonEl && jsonEl.value.trim()){
+      setStatus('Creating from JSON…');
+      return;
+    }
+    const f = fileEl.files && fileEl.files[0];
+    if (!f){
+      e.preventDefault(); setStatus('Please choose a .ipynb file.', true); return;
+    }
+    if (!acceptFile(f)){
+      e.preventDefault(); return;
+    }
+    setStatus('Uploading…');
+  });
+
+  // Initialize state
+  updateSubmitState();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Submissions — {{ hw.title }}</h2>
+
+<p>
+  <a class="btn" href="{{ url_for('homework_share', code=hw.code) }}">Share</a>
+</p>
+
+<table class="table">
+  <thead>
+    <tr>
+      <th>Student</th>
+      <th>Filename</th>
+      <th>Last Updated</th>
+      <th>Submitted At</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for it in items %}
+    <tr>
+      <td>{{ it.student_name }}</td>
+      <td>{{ it.filename }}</td>
+      <td>{{ it.updated_at }}</td>
+      <td>
+        {% if it.submitted_at %}
+          <span style="color:#4caf50;">{{ it.submitted_at }}</span>
+        {% else %}
+          <span style="color:#ff8a80;">Not submitted</span>
+        {% endif %}
+      </td>
+      <td>
+        <a class="btn" href="{{ url_for('admin_jlite') }}?import_nb={{ it.notebook_id }}">Open in Jupyter</a>
+        <a class="btn" href="{{ url_for('admin_download_notebook', nb_id=it.notebook_id) }}">Download</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
