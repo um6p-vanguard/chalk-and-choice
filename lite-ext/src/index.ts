@@ -160,6 +160,7 @@ async function importFromServer(app: JupyterFrontEnd, docManager: IDocumentManag
   const nb = data.content as nbformat.INotebookContent;
 
   const md = (nb.metadata ?? {}) as any;
+  // IMPORTANT: Set chalk_id so subsequent saves update the same notebook instead of creating duplicates
   md.chalk_id = id;
   nb.metadata = md;
 

@@ -165,6 +165,8 @@
     const data = await r.json();
     const nb = data.content || {};
     nb.metadata = nb.metadata || {};
+    // IMPORTANT: Set chalk_id so subsequent saves update the same notebook instead of creating duplicates
+    nb.metadata.chalk_id = nbId;
     // Use stored filename (or metadata), not imported-*.ipynb
     const desired = sanitizeName(data.name || nb.metadata.chalk_name || `Notebook-${nbId}.ipynb`);
     const contents = app.serviceManager.contents;
