@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .mentor-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .mentor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: start;
+    gap: 16px;
+    margin-bottom: 12px;
+  }
+  .mentor-info {
+    flex: 1;
+    min-width: 0; /* Allow shrinking for text overflow */
+  }
+  .mentor-name {
+    margin: 0 0 8px 0;
+    font-size: 1.25rem;
+  }
+  .mentor-email {
+    margin: 0;
+    word-break: break-word;
+    overflow-wrap: break-word;
+    font-family: 'Courier New', monospace;
+    font-size: 0.875rem;
+    padding: 6px 10px;
+    background: #0b1220;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    display: inline-block;
+    max-width: 100%;
+  }
+  .login-badge {
+    margin: 8px 0 0 0;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .status-badge {
+    display: inline-block;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .status-active {
+    background: #10b981;
+    color: #064e3b;
+  }
+  .status-inactive {
+    background: #6b7280;
+    color: #1f2937;
+  }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .stat-box {
+    background: #0b1220;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .stat-label {
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  .stat-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--brand);
+  }
+  .alert {
+    padding: 16px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    border: 1px solid;
+  }
+  .alert-success {
+    background: #064e3b;
+    border-color: #10b981;
+    color: #6ee7b7;
+  }
+  .alert-error {
+    background: #7f1d1d;
+    border-color: var(--danger);
+    color: #fca5a5;
+  }
+  .password-display {
+    background: #0b1220;
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--brand);
+    font-family: monospace;
+    word-break: break-all;
+  }
+  .action-buttons {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .add-mentor-form {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .add-mentor-form h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    color: var(--text);
+  }
+  .form-group {
+    margin-bottom: 16px;
+  }
+  .form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: #cbd5e1;
+  }
+  .form-group input[type="text"],
+  .form-group input[type="email"] {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #0b1220;
+    color: var(--text);
+    font-size: 1rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .form-group input[type="text"]:focus,
+  .form-group input[type="email"]:focus {
+    outline: none;
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(99, 127, 190, 0.1);
+  }
+  .form-group input[type="email"] {
+    font-family: 'Courier New', monospace;
+  }
+  .form-hint {
+    margin-top: 16px;
+    padding: 12px;
+    background: #0b1220;
+    border-left: 3px solid var(--brand);
+    border-radius: 6px;
+    font-size: 0.875rem;
+    color: var(--muted);
+  }
+  .form-hint strong {
+    color: var(--brand);
+  }
+</style>
+
+<h2>Mentor Management</h2>
+
+{% if session.get('new_mentor_password') %}
+<div class="alert alert-success">
+  <h3 style="margin-top:0;">✓ Mentor Account Created</h3>
+  <p><strong>Name:</strong> {{ session.new_mentor_password.name }}</p>
+  <p><strong>Email:</strong> {{ session.new_mentor_password.email }}</p>
+  <p><strong>Temporary Password:</strong></p>
+  <div class="password-display">{{ session.new_mentor_password.password }}</div>
+  <p style="margin-bottom:0; margin-top:12px; color: var(--warn);">
+    ⚠️ Save this password now! It will not be shown again. The mentor must change it on first login.
+  </p>
+</div>
+{% set _ = session.pop('new_mentor_password') %}
+{% endif %}
+
+{% if session.get('error') %}
+<div class="alert alert-error">
+  {{ session.error }}
+</div>
+{% set _ = session.pop('error') %}
+{% endif %}
+
+{% if user.role == 'admin' %}
+<div class="add-mentor-form">
+  <h3>➕ Add New Mentor</h3>
+  <form method="post" action="{{ url_for('mentors_add') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    
+    <div class="form-group">
+      <label for="mentor-name">Full Name</label>
+      <input type="text" id="mentor-name" name="name" placeholder="e.x: hamid lol" required>
+    </div>
+    
+    <div class="form-group">
+      <label for="mentor-email">Email Address</label>
+      <input type="email" id="mentor-email" name="email" placeholder="e.x: lol@example.com" required>
+    </div>
+    
+    <button type="submit" class="btn btn-primary">Create Mentor Account</button>
+    
+    <div class="form-hint">
+      <strong>ℹ️ Note:</strong> A secure random password will be generated and displayed once. Make sure to copy it before leaving this page. The mentor will be required to change it on first login.
+    </div>
+  </form>
+</div>
+
+<h3>All Mentors ({{ mentor_stats|length }})</h3>
+
+{% for item in mentor_stats %}
+<div class="mentor-card">
+  <div class="mentor-header">
+    <div class="mentor-info">
+      <h3 class="mentor-name">{{ item.mentor.name }}</h3>
+      <div class="mentor-email">{{ item.mentor.email }}</div>
+      {% if item.has_account %}
+      <div class="login-badge muted">
+        <span>🔑</span>
+        <span>Login enabled: {{ item.user_email }}</span>
+      </div>
+      {% else %}
+      <div class="login-badge" style="color: var(--warn);">
+        <span>⚠️</span>
+        <span>No user account</span>
+      </div>
+      {% endif %}
+    </div>
+    <div>
+      <span class="status-badge {% if item.mentor.is_active %}status-active{% else %}status-inactive{% endif %}">
+        {% if item.mentor.is_active %}Active{% else %}Inactive{% endif %}
+      </span>
+    </div>
+  </div>
+  
+  <div class="stats-grid">
+    <div class="stat-box">
+      <div class="stat-label">Total Assigned</div>
+      <div class="stat-value">{{ item.total_assigned }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Submitted</div>
+      <div class="stat-value">{{ item.submitted }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Accepted</div>
+      <div class="stat-value" style="color: #7cc5ff;">{{ item.accepted }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Rejected</div>
+      <div class="stat-value" style="color: #ff9f97;">{{ item.rejected }}</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-label">Reopened</div>
+      <div class="stat-value" style="color: #ffd77a;">{{ item.reopened }}</div>
+    </div>
+  </div>
+  
+  <div class="action-buttons">
+    <form method="post" action="{{ url_for('mentors_toggle', mentor_id=item.mentor.id) }}" style="display: inline;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn">
+        {% if item.mentor.is_active %}Deactivate{% else %}Activate{% endif %}
+      </button>
+    </form>
+    
+    {% if item.total_assigned == 0 %}
+    <form method="post" action="{{ url_for('mentors_delete', mentor_id=item.mentor.id) }}" 
+          onsubmit="return confirm('Delete mentor {{ item.mentor.name }}? This cannot be undone.');"
+          style="display: inline;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-danger">Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+{% else %}
+<!-- Instructor view (basic) -->
+<h3>Mentors ({{ mentors|length }})</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>Email</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for mentor in mentors %}
+    <tr>
+      <td>{{ mentor.name }}</td>
+      <td>{{ mentor.email }}</td>
+      <td>
+        <span class="status-badge {% if mentor.is_active %}status-active{% else %}status-inactive{% endif %}">
+          {% if mentor.is_active %}Active{% else %}Inactive{% endif %}
+        </span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% endblock %}

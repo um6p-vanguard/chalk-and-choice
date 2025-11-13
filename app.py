@@ -11,7 +11,7 @@ from sqlalchemy import or_
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
                     StudentStats, Intervention, Notebook, StudentHomework,
-                    Homework)
+                    Homework, HomeworkMessage, Mentor)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -82,6 +82,13 @@ def current_student():
     sid = session.get("student_id")
     return Student.query.get(sid) if sid else None
 
+def current_mentor():
+    """Get the Mentor object if current user is a mentor"""
+    u = current_user()
+    if u and u.role == "mentor" and u.mentor_id:
+        return Mentor.query.get(u.mentor_id)
+    return None
+
 def logout_everyone():
     session.pop("user_id", None)
     session.pop("user_role", None)
@@ -89,15 +96,59 @@ def logout_everyone():
     session.pop("student_name", None)
     session.pop("must_change_pw", None)
 
+# --------------------------------------------------------------------
+# Mentor assignment helper (round-robin per homework)
+# --------------------------------------------------------------------
+def assign_mentor_to_homework(homework_id, student_homework_id):
+    """
+    Assign a mentor to a student homework using round-robin strategy.
+    Each homework has its own independent assignment sequence.
+    Returns the assigned Mentor object or None if no active mentors.
+    """
+    # Get all active mentors ordered by ID for consistent round-robin
+    active_mentors = Mentor.query.filter_by(is_active=True).order_by(Mentor.id).all()
+    
+    if not active_mentors:
+        return None
+    
+    # Count how many submissions for THIS homework already have mentors assigned
+    # This gives us the position in the round-robin sequence
+    assigned_count = (StudentHomework.query
+                      .filter_by(homework_id=homework_id)
+                      .filter(StudentHomework.assigned_mentor_id.isnot(None))
+                      .count())
+    
+    # Round-robin: use modulo to cycle through mentors
+    mentor_index = assigned_count % len(active_mentors)
+    assigned_mentor = active_mentors[mentor_index]
+    
+    # Update the student homework record
+    sh = StudentHomework.query.get(student_homework_id)
+    if sh:
+        sh.assigned_mentor_id = assigned_mentor.id
+        sh.assigned_at = datetime.now()
+        db.session.commit()
+    
+    return assigned_mentor
+
 def require_user(role=None):
+    """
+    Decorator to require user authentication.
+    If role is specified, checks if user has that role.
+    Role can be: 'admin', 'instructor', 'mentor', or a list like ['admin', 'instructor']
+    """
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             u = current_user()
             if not u:
                 return redirect(url_for("login", next=request.path))
-            if role and u.role != role:
-                abort(403)
+            if role:
+                if isinstance(role, list):
+                    if u.role not in role:
+                        abort(403)
+                elif u.role != role:
+                    abort(403)
             if session.get("student_id"):
                 logout_everyone()
                 return redirect(url_for("login"))
@@ -156,7 +207,7 @@ def try_restore_student_from_cookie():
 
 def _active_homeworks_for_student(student):
     """Return homeworks open for this student and not yet submitted by them."""
-    now = datetime.utcnow()  # naive UTC to match how you compare elsewhere
+    now = datetime.now()  # naive local time
     # Open window: (open_at is null or <= now) AND (due_at is null or >= now)
     open_q = (Homework.query
               .filter(or_(Homework.open_at == None, Homework.open_at <= now))
@@ -212,7 +263,7 @@ def login():
                 logout_everyone()
                 session["user_id"] = acct_user.id
                 session["user_role"] = acct_user.role
-                acct_user.last_login = datetime.utcnow()
+                acct_user.last_login = datetime.now()
                 db.session.commit()
                 if acct_user.first_login:
                     session["must_change_pw"] = {"kind": "user", "id": acct_user.id}
@@ -225,7 +276,7 @@ def login():
                 logout_everyone()
                 session["student_id"] = acct_student.id
                 session["student_name"] = acct_student.name
-                acct_student.last_login = datetime.utcnow()
+                acct_student.last_login = datetime.now()
                 db.session.commit()
                 if acct_student.first_login:
                     session["must_change_pw"] = {"kind": "student", "id": acct_student.id}
@@ -661,7 +712,7 @@ def spotlight_start():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
     if not iv.started_at:
-        iv.started_at = datetime.utcnow()
+        iv.started_at = datetime.now()
     iv.status = "running"
     db.session.commit()
     return jsonify({"ok": True})
@@ -678,7 +729,7 @@ def spotlight_complete():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
 
-    iv.ended_at = datetime.utcnow()
+    iv.ended_at = datetime.now()
     iv.status = "completed"
 
     # Update StudentStats
@@ -687,7 +738,7 @@ def spotlight_complete():
         ss = StudentStats(student_id=iv.student_id, times_spoken=0, current_round_done=False)
         db.session.add(ss)
     ss.times_spoken += 1
-    ss.last_spoken_at = datetime.utcnow()
+    ss.last_spoken_at = datetime.now()
     ss.current_round_done = True
 
     # Create peer-feedback poll (no correct answer)
@@ -765,7 +816,7 @@ def forms_new():
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    now = datetime.utcnow()
+    now = datetime.now()
     is_expired = bool(form.closes_at and form.closes_at <= now)
     is_open = bool(form.is_open and not is_expired)
     if not is_open:
@@ -850,7 +901,7 @@ def forms_close(code):
 def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
     
-    now = datetime.utcnow()
+    now = datetime.now()
     if not form.is_open or (form.closes_at and form.closes_at <= now):
         abort(403, description="Form is closed.")
     # Only students can submit
@@ -953,7 +1004,8 @@ def _parse_dt_local(s: str | None):
 @require_student()
 def notebooks_page():
     # Embeds JupyterLite (iframe). The plugin handles load/save.
-    return render_template("notebooks.html", user=current_user(), student_name=session.get("student_name"))
+    s = current_student()
+    return render_template("notebooks.html", student_name=s.name if s else session.get("student_name"))
 
 @app.route("/my-notebooks")
 @require_student()
@@ -964,7 +1016,7 @@ def my_notebooks_page():
             .order_by(Notebook.updated_at.desc())
             .all())
     items = []
-    now = datetime.utcnow()
+    now = datetime.now()
     for nb in rows:
         meta = (nb.content_json.get("metadata") or {})
         code = (meta.get("homework_code") or "").strip()
@@ -972,12 +1024,29 @@ def my_notebooks_page():
         submitted = False
         due_at = None
         can_submit = False
+        feedback = None
+        reopened = False
+        mentor_name = None
+        
         if code:
             hw = Homework.query.filter_by(code=code).first()
             sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first() if hw else None
-            submitted = bool(sh and sh.submitted_at)
-            due_at = hw.due_at if hw else None
-            can_submit = (not submitted) and (not due_at or now <= due_at)
+            if sh:
+                # Check if actually locked (submitted and not reopened)
+                is_locked = bool(sh.submitted_at and not sh.reopened_at)
+                submitted = is_locked
+                feedback = sh.feedback
+                reopened = bool(sh.reopened_at)
+                due_at = hw.due_at if hw else None
+                can_submit = (not is_locked) and (not due_at or now <= due_at)
+                # Get mentor info
+                if sh.assigned_mentor_id:
+                    mentor = Mentor.query.get(sh.assigned_mentor_id)
+                    mentor_name = mentor.name if mentor else None
+            else:
+                due_at = hw.due_at if hw else None
+                can_submit = (not due_at or now <= due_at)
+                
         items.append({
             "id": nb.id,
             "name": fname,
@@ -986,9 +1055,12 @@ def my_notebooks_page():
             "homework_code": code if code else None,
             "submitted": submitted,
             "due_at": due_at,
-            "can_submit": can_submit
+            "can_submit": can_submit,
+            "feedback": feedback,
+            "reopened": reopened,
+            "mentor_name": mentor_name
         })
-    return render_template("my_notebooks.html", notebooks=items, user=current_user(), student_name=session.get("student_name"))
+    return render_template("my_notebooks.html", notebooks=items, student_name=s.name if s else session.get("student_name"))
 
 
 # -------------------------
@@ -996,8 +1068,11 @@ def my_notebooks_page():
 # -------------------------
 
 @app.get("/api/csrf")
-@require_student()
 def api_csrf():
+    """CSRF token endpoint - accessible to both students and instructors"""
+    # Require authentication but allow both user types
+    if not (current_user() or current_student()):
+        abort(401)
     return jsonify({"csrf": csrf_token()})
 
 # -------------------------
@@ -1031,6 +1106,23 @@ def notebooks_get(nb_id: int):
         raise NotFound()
     name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
     return jsonify({"id": nb.id, "name": name, "content": nb.content_json})
+
+@app.get("/api/notebooks/<int:nb_id>/student-homework-id")
+@require_student()
+def notebooks_get_student_homework_id(nb_id: int):
+    """Get the student_homework_id for a notebook if it's associated with a homework"""
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    
+    # Check if this notebook is associated with a homework
+    sh = StudentHomework.query.filter_by(notebook_id=nb.id, student_id=s.id).first()
+    
+    if sh:
+        return jsonify({"student_homework_id": sh.id})
+    else:
+        return jsonify({"student_homework_id": None})
 
 @app.post("/api/notebooks")
 @require_student()
@@ -1165,21 +1257,41 @@ def homework_list():
 @require_user()
 def homework_submissions(code):
     hw = Homework.query.filter_by(code=code).first_or_404()
-    # join StudentHomework -> Notebook -> Student for display
-    q = (db.session.query(StudentHomework, Notebook, Student)
+    u = current_user()
+    
+    # join StudentHomework -> Notebook -> Student -> Mentor for display
+    q = (db.session.query(StudentHomework, Notebook, Student, Mentor)
          .join(Notebook, Notebook.id == StudentHomework.notebook_id)
          .join(Student, Student.id == StudentHomework.student_id)
-         .filter(StudentHomework.homework_id == hw.id)
-         .order_by(StudentHomework.created_at.asc()))
+         .outerjoin(Mentor, Mentor.id == StudentHomework.assigned_mentor_id)
+         .filter(StudentHomework.homework_id == hw.id))
+    
+    # If user is a mentor, only show homework assigned to them
+    if u.role == "mentor":
+        m = current_mentor()
+        if m:
+            q = q.filter(StudentHomework.assigned_mentor_id == m.id)
+    
+    q = q.order_by(StudentHomework.created_at.asc())
     items = []
-    for sh, nb, st in q.all():
+    for sh, nb, st, mentor in q.all():
         items.append({
+            "student_homework_id": sh.id,
             "student_id": st.id,
             "student_name": st.name,
             "notebook_id": nb.id,
             "filename": _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb"),
             "updated_at": nb.updated_at,
-            "submitted_at": sh.submitted_at
+            "submitted_at": sh.submitted_at,
+            "feedback": sh.feedback,
+            "feedback_at": sh.feedback_at,
+            "reopened_at": sh.reopened_at,
+            "assigned_mentor": mentor.name if mentor else None,
+            "assigned_mentor_email": mentor.email if mentor else None,
+            "assigned_at": sh.assigned_at,
+            "acceptance_status": sh.acceptance_status,
+            "acceptance_comment": sh.acceptance_comment,
+            "reviewed_at": sh.reviewed_at
         })
     return render_template("homework_submissions.html", hw=hw, items=items, user=current_user(), student_name=session.get("student_name"))
 
@@ -1209,9 +1321,15 @@ def homework_open(code):
     hw = Homework.query.filter_by(code=code).first_or_404()
     s = current_student()
     sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
-    if sh and sh.submitted_at:
-        return render_template("homework_locked.html", hw=hw, user=current_user(), student_name=session.get("student_name"))
-    return render_template("homework_play.html", hw=hw, user=current_user(), student_name=session.get("student_name"))
+    
+    # Show locked page only if submitted AND not reopened
+    if sh and sh.submitted_at and not sh.reopened_at:
+        nb = Notebook.query.get(sh.notebook_id) if sh else None
+        mentor = Mentor.query.get(sh.assigned_mentor_id) if sh and sh.assigned_mentor_id else None
+        return render_template("homework_locked.html", hw=hw, sh=sh, nb=nb, mentor=mentor, student_name=s.name if s else session.get("student_name"))
+    
+    # If reopened or not yet submitted, allow access (pass sh for chat functionality)
+    return render_template("homework_play.html", hw=hw, sh=sh, student_name=s.name if s else session.get("student_name"))
 
 @app.get("/api/hw/<code>/my")
 @require_student()
@@ -1248,9 +1366,35 @@ def api_hw_my(code):
     return jsonify({
         "submitted": False,
         "notebook_id": nb.id,
+        "student_homework_id": sh.id,
         "name": name,
         "content": nb.content_json
     })
+
+@app.get("/api/hw/<code>/student-homework-id")
+@require_student()
+def api_hw_student_homework_id(code):
+    """Get the student_homework.id for chat functionality"""
+    hw = Homework.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
+    
+    if not sh:
+        # Create it if it doesn't exist (same as api_hw_my)
+        nb_json = json.loads(json.dumps(hw.template_json))
+        md = nb_json.get("metadata") or {}
+        if not md.get("chalk_name"):
+            md["chalk_name"] = f"{hw.title}-{s.name or s.id}.ipynb"
+            nb_json["metadata"] = md
+        md["homework_code"] = hw.code
+        nb = Notebook(student_id=s.id, content_json=nb_json)
+        db.session.add(nb)
+        db.session.flush()
+        sh = StudentHomework(homework_id=hw.id, student_id=s.id, notebook_id=nb.id)
+        db.session.add(sh)
+        db.session.commit()
+    
+    return jsonify({"student_homework_id": sh.id})
 
 @app.get("/api/hw/<code>/status")
 @require_student()
@@ -1259,8 +1403,22 @@ def api_hw_status(code):
     s = current_student()
     sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first()
     if not sh:
-        return jsonify({"exists": False, "submitted": False, "due_at": hw.due_at.isoformat() if hw.due_at else None})
-    return jsonify({"exists": True, "submitted": bool(sh.submitted_at), "due_at": hw.due_at.isoformat() if hw.due_at else None})
+        return jsonify({
+            "exists": False, 
+            "submitted": False, 
+            "reopened": False,
+            "due_at": hw.due_at.isoformat() if hw.due_at else None
+        })
+    
+    # If reopened, treat as not submitted for editing purposes
+    is_locked = bool(sh.submitted_at and not sh.reopened_at)
+    
+    return jsonify({
+        "exists": True, 
+        "submitted": is_locked,
+        "reopened": bool(sh.reopened_at),
+        "due_at": hw.due_at.isoformat() if hw.due_at else None
+    })
 
 
 @app.put("/api/hw/<code>/save")
@@ -1273,7 +1431,9 @@ def api_hw_save(code):
     hw = Homework.query.filter_by(code=code).first_or_404()
     s = current_student()
     sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first_or_404()
-    if sh.submitted_at:
+    
+    # Block saves only if submitted AND not reopened
+    if sh.submitted_at and not sh.reopened_at:
         abort(403, description="Already submitted")
 
     data = request.get_json(silent=True) or {}
@@ -1298,15 +1458,253 @@ def api_hw_submit(code):
     sh = StudentHomework.query.filter_by(homework_id=hw.id, student_id=s.id).first_or_404()
 
     # lock if past due
-    if hw.due_at and datetime.utcnow() > hw.due_at:
+    if hw.due_at and datetime.now() > hw.due_at:
         abort(403, description="Past due")
 
-    if sh.submitted_at:
+    # Allow resubmission if reopened (clear reopened timestamp on resubmit)
+    if sh.submitted_at and not sh.reopened_at:
         return jsonify({"ok": True, "already": True})
 
-    sh.submitted_at = datetime.utcnow()
+    # Assign mentor on FIRST submission only (mentor persists through reopens/resubmissions)
+    if not sh.assigned_mentor_id:
+        assigned_mentor = assign_mentor_to_homework(hw.id, sh.id)
+        mentor_info = {
+            "mentor_assigned": assigned_mentor is not None,
+            "mentor_name": assigned_mentor.name if assigned_mentor else None,
+            "mentor_email": assigned_mentor.email if assigned_mentor else None
+        }
+    else:
+        # Mentor already assigned (resubmission after reopen)
+        mentor = Mentor.query.get(sh.assigned_mentor_id)
+        mentor_info = {
+            "mentor_assigned": True,
+            "mentor_name": mentor.name if mentor else None,
+            "mentor_email": mentor.email if mentor else None,
+            "note": "Keeping existing mentor assignment"
+        }
+
+    sh.submitted_at = datetime.now()
+    sh.reopened_at = None  # Clear reopened flag on resubmission
     db.session.commit()
-    return jsonify({"ok": True})
+    
+    return jsonify({"ok": True, **mentor_info})
+
+
+# Admin: Add feedback to student homework
+@app.post("/api/homework/submission/<int:sh_id>/feedback")
+@require_user()
+def api_homework_add_feedback(sh_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    data = request.get_json(silent=True) or {}
+    feedback_text = (data.get("feedback") or "").strip()
+    
+    if not feedback_text:
+        abort(400, description="Feedback text required")
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    u = current_user()
+    
+    sh.feedback = feedback_text
+    sh.feedback_by_user_id = u.id
+    sh.feedback_at = datetime.now()
+    db.session.commit()
+    
+    return jsonify({"ok": True, "feedback_at": sh.feedback_at.isoformat()})
+
+
+# Admin: Reopen homework for a student
+@app.post("/api/homework/submission/<int:sh_id>/reopen")
+@require_user()
+def api_homework_reopen(sh_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    u = current_user()
+    
+    # Clear submission timestamp to allow re-editing
+    sh.submitted_at = None
+    sh.reopened_at = datetime.now()
+    sh.reopened_by_user_id = u.id
+    db.session.commit()
+    
+    return jsonify({"ok": True, "reopened_at": sh.reopened_at.isoformat()})
+
+
+# Get chat messages for homework submission (only student and assigned mentor can access)
+@app.get("/api/homework/submission/<int:sh_id>/messages")
+def api_homework_messages(sh_id: int):
+    u = current_user()
+    s = current_student()
+    
+    if not (u or s):
+        abort(401)
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    
+    # Students can only see their own homework messages
+    if s and sh.student_id != s.id:
+        abort(403)
+    
+    # Mentors can only see messages for homework assigned to them
+    if u and u.role == "mentor":
+        mentor = current_mentor()
+        if not mentor or sh.assigned_mentor_id != mentor.id:
+            abort(403, description="You can only view messages for homework assigned to you")
+    
+    # Admins and regular instructors cannot access chat (privacy between student and mentor)
+    if u and u.role in ["admin", "instructor"]:
+        abort(403, description="Chat is private between student and assigned mentor")
+    
+    messages = HomeworkMessage.query.filter_by(student_homework_id=sh_id)\
+                                    .order_by(HomeworkMessage.created_at.asc())\
+                                    .all()
+    
+    # Count unread messages for the current user
+    unread_count = 0
+    if s:
+        # For student: count mentor messages that are newer than last read
+        unread_count = sum(1 for msg in messages 
+                          if msg.sender_type == 'mentor' 
+                          and (not msg.student_read_at or msg.created_at > msg.student_read_at))
+    elif u and u.role == "mentor":
+        # For mentor: count student messages that are newer than last read
+        unread_count = sum(1 for msg in messages 
+                          if msg.sender_type == 'student' 
+                          and (not msg.instructor_read_at or msg.created_at > msg.instructor_read_at))
+    
+    return jsonify({
+        "messages": [{
+            "id": msg.id,
+            "sender_type": msg.sender_type,
+            "sender_name": msg.sender_name,
+            "message": msg.message,
+            "created_at": msg.created_at.isoformat()
+        } for msg in messages],
+        "unread_count": unread_count
+    })
+
+
+
+# Mark messages as read
+@app.post("/api/homework/submission/<int:sh_id>/messages/mark-read")
+def api_homework_mark_messages_read(sh_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    u = current_user()
+    s = current_student()
+    
+    if not (u or s):
+        abort(401)
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    
+    # Students can only mark their own homework
+    if s and sh.student_id != s.id:
+        abort(403)
+    
+    # Mentors can only mark messages for homework assigned to them
+    if u and u.role == "mentor":
+        mentor = current_mentor()
+        if not mentor or sh.assigned_mentor_id != mentor.id:
+            abort(403, description="You can only access homework assigned to you")
+    
+    # Admins and instructors cannot access chat
+    if u and u.role in ["admin", "instructor"]:
+        abort(403, description="Chat is private between student and assigned mentor")
+    
+    now = datetime.now()
+    
+    # Update all messages for this homework
+    messages = HomeworkMessage.query.filter_by(student_homework_id=sh_id).all()
+    
+    for msg in messages:
+        if s:
+            # Student marking as read
+            msg.student_read_at = now
+        elif u and u.role == "mentor":
+            # Mentor marking as read
+            msg.instructor_read_at = now
+    
+    db.session.commit()
+    
+    return jsonify({"ok": True, "marked_at": now.isoformat()})
+
+
+# Send a message (only student or assigned mentor)
+@app.post("/api/homework/submission/<int:sh_id>/messages")
+def api_homework_send_message(sh_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    u = current_user()
+    s = current_student()
+    
+    if not (u or s):
+        abort(401)
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    
+    # Students can only message on their own homework
+    if s and sh.student_id != s.id:
+        abort(403)
+    
+    # Mentors can only message for homework assigned to them
+    if u and u.role == "mentor":
+        mentor = current_mentor()
+        if not mentor or sh.assigned_mentor_id != mentor.id:
+            abort(403, description="You can only message on homework assigned to you")
+    
+    # Admins and instructors cannot send messages
+    if u and u.role in ["admin", "instructor"]:
+        abort(403, description="Only the assigned mentor can message students about their homework")
+    
+    data = request.get_json(silent=True) or {}
+    message_text = (data.get("message") or "").strip()
+    
+    if not message_text:
+        abort(400, description="Message text required")
+    
+    # Create message
+    if u and u.role == "mentor":
+        # Mentor sending message
+        msg = HomeworkMessage(
+            student_homework_id=sh_id,
+            sender_type="mentor",
+            sender_user_id=u.id,
+            sender_name=u.name,
+            message=message_text
+        )
+    else:
+        # Student sending message
+        msg = HomeworkMessage(
+            student_homework_id=sh_id,
+            sender_type="student",
+            sender_student_id=s.id,
+            sender_name=s.name,
+            message=message_text
+        )
+    
+    db.session.add(msg)
+    db.session.commit()
+    
+    return jsonify({
+        "ok": True,
+        "message": {
+            "id": msg.id,
+            "sender_type": msg.sender_type,
+            "sender_name": msg.sender_name,
+            "message": msg.message,
+            "created_at": msg.created_at.isoformat()
+        }
+    })
 
 
 # Admin: open notebook JSON (for JupyterLite import)
@@ -1366,7 +1764,7 @@ def signals_stream():
         last_blob = None
         try:
             while True:
-                now = datetime.utcnow()
+                now = datetime.now()
                 since = now - timedelta(minutes=5)
                 ok = LectureSignal.query.filter(
                     LectureSignal.created_at >= since,
@@ -1436,7 +1834,7 @@ def signals_clear():
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
-    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    cutoff = datetime.now() - timedelta(minutes=5)
     # delete older-than-window to “reset” live meters
     LectureSignal.query.filter(LectureSignal.created_at < cutoff).delete(synchronize_session=False)
     db.session.commit()
@@ -1484,7 +1882,7 @@ def question_post():
     # Optional: simple per-student throttle (1 question / 60s)
     recent = LectureQuestion.query.filter(
         LectureQuestion.student_id == stu.id,
-        LectureQuestion.created_at >= datetime.utcnow() - timedelta(seconds=60)
+        LectureQuestion.created_at >= datetime.now() - timedelta(seconds=60)
     ).first()
     if recent:
         return jsonify({"ok": False, "error": "rate_limited"}), 429
@@ -1513,9 +1911,268 @@ def export_csv(code):
 def thanks():
     return render_template("thanks.html", user=current_user(), student_name=session.get("student_name"))
 
+# --------------------------------------------------------------------
+# Mentor Management
+# --------------------------------------------------------------------
+@app.route("/mentors")
+@require_user()
+def mentors_list():
+    u = current_user()
+    
+    # If user is a mentor, redirect to their profile page
+    if u.role == "mentor":
+        return redirect(url_for("mentor_profile"))
+    
+    # Admin can see full details
+    if u.role == "admin":
+        mentors = Mentor.query.order_by(Mentor.name).all()
+        
+        # Get stats for each mentor
+        mentor_stats = []
+        for m in mentors:
+            total_assigned = StudentHomework.query.filter_by(assigned_mentor_id=m.id).count()
+            submitted = StudentHomework.query.filter(
+                StudentHomework.assigned_mentor_id == m.id,
+                StudentHomework.submitted_at.isnot(None)
+            ).count()
+            
+            # Count accepted homework
+            accepted = StudentHomework.query.filter(
+                StudentHomework.assigned_mentor_id == m.id,
+                StudentHomework.acceptance_status == 'accepted'
+            ).count()
+            
+            # Count rejected homework
+            rejected = StudentHomework.query.filter(
+                StudentHomework.assigned_mentor_id == m.id,
+                StudentHomework.acceptance_status == 'rejected'
+            ).count()
+            
+            # Count reopened homework (homework that has been reopened at least once)
+            reopened = StudentHomework.query.filter(
+                StudentHomework.assigned_mentor_id == m.id,
+                StudentHomework.reopened_at.isnot(None)
+            ).count()
+            
+            # Check if mentor has user account
+            user_account = User.query.filter_by(mentor_id=m.id, role="mentor").first()
+            
+            mentor_stats.append({
+                "mentor": m,
+                "total_assigned": total_assigned,
+                "submitted": submitted,
+                "accepted": accepted,
+                "rejected": rejected,
+                "reopened": reopened,
+                "has_account": bool(user_account),
+                "user_email": user_account.email if user_account else None
+            })
+        
+        return render_template("mentors_list.html", 
+                             mentor_stats=mentor_stats, 
+                             user=u, 
+                             student_name=session.get("student_name"))
+    
+    # Instructors see basic list
+    mentors = Mentor.query.order_by(Mentor.name).all()
+    return render_template("mentors_list.html", 
+                         mentors=mentors, 
+                         user=u, 
+                         student_name=session.get("student_name"))
+
+@app.route("/mentor/profile")
+@require_user(role="mentor")
+def mentor_profile():
+    u = current_user()
+    m = current_mentor()
+    
+    if not m:
+        abort(404, description="Mentor profile not found")
+    
+    # Get mentor's assignments
+    assignments = (db.session.query(StudentHomework, Notebook, Student, Homework)
+                   .join(Notebook, Notebook.id == StudentHomework.notebook_id)
+                   .join(Student, Student.id == StudentHomework.student_id)
+                   .join(Homework, Homework.id == StudentHomework.homework_id)
+                   .filter(StudentHomework.assigned_mentor_id == m.id)
+                   .order_by(StudentHomework.submitted_at.desc())
+                   .all())
+    
+    items = []
+    for sh, nb, st, hw in assignments:
+        items.append({
+            "student_homework_id": sh.id,
+            "student_name": st.name,
+            "homework_title": hw.title,
+            "homework_code": hw.code,
+            "notebook_id": nb.id,
+            "submitted_at": sh.submitted_at,
+            "feedback": sh.feedback,
+            "feedback_at": sh.feedback_at,
+            "acceptance_status": sh.acceptance_status,
+            "acceptance_comment": sh.acceptance_comment,
+            "reviewed_at": sh.reviewed_at,
+        })
+    
+    return render_template("mentor_profile.html", 
+                         mentor=m, 
+                         assignments=items,
+                         user=u, 
+                         student_name=session.get("student_name"))
+
+@app.post("/mentor/toggle-active")
+@require_user(role="mentor")
+def mentor_toggle_active():
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    m = current_mentor()
+    if not m:
+        abort(404)
+    
+    m.is_active = not m.is_active
+    db.session.commit()
+    
+    return redirect(url_for("mentor_profile"))
+
+@app.post("/api/mentor/homework/<int:sh_id>/review")
+@require_user(role="mentor")
+def mentor_review_homework(sh_id: int):
+    """Mentor accepts or rejects a homework submission"""
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    u = current_user()
+    m = current_mentor()
+    
+    if not m:
+        abort(404, description="Mentor profile not found")
+    
+    sh = StudentHomework.query.get_or_404(sh_id)
+    
+    # Verify this homework is assigned to this mentor
+    if sh.assigned_mentor_id != m.id:
+        abort(403, description="You can only review homework assigned to you")
+    
+    # Verify homework is submitted
+    if not sh.submitted_at:
+        abort(400, description="Homework must be submitted before review")
+    
+    data = request.get_json(silent=True) or {}
+    status = data.get("status")  # "accepted" or "rejected"
+    comment = (data.get("comment") or "").strip()
+    
+    if status not in ["accepted", "rejected"]:
+        abort(400, description="Status must be 'accepted' or 'rejected'")
+    
+    sh.acceptance_status = status
+    sh.acceptance_comment = comment if comment else None
+    sh.reviewed_at = datetime.now()
+    sh.reviewed_by_user_id = u.id
+    db.session.commit()
+    
+    return jsonify({
+        "ok": True,
+        "status": status,
+        "reviewed_at": sh.reviewed_at.isoformat()
+    })
+
+@app.post("/mentors/add")
+@require_user(role="admin")
+def mentors_add():
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    name = (request.form.get("name") or "").strip()
+    email = (request.form.get("email") or "").strip().lower()
+    
+    if not name or not email:
+        session["error"] = "Name and email required"
+        return redirect(url_for("mentors_list"))
+    
+    # Check if email already exists in mentors or users
+    existing_mentor = Mentor.query.filter_by(email=email).first()
+    existing_user = User.query.filter_by(email=email).first()
+    
+    if existing_mentor or existing_user:
+        session["error"] = "Email already exists"
+        return redirect(url_for("mentors_list"))
+    
+    # Generate random password
+    import secrets, string
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(secrets.choice(alphabet) for _ in range(12))
+    
+    # Create mentor entry
+    mentor = Mentor(name=name, email=email, is_active=True, first_login=True)
+    mentor.set_password(password)
+    db.session.add(mentor)
+    db.session.flush()
+    
+    # Create user account with mentor role
+    user = User(
+        name=name,
+        email=email,
+        role="mentor",
+        first_login=True,
+        mentor_id=mentor.id
+    )
+    user.set_password(password)
+    db.session.add(user)
+    db.session.commit()
+    
+    # Store password in session to show once
+    session["new_mentor_password"] = {
+        "email": email,
+        "password": password,
+        "name": name
+    }
+    
+    return redirect(url_for("mentors_list"))
+
+@app.post("/mentors/<int:mentor_id>/toggle")
+@require_user(role="admin")
+def mentors_toggle(mentor_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    mentor = Mentor.query.get_or_404(mentor_id)
+    mentor.is_active = not mentor.is_active
+    db.session.commit()
+    
+    return redirect(url_for("mentors_list"))
+
+@app.post("/mentors/<int:mentor_id>/delete")
+@require_user(role="admin")
+def mentors_delete(mentor_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    mentor = Mentor.query.get_or_404(mentor_id)
+    
+    # Check if mentor has assignments
+    assignment_count = StudentHomework.query.filter_by(assigned_mentor_id=mentor_id).count()
+    if assignment_count > 0:
+        session["error"] = f"Cannot delete mentor with {assignment_count} homework assignments. Deactivate instead."
+        return redirect(url_for("mentors_list"))
+    
+    # Delete associated user account if exists
+    user_account = User.query.filter_by(mentor_id=mentor_id, role="mentor").first()
+    if user_account:
+        db.session.delete(user_account)
+    
+    db.session.delete(mentor)
+    db.session.commit()
+    
+    return redirect(url_for("mentors_list"))
+
 @app.route("/dashboard")
 @require_user()
 def dashboard_for_role():
+    u = current_user()
+    if u.role == "mentor":
+        return redirect(url_for("mentor_profile"))
     return redirect(url_for("poll_list"))
 
 @app.route("/student")

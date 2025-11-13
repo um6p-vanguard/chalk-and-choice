@@ -1,6 +1,371 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>{{ hw.title }}</h2>
-<p>Your submission is complete. This homework is locked.</p>
-<a class="btn" href="{{ url_for('index') }}">Back to dashboard</a>
+
+<style>
+  .homework-status {
+    max-width: 800px;
+    margin: 20px auto;
+  }
+  .status-card {
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .status-badge {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .status-submitted {
+    background: rgba(76,175,80,.18);
+    color: #b6f5b7;
+  }
+  .status-reopened {
+    background: rgba(255,193,7,.16);
+    color: #ffd77a;
+  }
+
+  /* Chat styles */
+  .chat-container {
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    padding: 20px;
+    margin-top: 16px;
+  }
+  .chat-header {
+    color: #9ecbff;
+    font-weight: 600;
+    margin-bottom: 16px;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .chat-messages {
+    max-height: 500px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: #0a1018;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,.04);
+  }
+  .chat-message {
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-message.instructor {
+    align-items: flex-start;
+  }
+  .chat-message.student {
+    align-items: flex-end;
+  }
+  .message-bubble {
+    max-width: 75%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .chat-message.instructor .message-bubble {
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    color: #e6f2f8;
+    border-bottom-left-radius: 4px;
+  }
+  .chat-message.student .message-bubble {
+    background: #1a3a4a;
+    border: 1px solid rgba(99,127,190,.3);
+    color: #e6f2f8;
+    border-bottom-right-radius: 4px;
+  }
+  .message-meta {
+    font-size: 11px;
+    color: #9bb2c4;
+    margin-top: 4px;
+    padding: 0 4px;
+  }
+  .chat-input-area {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1;
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #e6f2f8;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 42px;
+    max-height: 150px;
+  }
+  .chat-input:focus {
+    outline: none;
+    border-color: #637FBE;
+  }
+  .send-btn {
+    background: #637FBE;
+    border: none;
+    color: #0b1120;
+    font-weight: 600;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .send-btn:hover {
+    background: #5775B8;
+  }
+  .send-btn:disabled {
+    background: #334155;
+    color: #64748b;
+    cursor: not-allowed;
+  }
+  .empty-chat {
+    text-align: center;
+    color: #9bb2c4;
+    padding: 40px 20px;
+    font-style: italic;
+  }
+</style>
+
+<div class="homework-status">
+  <div class="status-card">
+    <h2>{{ hw.title }}</h2>
+    
+    {% if sh.reopened_at %}
+      <p>
+        <span class="status-badge status-reopened">Reopened for Modifications</span>
+      </p>
+      <p style="color: #e6f2f8;">
+        Your instructor has reopened this homework. You can now make changes and resubmit.
+      </p>
+      <p style="color: #9bb2c4; font-size: 14px;">
+        Reopened on: {{ sh.reopened_at.strftime('%Y-%m-%d %H:%M') if sh.reopened_at else 'N/A' }}
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <a class="btn" href="{{ url_for('homework_open', code=hw.code) }}">Continue Working</a>
+        {% if nb %}
+        <a class="btn" href="{{ url_for('notebooks_page') }}?import={{ nb.id }}">Open in Notebook Editor</a>
+        {% endif %}
+      </div>
+    {% else %}
+      <p>
+        <span class="status-badge status-submitted">Submitted</span>
+      </p>
+      <p style="color: #e6f2f8;">
+        Your submission is complete. This homework is currently locked.
+      </p>
+      <p style="color: #9bb2c4; font-size: 14px;">
+        Submitted on: {{ sh.submitted_at.strftime('%Y-%m-%d %H:%M') if sh.submitted_at else 'N/A' }}
+      </p>
+      {% if mentor %}
+      <p style="color: #9bb2c4; font-size: 14px; margin-top: 8px;">
+        <span style="color: #9ecbff;">Assigned Mentor:</span> {{ mentor.name }} ({{ mentor.email }})
+      </p>
+      {% endif %}
+      {% if nb %}
+      <p style="color: #9bb2c4; font-size: 14px; margin-top: 12px;">
+        You can view your submission (read-only):
+      </p>
+      <div style="margin-top: 8px;">
+        <a class="btn" href="{{ url_for('notebooks_page') }}?import={{ nb.id }}">View Submission</a>
+      </div>
+      {% endif %}
+    {% endif %}
+
+    <div style="margin-top: 20px;">
+      <a class="btn" href="{{ url_for('index') }}">Back to Dashboard</a>
+    </div>
+  </div>
+
+  <!-- Chat Interface -->
+  <div class="chat-container">
+    <div class="chat-header">
+      💬 Feedback & Discussion with Your Mentor
+      {% if mentor %}
+        <span style="font-size: 14px; color: #9bb2c4; font-weight: normal;">({{ mentor.name }})</span>
+      {% endif %}
+    </div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="empty-chat">Loading messages...</div>
+    </div>
+    <div class="chat-input-area">
+      <textarea 
+        id="messageInput" 
+        class="chat-input" 
+        placeholder="Type your message..."
+        rows="1"
+      ></textarea>
+      <button id="sendBtn" class="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const shId = {{ sh.id }};
+  let isLoading = false;
+
+  async function getCSRF(){
+    try {
+      const r = await fetch("{{ url_for('api_csrf') }}", {credentials:"same-origin"});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      return j.csrf;
+    } catch(e) {
+      console.error('CSRF error:', e);
+      throw e;
+    }
+  }
+
+  function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function renderMessages(messages) {
+    const container = document.getElementById('chatMessages');
+    
+    if (messages.length === 0) {
+      container.innerHTML = '<div class="empty-chat">No messages yet. Start the conversation!</div>';
+      return;
+    }
+
+    container.innerHTML = messages.map(msg => `
+      <div class="chat-message ${msg.sender_type}">
+        <div class="message-bubble">${escapeHtml(msg.message)}</div>
+        <div class="message-meta">
+          ${msg.sender_name} • ${formatTime(msg.created_at)}
+        </div>
+      </div>
+    `).join('');
+    
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function loadMessages() {
+    try {
+      const res = await fetch(`/api/homework/submission/${shId}/messages`, {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderMessages(data.messages);
+      
+      // Mark as read after viewing
+      if (data.unread_count > 0) {
+        setTimeout(markMessagesAsRead, 2000);
+      }
+    } catch(e) {
+      console.error('Load messages error:', e);
+      document.getElementById('chatMessages').innerHTML = 
+        '<div class="empty-chat" style="color: #ff6b6b;">Failed to load messages</div>';
+    }
+  }
+
+  async function markMessagesAsRead() {
+    try {
+      const csrf = await getCSRF();
+      await fetch(`/api/homework/submission/${shId}/messages/mark-read`, {
+        method: 'POST',
+        headers: {
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin'
+      });
+    } catch(e) {
+      console.error('Mark read error:', e);
+    }
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message || isLoading) return;
+    
+    isLoading = true;
+    const sendBtn = document.getElementById('sendBtn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+    
+    try {
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/homework/submission/${shId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ message })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      input.value = '';
+      input.style.height = 'auto';
+      await loadMessages();
+    } catch(e) {
+      console.error('Send message error:', e);
+      alert('Failed to send message. Please try again.');
+    } finally {
+      isLoading = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+  }
+
+  // Event listeners
+  document.getElementById('sendBtn').addEventListener('click', sendMessage);
+  document.getElementById('messageInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // Auto-resize textarea
+  const textarea = document.getElementById('messageInput');
+  textarea.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+  });
+
+  // Load messages on page load
+  loadMessages();
+
+  // Poll for new messages every 10 seconds
+  setInterval(loadMessages, 10000);
+</script>
+
 {% endblock %}

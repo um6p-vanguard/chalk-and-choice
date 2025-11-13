@@ -1,25 +1,380 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  /* Main container that holds both notebook and chat */
+  .notebook-wrapper {
+    display: flex;
+    gap: 16px;
+    height: 82vh;
+    position: relative;
+  }
+
+  /* Notebook container - takes 70% width */
+  .notebook-panel {
+    flex: 0 0 70%;
+    position: relative;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .notebook-panel iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+
+  /* Chat panel - takes 30% width */
+  .chat-panel {
+    flex: 0 0 calc(30% - 16px);
+    display: flex;
+    flex-direction: column;
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  /* Fullscreen mode */
+  #notebook-container:fullscreen {
+    background: #0f172a;
+    padding: 10px;
+    height: 100vh;
+  }
+
+  #notebook-container:fullscreen .notebook-wrapper {
+    height: calc(100vh - 60px); /* Account for toolbar */
+  }
+
+  #notebook-container:fullscreen .notebook-panel {
+    flex: 0 0 70%;
+    border-radius: 8px;
+  }
+
+  #notebook-container:fullscreen .chat-panel {
+    flex: 0 0 calc(30% - 16px);
+  }
+
+  /* Styles for when chat is hidden */
+  .notebook-wrapper.chat-hidden .chat-panel {
+    display: none;
+  }
+
+  .notebook-wrapper.chat-hidden .notebook-panel {
+    flex-basis: 100%;
+  }
+
+  #notebook-container:fullscreen .notebook-wrapper.chat-hidden .notebook-panel {
+    flex-basis: 100%;
+  }
+
+  /* Toolbar in fullscreen */
+  .toolbar-fullscreen {
+    display: none;
+    padding: 10px;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  #notebook-container:fullscreen .toolbar-fullscreen {
+    display: flex;
+  }
+
+  /* Chat header */
+  .chat-header {
+    padding: 16px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    background: #0f1720;
+    flex-shrink: 0;
+  }
+
+  .chat-header h4 {
+    margin: 0;
+    color: #e6f2f8;
+    font-size: 15px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .chat-header h4 .emoji {
+    font-size: 20px;
+  }
+
+  .unread-badge {
+    background: #D95334;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  /* Chat messages - scrollable area */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    background: #0a1018;
+    border-radius: 10px;
+    margin: 12px;
+  }
+
+  /* Custom scrollbar for chat */
+  .chat-messages::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .chat-messages::-webkit-scrollbar-track {
+    background: rgba(255,255,255,.02);
+    border-radius: 4px;
+  }
+
+  .chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.1);
+    border-radius: 4px;
+  }
+
+  .chat-messages::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.15);
+  }
+
+  .chat-message {
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    animation: fadeIn 0.3s ease-in;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .chat-message.mentor {
+    align-items: flex-start;
+  }
+
+  .chat-message.student {
+    align-items: flex-end;
+  }
+
+  .message-bubble {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: 14px;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    font-size: 13.5px;
+    line-height: 1.5;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+
+  .chat-message.mentor .message-bubble {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+    color: #e0e7ff;
+    border-bottom-left-radius: 4px;
+  }
+
+  .chat-message.student .message-bubble {
+    background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+    color: #ccfbf1;
+    border-bottom-right-radius: 4px;
+  }
+
+  .message-meta {
+    font-size: 10px;
+    color: #9bb2c4;
+    margin-top: 6px;
+    padding: 0 4px;
+    font-weight: 500;
+  }
+
+  /* Chat input area */
+  .chat-input-area {
+    padding: 12px 16px 16px;
+    border-top: 1px solid rgba(255,255,255,.06);
+    background: #0f1720;
+    flex-shrink: 0;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+
+  .chat-input {
+    flex: 1;
+    background: #0a1018;
+    border: 1.5px solid rgba(255,255,255,.1);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: #e6f2f8;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    min-height: 46px;
+    max-height: 140px;
+    transition: all 0.2s;
+    line-height: 1.5;
+    overflow-y: hidden;
+  }
+
+  .chat-input::placeholder {
+    color: #6b7280;
+    font-size: 13.5px;
+  }
+
+  .chat-input:focus {
+    outline: none;
+    border-color: rgba(78,163,255,.6);
+    box-shadow: 0 0 0 4px rgba(78,163,255,.12);
+    background: #0d1520;
+  }
+
+  /* Show scrollbar only when needed */
+  .chat-input::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .chat-input::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .chat-input::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.15);
+    border-radius: 3px;
+  }
+
+  .chat-input::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.25);
+  }
+
+  .send-btn-chat {
+    background: linear-gradient(135deg, #4ea3ff 0%, #3b82f6 100%);
+    color: white;
+    border: none;
+    padding: 12px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    box-shadow: 0 2px 12px rgba(78,163,255,.25);
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 80px;
+  }
+
+  .send-btn-chat:hover:not(:disabled) {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(78,163,255,.4);
+  }
+
+  .send-btn-chat:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 12px rgba(78,163,255,.25);
+  }
+
+  .send-btn-chat:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: linear-gradient(135deg, #475569 0%, #334155 100%);
+    box-shadow: none;
+  }
+
+  .empty-chat {
+    text-align: center;
+    color: #9bb2c4;
+    padding: 40px 20px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* Responsive: stack on small screens */
+  @media (max-width: 1024px) {
+    .notebook-wrapper {
+      flex-direction: column;
+      height: auto;
+    }
+    
+    .notebook-panel {
+      flex: 0 0 60vh;
+      width: 100%;
+    }
+    
+    .chat-panel {
+      flex: 0 0 auto;
+      width: 100%;
+      max-height: 40vh;
+    }
+  }
+</style>
+
 <h2>Jupyter Notebooks (Lite)</h2>
 <p class="muted">
-  Save with <em>Save to Server</em> or Jupyter’s Save (Ctrl+S).
-  If this notebook is a homework, you’ll also see <em>Submit Homework</em>.
+  Save with <em>Save to Server</em> or Jupyter's Save (Ctrl+S).
+  If this notebook is a homework, you'll also see <em>Submit Homework</em>.
 </p>
 
 <div style="margin:0 0 10px 0;">
   <button id="saveBtn" class="btn">Save to Server</button>
   <button id="submitBtn" class="btn btn-danger" style="display:none">Submit Homework</button>
+  <button id="fullscreenBtn" class="btn" title="Toggle Fullscreen">⛶ Fullscreen</button>
+  <button id="toggleChatBtn" class="btn" title="Toggle Chat Panel">💬</button>
   <span id="status" style="margin-left:10px;color:#9ecbff;"></span>
 </div>
 
-<div style="height:82vh;">
-  <iframe
-    id="jlite_frame"
-    title="JupyterLite"
-    src="about:blank"
-    style="width:100%;height:100%;border:0"
-    allow="clipboard-read; clipboard-write">
-  </iframe>
+<div id="notebook-container">
+  <!-- Toolbar for fullscreen mode -->
+  <div class="toolbar-fullscreen">
+    <button id="saveBtn2" class="btn">Save</button>
+    <button id="submitBtn2" class="btn btn-danger" style="display:none">Submit</button>
+    <button id="toggleChatBtn2" class="btn" title="Toggle Chat Panel">💬</button>
+    <button id="exitFullscreenBtn" class="btn">Exit Fullscreen</button>
+    <span id="statusFullscreen" style="margin-left:10px;color:#9ecbff;"></span>
+  </div>
+
+  <!-- Split screen workspace -->
+  <div class="notebook-wrapper">
+    <!-- Notebook section -->
+    <div class="notebook-panel">
+      <iframe
+        id="jlite_frame"
+        title="JupyterLite"
+        src="about:blank"
+        allow="clipboard-read; clipboard-write">
+      </iframe>
+    </div>
+
+    <!-- Chat section -->
+    <div class="chat-panel">
+      <div class="chat-header">
+        <h4>
+          <span class="emoji">💬</span>
+          <span>Messages</span>
+          <span id="unreadBadge" class="unread-badge" style="display:none;">0</span>
+        </h4>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="empty-chat">No homework selected. Open a homework to see messages.</div>
+      </div>
+      <div class="chat-input-area">
+        <textarea 
+          id="messageInput" 
+          class="chat-input" 
+          placeholder="Type here..."
+          rows="1"
+        ></textarea>
+        <button id="sendMsgBtn" class="send-btn-chat">Send</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -273,11 +628,13 @@
     if (initHooksDone) return;
     initHooksDone = true;
 
-    // Save button
+    // Connect both save buttons
     saveBtn.onclick = () => { saveActiveToServer(app, {ensureJupyterSaved:true}); };
+    document.getElementById("saveBtn2").onclick = () => { saveActiveToServer(app, {ensureJupyterSaved:true}); };
 
-    // Submit button (shown only when a homework is detected)
+    // Connect both submit buttons (shown only when a homework is detected)
     submitBtn.onclick = () => { submitHomework(app); };
+    document.getElementById("submitBtn2").onclick = () => { submitHomework(app); };
 
     // Follow Jupyter's saves/renames/opens to autosync and refresh homework UI
     const cmds = app.commands;
@@ -291,14 +648,20 @@
           }, 300);
         }
         if (id === 'docmanager:open'){
-          setTimeout(() => { detectHomeworkAndUpdateUI(app); }, 200);
+          setTimeout(() => { 
+            detectHomeworkAndUpdateUI(app);
+            updateChatForCurrentNotebook(app);
+          }, 200);
         }
       });
     }
 
     // Also react when the active tab changes
     if (app.shell && app.shell.currentChanged && app.shell.currentChanged.connect){
-      app.shell.currentChanged.connect(() => { void detectHomeworkAndUpdateUI(app); });
+      app.shell.currentChanged.connect(() => { 
+        void detectHomeworkAndUpdateUI(app);
+        updateChatForCurrentNotebook(app);
+      });
     }
   }
 
@@ -320,6 +683,313 @@
       await detectHomeworkAndUpdateUI(app);
     });
   })();
+
+  // ==================== FULLSCREEN FUNCTIONALITY ====================
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  const exitFullscreenBtn = document.getElementById('exitFullscreenBtn');
+  const container = document.getElementById('notebook-container');
+
+  async function toggleFullscreen() {
+    try {
+      if (!document.fullscreenElement) {
+        await container.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error('Fullscreen error:', err);
+      setStatus('Fullscreen not supported', true, 2000);
+    }
+  }
+
+  fullscreenBtn.addEventListener('click', toggleFullscreen);
+  exitFullscreenBtn.addEventListener('click', () => document.exitFullscreen());
+  
+  // Keyboard shortcut: F11 or Ctrl+Shift+F
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'F11') || (e.ctrlKey && e.shiftKey && e.key === 'F')) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+  });
+
+  // Sync submit button visibility in fullscreen
+  document.addEventListener('fullscreenchange', () => {
+    const btn2 = document.getElementById('submitBtn2');
+    if (btn2) {
+      btn2.style.display = submitBtn.style.display;
+      btn2.disabled = submitBtn.disabled;
+    }
+  });
+
+  // ==================== UI/LAYOUT FUNCTIONALITY ====================
+  const workspace = document.querySelector('.notebook-wrapper');
+  const toggleChatBtn = document.getElementById('toggleChatBtn');
+  const toggleChatBtn2 = document.getElementById('toggleChatBtn2');
+
+  function toggleChatPanel() {
+    workspace.classList.toggle('chat-hidden');
+    // Notify JupyterLite to resize
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  toggleChatBtn.addEventListener('click', toggleChatPanel);
+  toggleChatBtn2.addEventListener('click', toggleChatPanel);
+
+  // ==================== CHAT FUNCTIONALITY ====================
+  let currentNotebookId = null;
+  let studentHomeworkId = null;
+  let isLoadingChat = false;
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function renderMessages(messages) {
+    const container = document.getElementById('chatMessages');
+    
+    if (!studentHomeworkId) {
+      container.innerHTML = '<div class="empty-chat">No homework selected. Open a homework to see messages.</div>';
+      return;
+    }
+    
+    if (messages.length === 0) {
+      container.innerHTML = '<div class="empty-chat">📝 No messages yet.<br>Your mentor will provide feedback here.</div>';
+      return;
+    }
+
+    container.innerHTML = messages.map(msg => `
+      <div class="chat-message ${msg.sender_type}">
+        <div class="message-bubble">${escapeHtml(msg.message)}</div>
+        <div class="message-meta">
+          ${msg.sender_name} • ${formatTime(msg.created_at)}
+        </div>
+      </div>
+    `).join('');
+    
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadChatMessages() {
+    if (!studentHomeworkId || isLoadingChat) return;
+    
+    try {
+      const res = await fetch(`/api/homework/submission/${studentHomeworkId}/messages`, {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) {
+        console.error('Failed to load messages:', res.status);
+        return;
+      }
+      const data = await res.json();
+      renderMessages(data.messages);
+      
+      // Update unread badge
+      const badge = document.getElementById('unreadBadge');
+      if (data.unread_count > 0) {
+        badge.textContent = data.unread_count;
+        badge.style.display = 'inline-block';
+        // Auto mark as read after 2 seconds
+        setTimeout(markMessagesAsRead, 2000);
+      } else {
+        badge.style.display = 'none';
+      }
+    } catch(e) {
+      console.error('Load messages error:', e);
+    }
+  }
+
+  async function markMessagesAsRead() {
+    if (!studentHomeworkId) return;
+    
+    try {
+      const csrf = await getCSRF();
+      await fetch(`/api/homework/submission/${studentHomeworkId}/messages/mark-read`, {
+        method: 'POST',
+        headers: { 'X-CSRF': csrf },
+        credentials: 'same-origin'
+      });
+    } catch(e) {
+      console.error('Mark read error:', e);
+    }
+  }
+
+  async function sendChatMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message || isLoadingChat || !studentHomeworkId) return;
+    
+    isLoadingChat = true;
+    const sendBtn = document.getElementById('sendMsgBtn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+    
+    try {
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/homework/submission/${studentHomeworkId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ message })
+      });
+      
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      
+      // Reset textarea to initial state
+      input.value = '';
+      input.style.height = '46px';
+      input.style.overflowY = 'hidden';
+      await loadChatMessages();
+    } catch(e) {
+      console.error('Send message error:', e);
+      alert('Failed to send message. Please try again.');
+    } finally {
+      isLoadingChat = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+  }
+
+  async function updateChatForCurrentNotebook(app) {
+    studentHomeworkId = null;
+    renderMessages([]);
+    
+    const w = app?.shell?.currentWidget;
+    if (!w || !w.context || !w.context.path) return;
+    
+    const model = await app.serviceManager.contents.get(w.context.path, {content:true, type:"notebook", format:"json"}).catch(()=>null);
+    if (!model || !model.content) return;
+    
+    const nb = model.content;
+    const md = nb.metadata || {};
+    const nbId = md.chalk_id;
+    const hwCode = (md.homework_code || '').trim();
+    
+    if (!hwCode) return; // Not a homework
+    
+    try {
+      const res = await fetch(`/api/hw/${hwCode}/student-homework-id`, {
+        credentials: 'same-origin'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        studentHomeworkId = data.student_homework_id;
+        if (studentHomeworkId) {
+          await loadChatMessages();
+          // Poll for new messages every 60 seconds
+          setInterval(() => {
+            if (studentHomeworkId) loadChatMessages();
+          }, 60000);
+        }
+      }
+    } catch(e) {
+      console.error('Chat init error:', e);
+    }
+  }
+
+  // Chat event listeners
+  document.getElementById('sendMsgBtn').addEventListener('click', sendChatMessage);
+  document.getElementById('messageInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  // Auto-resize textarea with improved scrollbar handling
+  const messageInput = document.getElementById('messageInput');
+  
+  // Initial setup - ensure no scrollbar on load
+  messageInput.style.height = '46px';
+  messageInput.style.overflowY = 'hidden';
+  
+  messageInput.addEventListener('input', function() {
+    // Reset height to recalculate
+    this.style.height = '46px';
+    this.style.overflowY = 'hidden';
+    
+    // Calculate new height
+    const newHeight = Math.min(this.scrollHeight, 140);
+    this.style.height = newHeight + 'px';
+    
+    // Show scrollbar only if content exceeds max height
+    if (this.scrollHeight > 140) {
+      this.style.overflowY = 'auto';
+    } else {
+      this.style.overflowY = 'hidden';
+    }
+  });
+  
+  // Reset height when message input loses focus and is empty
+  messageInput.addEventListener('blur', function() {
+    if (!this.value.trim()) {
+      this.style.height = '46px';
+      this.style.overflowY = 'hidden';
+    }
+  });
+  let hasInstructorMessages = false;
+  let lastReadTimestamp = null;
+
+  // Load last read timestamp from localStorage
+  function loadLastReadTimestamp() {
+    if (!studentHomeworkId) return null;
+    const key = `chat_last_read_${studentHomeworkId}`;
+    const stored = localStorage.getItem(key);
+    return stored ? new Date(stored) : null;
+  }
+
+  // Save last read timestamp to localStorage
+  function saveLastReadTimestamp() {
+    if (!studentHomeworkId) return;
+    const key = `chat_last_read_${studentHomeworkId}`;
+    localStorage.setItem(key, new Date().toISOString());
+    lastReadTimestamp = new Date();
+  }
+
+  function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
 })();
 </script>
 {% endblock %}

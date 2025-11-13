@@ -71,7 +71,7 @@ def analyze_database():
         # Recent activity
         print("⏰ Recent Activity (last 24 hours):")
         from datetime import timedelta
-        cutoff = datetime.utcnow() - timedelta(hours=24)
+        cutoff = datetime.now() - timedelta(hours=24)
         
         recent_notebooks = Notebook.query.filter(Notebook.created_at >= cutoff).count()
         recent_updates = Notebook.query.filter(Notebook.updated_at >= cutoff).count()

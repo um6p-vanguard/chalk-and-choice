@@ -1,9 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  #admin-notebook-container:fullscreen {
+    background: #0f172a;
+    padding: 10px;
+  }
+  #admin-notebook-container:fullscreen iframe {
+    border-radius: 8px;
+  }
+</style>
+
 <h2>Admin Viewer (JupyterLite)</h2>
 <p class="muted">Read-only viewer for student notebooks.</p>
 
-<div style="height:82vh;">
+<div style="margin:0 0 10px 0;">
+  <button id="fullscreenBtn" class="btn" title="Toggle Fullscreen">⛶ Fullscreen</button>
+</div>
+
+<div id="admin-notebook-container" style="height:82vh;position:relative;">
   <iframe id="jlite_frame" src="about:blank" style="width:100%;height:100%;border:0"></iframe>
 </div>
 
@@ -69,6 +83,48 @@
     const params = new URLSearchParams(window.location.search);
     const id = parseInt(params.get('import_nb') || '0', 10);
     if (app && id){ await importAdminNotebook(app, id); }
+  });
+
+  // ==================== FULLSCREEN FUNCTIONALITY ====================
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  const container = document.getElementById('admin-notebook-container');
+
+  function updateFullscreenButton() {
+    if (document.fullscreenElement) {
+      fullscreenBtn.textContent = '⛶ Exit Fullscreen';
+      fullscreenBtn.style.position = 'fixed';
+      fullscreenBtn.style.top = '10px';
+      fullscreenBtn.style.right = '10px';
+      fullscreenBtn.style.zIndex = '10000';
+    } else {
+      fullscreenBtn.textContent = '⛶ Fullscreen';
+      fullscreenBtn.style.position = 'static';
+      fullscreenBtn.style.zIndex = 'auto';
+    }
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (!document.fullscreenElement) {
+        await container.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error('Fullscreen error:', err);
+      alert('Fullscreen not supported in your browser');
+    }
+  }
+
+  fullscreenBtn.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', updateFullscreenButton);
+  
+  // Keyboard shortcut: F11 or Ctrl+Shift+F
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'F11') || (e.ctrlKey && e.shiftKey && e.key === 'F')) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
   });
 })();
 </script>

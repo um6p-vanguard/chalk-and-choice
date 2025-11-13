@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .profile-header {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .status-badge {
+    display: inline-block;
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 600;
+  }
+  .status-active {
+    background: #10b981;
+    color: #064e3b;
+  }
+  .status-inactive {
+    background: #6b7280;
+    color: #1f2937;
+  }
+  .assignment-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .assignment-card:hover {
+    border-color: var(--brand);
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .badge-submitted {
+    background: var(--brand);
+    color: #0b1120;
+  }
+  .badge-feedback {
+    background: #10b981;
+    color: #064e3b;
+  }
+  .badge-accepted {
+    background: rgba(34,139,230,.16);
+    color: #7cc5ff;
+  }
+  .badge-rejected {
+    background: rgba(244,67,54,.16);
+    color: #ff9f97;
+  }
+  .badge-pending {
+    background: rgba(158,158,158,.12);
+    color: #9bb2c4;
+  }
+  .acceptance-actions {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: start;
+  }
+  .btn-accept {
+    background: rgba(34,139,230,.12);
+    color: #7cc5ff;
+    border: 1px solid rgba(34,139,230,.3);
+  }
+  .btn-accept:hover {
+    background: rgba(34,139,230,.2);
+  }
+  .btn-reject {
+    background: rgba(244,67,54,.12);
+    color: #ff9f97;
+    border: 1px solid rgba(244,67,54,.3);
+  }
+  .btn-reject:hover {
+    background: rgba(244,67,54,.2);
+  }
+  .comment-input {
+    width: 100%;
+    padding: 8px 12px;
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 0.875rem;
+    margin-top: 8px;
+    resize: vertical;
+    min-height: 60px;
+  }
+  .comment-input:focus {
+    outline: none;
+    border-color: var(--brand);
+  }
+  .acceptance-status {
+    margin-top: 12px;
+    padding: 12px;
+    background: #0b1220;
+    border-radius: 6px;
+    font-size: 0.875rem;
+  }
+</style>
+
+<div class="profile-header">
+  <div style="display: flex; justify-content: space-between; align-items: start;">
+    <div>
+      <h2 style="margin: 0 0 8px 0;">{{ mentor.name }}</h2>
+      <p class="muted" style="margin: 0;">{{ mentor.email }}</p>
+    </div>
+    <div>
+      <span class="status-badge {% if mentor.is_active %}status-active{% else %}status-inactive{% endif %}">
+        {% if mentor.is_active %}Active{% else %}Inactive{% endif %}
+      </span>
+    </div>
+  </div>
+  
+  <div style="margin-top: 20px;">
+    <form method="post" action="{{ url_for('mentor_toggle_active') }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn">
+        {% if mentor.is_active %}
+          Mark as Inactive (won't receive new assignments)
+        {% else %}
+          Mark as Active (receive new assignments)
+        {% endif %}
+      </button>
+    </form>
+    <p class="muted" style="margin-top: 8px; font-size: 0.875rem;">
+      {% if mentor.is_active %}
+        You are currently receiving new homework assignments.
+      {% else %}
+        You are inactive and won't receive new assignments. Existing assignments remain accessible.
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<h3>My Assignments ({{ assignments|length }})</h3>
+
+{% if assignments %}
+<div>
+  {% for item in assignments %}
+  <div class="assignment-card">
+    <div style="display: flex; justify-content: space-between; align-items: start;">
+      <div>
+        <h4 style="margin: 0 0 4px 0;">{{ item.student_name }}</h4>
+        <p class="muted" style="margin: 0;">{{ item.homework_title }}</p>
+      </div>
+      <div style="text-align: right;">
+        {% if item.submitted_at %}
+        <span class="badge badge-submitted">Submitted</span>
+        {% endif %}
+        {% if item.feedback %}
+        <span class="badge badge-feedback">Feedback Given</span>
+        {% endif %}
+      </div>
+    </div>
+    
+    {% if item.submitted_at %}
+    <p class="muted" style="margin: 8px 0 0 0; font-size: 0.875rem;">
+      Submitted: {{ item.submitted_at.strftime('%Y-%m-%d %H:%M') }}
+    </p>
+    {% endif %}
+    
+    {% if item.feedback %}
+    <div style="margin-top: 12px; padding: 12px; background: #0b1220; border-radius: 6px; border-left: 3px solid var(--brand);">
+      <strong style="font-size: 0.875rem; color: var(--brand);">Your Feedback:</strong>
+      <p style="margin: 4px 0 0 0; font-size: 0.875rem;">{{ item.feedback }}</p>
+      {% if item.feedback_at %}
+      <p class="muted" style="margin: 4px 0 0 0; font-size: 0.75rem;">
+        Given: {{ item.feedback_at.strftime('%Y-%m-%d %H:%M') }}
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+    
+    <!-- Acceptance Status -->
+    {% if item.submitted_at %}
+      {% if item.acceptance_status %}
+        <div class="acceptance-status">
+          {% if item.acceptance_status == 'accepted' %}
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="badge badge-accepted">✓ Accepted</span>
+              {% if item.reviewed_at %}
+                <span class="muted" style="font-size: 0.75rem;">{{ item.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+              {% endif %}
+            </div>
+          {% elif item.acceptance_status == 'rejected' %}
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="badge badge-rejected">✗ Rejected</span>
+              {% if item.reviewed_at %}
+                <span class="muted" style="font-size: 0.75rem;">{{ item.reviewed_at.strftime('%Y-%m-%d %H:%M') }}</span>
+              {% endif %}
+            </div>
+          {% endif %}
+          
+          {% if item.acceptance_comment %}
+            <p style="margin: 8px 0 0 0; color: #9bb2c4;">
+              <strong>Comment:</strong> {{ item.acceptance_comment }}
+            </p>
+          {% endif %}
+        </div>
+      {% else %}
+        <!-- Accept/Reject Actions -->
+        <div class="acceptance-actions" id="review-section-{{ item.student_homework_id }}">
+          <div style="flex: 1;">
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <button class="btn btn-accept" onclick="reviewHomework({{ item.student_homework_id }}, 'accepted')">
+                ✓ Accept
+              </button>
+              <button class="btn btn-reject" onclick="showRejectForm({{ item.student_homework_id }})">
+                ✗ Reject
+              </button>
+            </div>
+            <div id="reject-form-{{ item.student_homework_id }}" style="display: none;">
+              <textarea 
+                class="comment-input" 
+                id="comment-{{ item.student_homework_id }}" 
+                placeholder="Optional: Add a comment explaining why..."
+              ></textarea>
+              <div style="display: flex; gap: 8px; margin-top: 8px;">
+                <button class="btn btn-reject" onclick="reviewHomework({{ item.student_homework_id }}, 'rejected')">
+                  Confirm Rejection
+                </button>
+                <button class="btn" onclick="hideRejectForm({{ item.student_homework_id }})">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+    {% endif %}
+    
+    <div style="margin-top: 12px;">
+      <a href="{{ url_for('homework_submissions', code=item.homework_code) }}" class="btn">
+        View Submission
+      </a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <p class="muted" style="margin: 0;">No assignments yet. You will be automatically assigned homework submissions when students submit.</p>
+</div>
+{% endif %}
+
+<script>
+async function getCSRF() {
+  try {
+    const r = await fetch("{{ url_for('api_csrf') }}", {credentials:"same-origin"});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    return j.csrf;
+  } catch(e) {
+    console.error('CSRF error:', e);
+    alert('Failed to get security token. Please refresh the page.');
+    throw e;
+  }
+}
+
+function showRejectForm(shId) {
+  const form = document.getElementById(`reject-form-${shId}`);
+  if (form) {
+    form.style.display = 'block';
+  }
+}
+
+function hideRejectForm(shId) {
+  const form = document.getElementById(`reject-form-${shId}`);
+  const comment = document.getElementById(`comment-${shId}`);
+  if (form) {
+    form.style.display = 'none';
+  }
+  if (comment) {
+    comment.value = '';
+  }
+}
+
+async function reviewHomework(shId, status) {
+  const comment = document.getElementById(`comment-${shId}`)?.value || '';
+  
+  if (status === 'rejected' && !comment && !confirm('Are you sure you want to reject without a comment?')) {
+    return;
+  }
+  
+  try {
+    const csrf = await getCSRF();
+    
+    const res = await fetch(`/api/mentor/homework/${shId}/review`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF': csrf
+      },
+      credentials: 'same-origin',
+      body: JSON.stringify({ status, comment })
+    });
+    
+    const data = await res.json();
+    
+    if (!res.ok) {
+      alert(data.error || 'Failed to update review status');
+      return;
+    }
+    
+    alert(`Homework ${status}!`);
+    window.location.reload();
+    
+  } catch(e) {
+    console.error('Review error:', e);
+    alert('Failed to update review status. Please try again.');
+  }
+}
+</script>
+
+{% endblock %}

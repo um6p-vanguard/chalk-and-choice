@@ -1,5 +1,369 @@
 {% extends "base.html" %}
 {% block content %}
+
+<style>
+  /* Main container that holds both notebook and chat */
+  .homework-workspace {
+    display: flex;
+    gap: 16px;
+    height: 82vh;
+    position: relative;
+  }
+
+  /* Notebook container - takes 70% width */
+  .notebook-container {
+    flex: 0 0 70%;
+    position: relative;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .notebook-container iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+  }
+
+  /* Chat panel - takes 30% width */
+  .chat-panel {
+    flex: 0 0 calc(30% - 16px);
+    display: flex;
+    flex-direction: column;
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 12px;
+    padding: 16px;
+    overflow: hidden;
+  }
+
+  /* Fullscreen mode */
+  #homework-main-container:fullscreen {
+    background: #0f172a;
+    padding: 10px;
+    height: 100vh;
+  }
+
+  #homework-main-container:fullscreen .homework-workspace {
+    height: calc(100vh - 60px); /* Account for toolbar */
+  }
+
+  #homework-main-container:fullscreen .notebook-container {
+    flex: 0 0 70%;
+    border-radius: 8px;
+  }
+
+  #homework-main-container:fullscreen .chat-panel {
+    flex: 0 0 calc(30% - 16px);
+  }
+
+  /* Styles for when chat is hidden */
+  .homework-workspace.chat-hidden .chat-panel {
+    display: none;
+  }
+
+  .homework-workspace.chat-hidden .notebook-container {
+    flex-basis: 100%;
+  }
+
+  #homework-main-container:fullscreen .homework-workspace.chat-hidden .notebook-container {
+    flex-basis: 100%;
+  }
+
+  /* Toolbar in fullscreen */
+  .toolbar-fullscreen {
+    display: none;
+    padding: 10px;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  #homework-main-container:fullscreen .toolbar-fullscreen {
+    display: flex;
+  }
+
+  /* Chat header */
+  .chat-header {
+    color: #e6f2f8;
+    font-weight: 600;
+    margin-bottom: 16px;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+  }
+
+  .chat-header .emoji {
+    font-size: 20px;
+  }
+
+  .chat-subtitle {
+    font-size: 12px;
+    color: #9bb2c4;
+    font-weight: normal;
+  }
+
+  /* Chat messages - scrollable area */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    margin-bottom: 12px;
+    padding: 16px;
+    background: #0a1018;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,.04);
+  }
+
+  /* Custom scrollbar for chat */
+  .chat-messages::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .chat-messages::-webkit-scrollbar-track {
+    background: rgba(255,255,255,.02);
+    border-radius: 4px;
+  }
+
+  .chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.1);
+    border-radius: 4px;
+  }
+
+  .chat-messages::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.15);
+  }
+
+  .chat-message {
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    animation: fadeIn 0.3s ease-in;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .chat-message.mentor {
+    align-items: flex-start;
+  }
+
+  .chat-message.student {
+    align-items: flex-end;
+  }
+
+  .message-bubble {
+    max-width: 85%;
+    padding: 12px 16px;
+    border-radius: 14px;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+    font-size: 13.5px;
+    line-height: 1.5;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+
+  .chat-message.mentor .message-bubble {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+    color: #e0e7ff;
+    border-bottom-left-radius: 4px;
+  }
+
+  .chat-message.student .message-bubble {
+    background: linear-gradient(135deg, #0f766e 0%, #0d9488 100%);
+    color: #ccfbf1;
+    border-bottom-right-radius: 4px;
+  }
+
+  .message-meta {
+    font-size: 10px;
+    color: #9bb2c4;
+    margin-top: 6px;
+    padding: 0 4px;
+    font-weight: 500;
+  }
+
+  /* Chat input area */
+  .chat-input-area {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-shrink: 0;
+    padding-top: 4px;
+  }
+
+  .chat-input {
+    flex: 1;
+    background: #0a1018;
+    border: 1.5px solid rgba(255,255,255,.1);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: #e6f2f8;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    min-height: 46px;
+    max-height: 140px;
+    transition: all 0.2s;
+    line-height: 1.5;
+    overflow-y: hidden; /* Hide scrollbar by default */
+  }
+
+  .chat-input::placeholder {
+    color: #6b7280;
+    font-size: 13.5px;
+  }
+
+  .chat-input:focus {
+    outline: none;
+    border-color: rgba(78,163,255,.6);
+    box-shadow: 0 0 0 4px rgba(78,163,255,.12);
+    background: #0d1520;
+  }
+
+  /* Show scrollbar only when needed (content overflow) */
+  .chat-input::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .chat-input::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .chat-input::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.15);
+    border-radius: 3px;
+  }
+
+  .chat-input::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,.25);
+  }
+
+  .send-btn {
+    background: linear-gradient(135deg, #4ea3ff 0%, #3b82f6 100%);
+    color: white;
+    border: none;
+    padding: 12px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+    box-shadow: 0 2px 12px rgba(78,163,255,.25);
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 80px;
+  }
+
+  .send-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(78,163,255,.4);
+  }
+
+  .send-btn:active:not(:disabled) {
+    transform: translateY(0);
+    box-shadow: 0 2px 12px rgba(78,163,255,.25);
+  }
+
+  .send-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background: linear-gradient(135deg, #475569 0%, #334155 100%);
+    box-shadow: none;
+  }
+
+  .empty-chat {
+    text-align: center;
+    color: #9bb2c4;
+    padding: 40px 20px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  /* Placeholder state styles */
+  .chat-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    height: 100%;
+    padding: 20px;
+  }
+
+  .placeholder-content {
+    max-width: 280px;
+  }
+
+  .placeholder-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+    filter: grayscale(1);
+  }
+
+  .placeholder-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: #e6f2f8;
+    letter-spacing: 0.3px;
+  }
+
+  .placeholder-text {
+    font-size: 13px;
+    line-height: 1.6;
+    color: #9bb2c4;
+  }
+
+  .placeholder-hint {
+    margin-top: 16px;
+    padding: 10px 16px;
+    background: rgba(78,163,255,.08);
+    border: 1px solid rgba(78,163,255,.15);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #9ecbff;
+  }
+
+  .unread-badge {
+    background: #D95334;
+    color: white;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  /* Responsive: stack on small screens */
+  @media (max-width: 1024px) {
+    .homework-workspace {
+      flex-direction: column;
+      height: auto;
+    }
+    
+    .notebook-container {
+      flex: 0 0 60vh;
+      width: 100%;
+    }
+    
+    .chat-panel {
+      flex: 0 0 auto;
+      width: 100%;
+      max-height: 40vh;
+    }
+  }
+</style>
+
 <h2>{{ hw.title }}</h2>
 <p class="muted">
   Edit your homework. Click <em>Save to Server</em> to save progress. When done, click <em>Submit</em> (you won't be able to reopen).
@@ -8,17 +372,74 @@
 <div style="margin:0 0 10px 0;">
   <button id="saveBtn" class="btn">Save to Server</button>
   <button id="submitBtn" class="btn btn-danger">Submit</button>
+  <button id="fullscreenBtn" class="btn" title="Toggle Fullscreen">⛶ Fullscreen</button>
+  <button id="toggleChatBtn" class="btn" title="Toggle Chat Panel">💬</button>
   <span id="status" style="margin-left:10px;color:#9ecbff;"></span>
 </div>
 
-<div style="height:82vh;">
-  <iframe
-    id="jlite_frame"
-    title="JupyterLite"
-    src="about:blank"
-    style="width:100%;height:100%;border:0"
-    allow="clipboard-read; clipboard-write">
-  </iframe>
+<div id="homework-main-container">
+  <!-- Toolbar for fullscreen mode -->
+  <div class="toolbar-fullscreen">
+    <button id="saveBtn2" class="btn">Save</button>
+    <button id="submitBtn2" class="btn btn-danger">Submit</button>
+    <button id="toggleChatBtn2" class="btn" title="Toggle Chat Panel">💬</button>
+    <button id="exitFullscreenBtn" class="btn">Exit Fullscreen</button>
+    <span id="statusFullscreen" style="margin-left:10px;color:#9ecbff;"></span>
+  </div>
+
+  <!-- Split screen workspace -->
+  <div class="homework-workspace">
+    <!-- Notebook section -->
+    <div class="notebook-container">
+      <iframe
+        id="jlite_frame"
+        title="JupyterLite"
+        src="about:blank"
+        allow="clipboard-read; clipboard-write">
+      </iframe>
+    </div>
+
+    <!-- Chat section -->
+    <div class="chat-panel">
+      {% if sh and sh.assigned_mentor_id %}
+      <!-- Active chat with mentor -->
+      <div class="chat-header">
+        <span class="emoji">💬</span>
+        <span>Messages</span>
+        <span class="chat-subtitle">
+          ({% set mentor = sh.assigned_mentor %}{{ mentor.name if mentor else 'Assigned' }})
+        </span>
+        <span id="unreadBadge" class="unread-badge" style="display:none;"></span>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="empty-chat">Loading messages...</div>
+      </div>
+      <div class="chat-input-area">
+        <textarea 
+          id="messageInput" 
+          class="chat-input" 
+          placeholder="Type here..."
+          rows="1"
+        ></textarea>
+        <button id="sendMsgBtn" class="send-btn">Send</button>
+      </div>
+      {% else %}
+      <!-- Chat placeholder - shown before mentor assignment -->
+      <div class="chat-placeholder">
+        <div class="placeholder-content">
+          <div class="placeholder-icon">💬</div>
+          <div class="placeholder-title">Chat Not Available Yet</div>
+          <div class="placeholder-text">
+            A mentor will be assigned when you submit your homework. You'll be able to chat with them after submission.
+          </div>
+          <div class="placeholder-hint">
+            💡 Complete and submit your homework to unlock mentor chat
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
 </div>
 
 <script>
@@ -29,6 +450,228 @@
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   let serverSaveBusy = false;
   let initHooksDone = false;
+  let studentHomeworkId = null;
+
+  // ==================== CHAT FUNCTIONALITY ====================
+  let chatIsLoading = false;
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function renderChatMessages(messages) {
+    const container = document.getElementById('chatMessages');
+    
+    if (messages.length === 0) {
+      container.innerHTML = '<div class="empty-chat">📝 No messages yet.<br>Your mentor will provide feedback here.</div>';
+      return;
+    }
+
+    container.innerHTML = messages.map(msg => `
+      <div class="chat-message ${msg.sender_type}">
+        <div class="message-bubble">${escapeHtml(msg.message)}</div>
+        <div class="message-meta">
+          ${msg.sender_name} • ${formatTime(msg.created_at)}
+        </div>
+      </div>
+    `).join('');
+    
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadChatMessages() {
+    if (!studentHomeworkId) return;
+    
+    try {
+      const res = await fetch(`/api/homework/submission/${studentHomeworkId}/messages`, {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderChatMessages(data.messages);
+      
+      // Update unread badge
+      const unreadBadge = document.getElementById('unreadBadge');
+      if (data.unread_count > 0) {
+        unreadBadge.textContent = data.unread_count;
+        unreadBadge.style.display = 'inline-block';
+        
+        // Mark as read after a short delay (user has time to see messages)
+        setTimeout(markMessagesAsRead, 2000);
+      } else {
+        unreadBadge.style.display = 'none';
+      }
+    } catch(e) {
+      console.error('Load messages error:', e);
+      document.getElementById('chatMessages').innerHTML = 
+        '<div class="empty-chat" style="color: #ff6b6b;">Failed to load messages</div>';
+    }
+  }
+
+  async function markMessagesAsRead() {
+    if (!studentHomeworkId) return;
+    
+    try {
+      const csrf = await getCSRF();
+      await fetch(`/api/homework/submission/${studentHomeworkId}/messages/mark-read`, {
+        method: 'POST',
+        headers: {
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin'
+      });
+    } catch(e) {
+      console.error('Mark read error:', e);
+    }
+  }
+
+  async function sendChatMessage() {
+    if (!studentHomeworkId) return;
+    
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message || chatIsLoading) return;
+    
+    chatIsLoading = true;
+    const sendBtn = document.getElementById('sendMsgBtn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+    
+    try {
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/homework/submission/${studentHomeworkId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ message })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      // Reset textarea to initial state
+      input.value = '';
+      input.style.height = '46px';
+      input.style.overflowY = 'hidden';
+      await loadChatMessages();
+    } catch(e) {
+      console.error('Send message error:', e);
+      alert('Failed to send message. Please try again.');
+    } finally {
+      chatIsLoading = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+  }
+
+  async function initChat() {
+    // Only initialize chat if mentor is assigned
+    {% if not (sh and sh.assigned_mentor_id) %}
+      return; // Chat not available until mentor is assigned
+    {% endif %}
+    
+    try {
+      const res = await fetch(`/api/hw/${CODE}/student-homework-id`, {
+        credentials: 'same-origin'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        studentHomeworkId = data.student_homework_id;
+        if (studentHomeworkId) {
+          await loadChatMessages();
+          // Poll for new messages every 60 seconds
+          setInterval(loadChatMessages, 60000);
+        }
+      }
+    } catch(e) {
+      console.error('Init chat error:', e);
+    }
+  }
+
+  // Chat event listeners - only attach if mentor is assigned
+  {% if sh and sh.assigned_mentor_id %}
+  document.getElementById('sendMsgBtn').addEventListener('click', sendChatMessage);
+  document.getElementById('messageInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  // Auto-resize textarea with improved scrollbar handling
+  const textarea = document.getElementById('messageInput');
+  
+  // Initial setup - ensure no scrollbar on load
+  textarea.style.height = '46px';
+  textarea.style.overflowY = 'hidden';
+  
+  textarea.addEventListener('input', function() {
+    // Reset height to recalculate
+    this.style.height = '46px';
+    this.style.overflowY = 'hidden';
+    
+    // Calculate new height
+    const newHeight = Math.min(this.scrollHeight, 140);
+    this.style.height = newHeight + 'px';
+    
+    // Show scrollbar only if content exceeds max height
+    if (this.scrollHeight > 140) {
+      this.style.overflowY = 'auto';
+    } else {
+      this.style.overflowY = 'hidden';
+    }
+  });
+  
+  // Reset height when message is sent
+  textarea.addEventListener('blur', function() {
+    if (!this.value.trim()) {
+      this.style.height = '46px';
+      this.style.overflowY = 'hidden';
+    }
+  });
+  {% endif %}
+
+  // Initialize chat when page loads
+  initChat();
+
+  // ==================== UI/LAYOUT FUNCTIONALITY ====================
+  const workspace = document.querySelector('.homework-workspace');
+  const toggleChatBtn = document.getElementById('toggleChatBtn');
+  const toggleChatBtn2 = document.getElementById('toggleChatBtn2');
+
+  function toggleChatPanel() {
+    workspace.classList.toggle('chat-hidden');
+    // Notify JupyterLite to resize
+    window.dispatchEvent(new Event('resize'));
+  }
+
+  toggleChatBtn.addEventListener('click', toggleChatPanel);
+  toggleChatBtn2.addEventListener('click', toggleChatPanel);
+
+  // ==================== HOMEWORK FUNCTIONALITY ====================
 
   function setStatus(msg, isError=false, ttl=3000){
     STATUS.textContent = msg || '';
@@ -198,8 +841,13 @@
         }
       });
     }
+    // Connect both save buttons
     document.getElementById("saveBtn").onclick = () => { saveActiveToServer(app); };
+    document.getElementById("saveBtn2").onclick = () => { saveActiveToServer(app); };
+    
+    // Connect both submit buttons
     document.getElementById("submitBtn").onclick = () => { submitHomework(app); };
+    document.getElementById("submitBtn2").onclick = () => { submitHomework(app); };
   }
 
   (async () => {
@@ -222,6 +870,35 @@
       await openMyHomework(app);
     });
   })();
+
+  // ==================== FULLSCREEN FUNCTIONALITY ====================
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
+  const exitFullscreenBtn = document.getElementById('exitFullscreenBtn');
+  const mainContainer = document.getElementById('homework-main-container');
+
+  async function toggleFullscreen() {
+    try {
+      if (!document.fullscreenElement) {
+        await mainContainer.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error('Fullscreen error:', err);
+      setStatus('Fullscreen not supported', true, 2000);
+    }
+  }
+
+  fullscreenBtn.addEventListener('click', toggleFullscreen);
+  exitFullscreenBtn.addEventListener('click', () => document.exitFullscreen());
+  
+  // Keyboard shortcut: F11 or Ctrl+Shift+F
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'F11') || (e.ctrlKey && e.shiftKey && e.key === 'F')) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+  });
 })();
 </script>
 {% endblock %}

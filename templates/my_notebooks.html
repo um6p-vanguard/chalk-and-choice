@@ -63,6 +63,16 @@
   .chip-submitted { background: rgba(76,175,80,.18); color: #b6f5b7; border-color: rgba(76,175,80,.35); }
   .chip-pastdue { background: rgba(255,138,128,.18); color: #ffb7b0; border-color: rgba(255,138,128,.35); }
   .chip-pending { background: rgba(255,193,7,.16); color: #ffd77a; border-color: rgba(255,193,7,.35); }
+  .chip-reopened { background: rgba(255,152,0,.16); color: #ffb74d; border-color: rgba(255,152,0,.35); }
+
+  .feedback-indicator {
+    font-size: 11px;
+    color: #9ecbff;
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
 
   .btn-ghost {
     background: #0b2b3a; color: #cfe7f5; border: 1px solid rgba(255,255,255,.08);
@@ -128,7 +138,9 @@
                 {% if nb.is_homework %}
                   <span class="chip chip-homework">Homework</span>
                 {% endif %}
-                {% if nb.is_homework and nb.submitted %}
+                {% if nb.reopened %}
+                  <span class="chip chip-reopened">Reopened</span>
+                {% elif nb.is_homework and nb.submitted %}
                   <span class="chip chip-submitted">Submitted</span>
                 {% elif nb.is_homework and nb.due_at and (not nb.can_submit) %}
                   <span class="chip chip-pastdue">Past due</span>
@@ -139,6 +151,20 @@
                   <small class="muted">due {{ nb.due_at }}</small>
                 {% endif %}
               </div>
+              {% if nb.mentor_name %}
+                <div class="feedback-indicator" style="color: #9ecbff;">
+                  <span>�</span>
+                  <span>Mentor: {{ nb.mentor_name }}</span>
+                </div>
+              {% endif %}
+              {% if nb.is_homework and nb.homework_code %}
+                <div class="feedback-indicator">
+                  <a href="{{ url_for('homework_open', code=nb.homework_code) }}" style="color: #9ecbff; text-decoration: none;">
+                    <span>�</span>
+                    <span>View Messages & Feedback</span>
+                  </a>
+                </div>
+              {% endif %}
             </td>
             <td>{{ nb.updated_at }}</td>
             <td>

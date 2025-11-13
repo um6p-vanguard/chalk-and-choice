@@ -1,9 +1,243 @@
 {% extends "base.html" %}
 {% block content %}
+
+<style>
+  .feedback-section {
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 8px;
+  }
+  .feedback-text {
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    padding: 10px;
+    color: #e6f2f8;
+    margin: 8px 0;
+  }
+  .feedback-meta {
+    font-size: 12px;
+    color: #9bb2c4;
+    margin-top: 4px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-success {
+    background: rgba(76,175,80,.18);
+    color: #b6f5b7;
+  }
+  .badge-warning {
+    background: rgba(255,193,7,.16);
+    color: #ffd77a;
+  }
+  .badge-accepted {
+    background: rgba(34,139,230,.16);
+    color: #7cc5ff;
+  }
+  .badge-rejected {
+    background: rgba(244,67,54,.16);
+    color: #ff9f97;
+  }
+  .badge-pending {
+    background: rgba(158,158,158,.12);
+    color: #9bb2c4;
+  }
+  .btn-small {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .status-col {
+    min-width: 140px;
+  }
+  .acceptance-comment {
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #9bb2c4;
+  }
+
+  /* Chat Modal Styles */
+  .chat-modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0,0,0,0.8);
+    z-index: 1000;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .chat-modal-content {
+    background: #0f1720;
+    border: 1px solid rgba(255,255,255,.1);
+    border-radius: 12px;
+    max-width: 700px;
+    width: 100%;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-modal-header {
+    padding: 20px;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .chat-modal-header h3 {
+    margin: 0;
+    color: #e6f2f8;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    color: #9bb2c4;
+    font-size: 24px;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+  }
+  .close-btn:hover {
+    background: rgba(255,255,255,.05);
+    color: #e6f2f8;
+  }
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    min-height: 300px;
+    max-height: 500px;
+  }
+  .chat-message {
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .chat-message.instructor {
+    align-items: flex-start;
+  }
+  .chat-message.student {
+    align-items: flex-end;
+  }
+  .message-bubble {
+    max-width: 75%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .chat-message.instructor .message-bubble {
+    background: #1a3a4a;
+    border: 1px solid rgba(99,127,190,.3);
+    color: #e6f2f8;
+    border-bottom-left-radius: 4px;
+  }
+  .chat-message.student .message-bubble {
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    color: #e6f2f8;
+    border-bottom-right-radius: 4px;
+  }
+  .message-meta {
+    font-size: 11px;
+    color: #9bb2c4;
+    margin-top: 4px;
+    padding: 0 4px;
+  }
+  .empty-chat {
+    text-align: center;
+    color: #9bb2c4;
+    padding: 40px 20px;
+    font-style: italic;
+  }
+  .chat-input-area {
+    padding: 16px 20px;
+    border-top: 1px solid rgba(255,255,255,.06);
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .chat-input {
+    flex: 1;
+    background: #062230;
+    border: 1px solid rgba(255,255,255,.08);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #e6f2f8;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 42px;
+    max-height: 120px;
+  }
+  .chat-input:focus {
+    outline: none;
+    border-color: #637FBE;
+  }
+  .send-btn {
+    background: #637FBE;
+    border: none;
+    color: #0b1120;
+    font-weight: 600;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .send-btn:hover {
+    background: #5775B8;
+  }
+  .send-btn:disabled {
+    background: #334155;
+    color: #64748b;
+    cursor: not-allowed;
+  }
+  .message-count {
+    display: inline-block;
+    background: #637FBE;
+    color: #0b1120;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+  }
+  .unread-badge {
+    display: inline-block;
+    background: #D95334;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+    min-width: 16px;
+    text-align: center;
+  }
+</style>
+
 <h2>Submissions — {{ hw.title }}</h2>
 
 <p>
   <a class="btn" href="{{ url_for('homework_share', code=hw.code) }}">Share</a>
+  <a class="btn" href="{{ url_for('homework_list') }}">Back to Homeworks</a>
 </p>
 
 <table class="table">
@@ -12,7 +246,8 @@
       <th>Student</th>
       <th>Filename</th>
       <th>Last Updated</th>
-      <th>Submitted At</th>
+      <th>Assigned Mentor</th>
+      <th class="status-col">Status</th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -23,18 +258,338 @@
       <td>{{ it.filename }}</td>
       <td>{{ it.updated_at }}</td>
       <td>
-        {% if it.submitted_at %}
-          <span style="color:#4caf50;">{{ it.submitted_at }}</span>
+        {% if it.assigned_mentor %}
+          <div style="color:#9ecbff;font-weight:500;">{{ it.assigned_mentor }}</div>
+          <div style="font-size:11px;color:#9bb2c4;">{{ it.assigned_mentor_email }}</div>
+        {% elif it.submitted_at %}
+          <span style="color:#9bb2c4;font-style:italic;">No mentor available</span>
         {% else %}
-          <span style="color:#ff8a80;">Not submitted</span>
+          <span style="color:#64748b;">-</span>
         {% endif %}
       </td>
       <td>
-        <a class="btn" href="{{ url_for('admin_jlite') }}?import_nb={{ it.notebook_id }}">Open in Jupyter</a>
-        <a class="btn" href="{{ url_for('admin_download_notebook', nb_id=it.notebook_id) }}">Download</a>
+        {% if it.submitted_at %}
+          <span class="badge badge-success">Submitted</span>
+          <div style="font-size:11px;color:#9bb2c4;margin-top:2px;">{{ it.submitted_at }}</div>
+        {% else %}
+          <span class="badge badge-warning">Not submitted</span>
+        {% endif %}
+        {% if it.reopened_at %}
+          <div style="font-size:11px;color:#9bb2c4;margin-top:4px;">Reopened: {{ it.reopened_at }}</div>
+        {% endif %}
+        
+        <!-- Acceptance Status -->
+        {% if it.submitted_at and it.acceptance_status %}
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);">
+            {% if it.acceptance_status == 'accepted' %}
+              <span class="badge badge-accepted">✓ Accepted</span>
+            {% elif it.acceptance_status == 'rejected' %}
+              <span class="badge badge-rejected">✗ Rejected</span>
+            {% endif %}
+            {% if it.reviewed_at %}
+              <div style="font-size:11px;color:#9bb2c4;margin-top:2px;">{{ it.reviewed_at }}</div>
+            {% endif %}
+            {% if it.acceptance_comment %}
+              <div class="acceptance-comment">
+                <strong>Comment:</strong> {{ it.acceptance_comment }}
+              </div>
+            {% endif %}
+          </div>
+        {% elif it.submitted_at %}
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.06);">
+            <span class="badge badge-pending">⏳ Pending Review</span>
+          </div>
+        {% endif %}
+      </td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <a class="btn btn-small" href="{{ url_for('admin_jlite') }}?import_nb={{ it.notebook_id }}">Open</a>
+          <a class="btn btn-small" href="{{ url_for('admin_download_notebook', nb_id=it.notebook_id) }}">Download</a>
+          {% if user.role == 'mentor' %}
+          <button class="btn btn-small" onclick="openChat({{ it.student_homework_id }}, '{{ it.student_name }}')" id="chat-btn-{{ it.student_homework_id }}">
+            💬 Chat<span class="unread-badge" id="unread-{{ it.student_homework_id }}" style="display:none;">0</span>
+          </button>
+          {% endif %}
+          {% if it.submitted_at %}
+            <button class="btn btn-small btn-danger" onclick="reopenHomework({{ it.student_homework_id }}, '{{ it.student_name }}')">Reopen</button>
+          {% endif %}
+        </div>
       </td>
     </tr>
   {% endfor %}
   </tbody>
 </table>
+
+<!-- Chat Modal -->
+<div id="chatModal" class="chat-modal">
+  <div class="chat-modal-content">
+    <div class="chat-modal-header">
+      <h3>💬 Chat with <span id="chatStudentName"></span></h3>
+      <button class="close-btn" onclick="closeChat()">×</button>
+    </div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="empty-chat">Loading messages...</div>
+    </div>
+    <div class="chat-input-area">
+      <textarea 
+        id="messageInput" 
+        class="chat-input" 
+        placeholder="Type your message..."
+        rows="1"
+      ></textarea>
+      <button id="sendBtn" class="send-btn">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentShId = null;
+  let isLoading = false;
+  let messageInterval = null;
+  const allSubmissionIds = [{% for it in items %}{{ it.student_homework_id }}{% if not loop.last %},{% endif %}{% endfor %}];
+
+  async function getCSRF(){
+    try {
+      const r = await fetch("{{ url_for('api_csrf') }}", {credentials:"same-origin"});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      return j.csrf;
+    } catch(e) {
+      console.error('CSRF error:', e);
+      throw e;
+    }
+  }
+
+  // Update unread badges for all submissions
+  async function updateUnreadBadges() {
+    for (const shId of allSubmissionIds) {
+      try {
+        const res = await fetch(`/api/homework/submission/${shId}/messages`, {
+          credentials: 'same-origin'
+        });
+        if (!res.ok) continue;
+        const data = await res.json();
+        
+        const badge = document.getElementById(`unread-${shId}`);
+        if (badge && data.unread_count > 0) {
+          badge.textContent = data.unread_count;
+          badge.style.display = 'inline-block';
+        } else if (badge) {
+          badge.style.display = 'none';
+        }
+      } catch(e) {
+        console.error(`Failed to load unread count for ${shId}:`, e);
+      }
+    }
+  }
+
+  function formatTime(isoString) {
+    const date = new Date(isoString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+    
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function renderMessages(messages) {
+    const container = document.getElementById('chatMessages');
+    
+    if (messages.length === 0) {
+      container.innerHTML = '<div class="empty-chat">No messages yet. Start the conversation!</div>';
+      return;
+    }
+
+    container.innerHTML = messages.map(msg => `
+      <div class="chat-message ${msg.sender_type}">
+        <div class="message-bubble">${escapeHtml(msg.message)}</div>
+        <div class="message-meta">
+          ${msg.sender_name} • ${formatTime(msg.created_at)}
+        </div>
+      </div>
+    `).join('');
+    
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  }
+
+  async function loadMessages() {
+    if (!currentShId) return;
+    
+    try {
+      const res = await fetch(`/api/homework/submission/${currentShId}/messages`, {
+        credentials: 'same-origin'
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderMessages(data.messages);
+      
+      // Update unread badge count if available
+      updateUnreadBadges();
+    } catch(e) {
+      console.error('Load messages error:', e);
+      document.getElementById('chatMessages').innerHTML = 
+        '<div class="empty-chat" style="color: #ff6b6b;">Failed to load messages</div>';
+    }
+  }
+
+  async function markMessagesAsRead(shId) {
+    if (!shId) return;
+    
+    try {
+      const csrf = await getCSRF();
+      await fetch(`/api/homework/submission/${shId}/messages/mark-read`, {
+        method: 'POST',
+        headers: { 'X-CSRF': csrf },
+        credentials: 'same-origin'
+      });
+    } catch(e) {
+      console.error('Mark read error:', e);
+    }
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message || isLoading || !currentShId) return;
+    
+    isLoading = true;
+    const sendBtn = document.getElementById('sendBtn');
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Sending...';
+    
+    try {
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/homework/submission/${currentShId}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF': csrf
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ message })
+      });
+      
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      input.value = '';
+      input.style.height = 'auto';
+      
+      // Mark as read when sending a message
+      await markMessagesAsRead(currentShId);
+      
+      await loadMessages();
+    } catch(e) {
+      console.error('Send message error:', e);
+      alert('Failed to send message. Please try again.');
+    } finally {
+      isLoading = false;
+      sendBtn.disabled = false;
+      sendBtn.textContent = 'Send';
+    }
+  }
+
+  function openChat(shId, studentName) {
+    currentShId = shId;
+    document.getElementById('chatStudentName').textContent = studentName;
+    document.getElementById('chatModal').style.display = 'flex';
+    
+    // Mark messages as read when opening chat
+    markMessagesAsRead(shId);
+    
+    loadMessages();
+    
+    // Poll for new messages every 5 seconds
+    if (messageInterval) clearInterval(messageInterval);
+    messageInterval = setInterval(loadMessages, 5000);
+  }
+
+  function closeChat() {
+    document.getElementById('chatModal').style.display = 'none';
+    currentShId = null;
+    if (messageInterval) {
+      clearInterval(messageInterval);
+      messageInterval = null;
+    }
+    
+    // Refresh unread badges after closing chat
+    updateUnreadBadges();
+  }
+
+  async function reopenHomework(shId, studentName){
+    if(!confirm(`Reopen homework for ${studentName}? This will allow them to edit and resubmit.`)){
+      return;
+    }
+    try{
+      const csrf = await getCSRF();
+      const res = await fetch(`/api/homework/submission/${shId}/reopen`, {
+        method: 'POST',
+        headers: {'X-CSRF': csrf},
+        credentials: 'same-origin'
+      });
+      if(res.ok){
+        alert('Homework reopened successfully!');
+        location.reload();
+      } else {
+        const errorText = await res.text();
+        console.error('Server error:', errorText);
+        alert('Failed to reopen: ' + errorText);
+      }
+    } catch(e){
+      console.error('Reopen error:', e);
+      alert(`Failed to reopen homework: ${e.message}`);
+    }
+  }
+
+  // Event listeners
+  document.getElementById('sendBtn').addEventListener('click', sendMessage);
+  document.getElementById('messageInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // Auto-resize textarea
+  document.getElementById('messageInput').addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+  });
+
+  // Close modal when clicking outside or pressing Escape
+  document.getElementById('chatModal').addEventListener('click', (e) => {
+    if(e.target === e.currentTarget){
+      closeChat();
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && currentShId) {
+      closeChat();
+    }
+  });
+
+  // Load unread badge counts on page load
+  updateUnreadBadges();
+  
+  // Refresh badges every 30 seconds
+  setInterval(updateUnreadBadges, 30000);
+</script>
+
 {% endblock %}
