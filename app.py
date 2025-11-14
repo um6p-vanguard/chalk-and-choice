@@ -719,56 +719,39 @@ def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
     now = datetime.utcnow()
     is_expired = bool(form.closes_at and form.closes_at <= now)
-    is_open = bool(form.is_open and not is_expired)
-    if not is_open:
-        return render_template(
-            "form_closed.html",
-            form=form,
-            user=current_user(),
-            student_name=session.get("student_name"),
-        ), 403
+    if not form.is_open or is_expired:
+        return render_template("form_closed.html", form=form,
+                               user=current_user(),
+                               student_name=session.get("student_name")), 403
+
     u = current_user()
     s = current_student()
-
-    # Require someone authenticated
     if not (u or s):
         return redirect(url_for("login", next=url_for("form_render", code=code)))
 
-    # Find an existing submission if student
-    submitted = False
-    submitted_payload = None
+    # latest submission (optional, to show “you have submitted N times”)
+    latest_payload = {}
+    attempts = 0
     if s:
-        existing = FormResponse.query.filter_by(form_id=form.id, student_id=s.id)\
-                                     .order_by(FormResponse.id.desc()).first()
-        if existing:
-            # existing.payload_json may already be a dict; if it's a string, parse it
-            pj = existing.payload_json
-            if isinstance(pj, str):
-                try:
-                    import json as _json
-                    pj = _json.loads(pj)
-                except Exception:
-                    pj = {}
-            submitted = True
-            submitted_payload = pj
+        attempts = FormResponse.query.filter_by(form_id=form.id, student_id=s.id).count()
+        last = FormResponse.query.filter_by(form_id=form.id, student_id=s.id)\
+                                 .order_by(FormResponse.id.desc()).first()
+        if last:
+            latest_payload = last.payload_json if isinstance(last.payload_json, dict) else {}
 
-    # Students cannot open closed forms (unless you prefer to show "closed" page)
-    if s and not form.is_open:
-        return render_template("form_closed.html", form=form,
-                               user=u, student_name=session.get("student_name"))
-
-    # Only students can submit; instructors/admins are always preview
-    can_submit = bool(s and form.is_open and not submitted)
+    # students can ALWAYS submit while open (even if they submitted before)
+    can_submit = bool(s and form.is_open)
 
     return render_template(
         "form_render.html",
         form=form,
         can_submit=can_submit,
-        submitted=submitted,
-        submitted_payload=submitted_payload or {},
+        attempts=attempts,
+        last_payload=latest_payload,
         user=u,
         student_name=session.get("student_name"),
     )
+
 
 
 @app.post("/forms/<code>/open")
@@ -801,39 +784,35 @@ def forms_close(code):
 @app.route("/api/forms/<code>/responses", methods=["POST"])
 def form_submit(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    
-    now = datetime.utcnow()
-    if not form.is_open or (form.closes_at and form.closes_at <= now):
-        abort(403, description="Form is closed.")
-    # Only students can submit
+
+    # gate: only students & only while open
     stu = current_student()
     if not stu:
         abort(401)
+    now = datetime.utcnow()
+    if not form.is_open or (form.closes_at and form.closes_at <= now):
+        abort(403, description="Form is closed.")
 
-    # Must be open for students
-    if not form.is_open:
-        abort(403, description="Form is closed")
-
-    # CSRF header check
+    # CSRF header
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
 
-    # Enforce single submission per student per form
-    existing = FormResponse.query.filter_by(form_id=form.id, student_id=stu.id).first()
-    if existing:
-        return jsonify({"ok": False, "error": "already_submitted"}), 409
-
+    # NOTE: no “already submitted” check anymore — we keep all attempts
     data = request.get_json(silent=True) or {}
+
+    # optional: include attempt number in the response
+    prev_count = FormResponse.query.filter_by(form_id=form.id, student_id=stu.id).count()
     resp = FormResponse(
         form_id=form.id,
         student_id=stu.id,
         student_name=stu.name,
         payload_json=data,
     )
-    db.session.add(resp)
-    db.session.commit()
-    return jsonify({"ok": True})
+    db.session.add(resp); db.session.commit()
+
+    return jsonify({"ok": True, "attempt": prev_count + 1})
+
 
 @app.route("/forms/<code>/qr")
 @require_user()  # instructors/admins only
