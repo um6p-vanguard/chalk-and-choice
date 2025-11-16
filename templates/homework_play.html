@@ -17,6 +17,7 @@
     border: 1px solid rgba(255,255,255,.06);
     border-radius: 12px;
     overflow: hidden;
+    min-height: 0; /* Important for proper flex behavior */
   }
 
   .notebook-container iframe {
@@ -42,19 +43,28 @@
     background: #0f172a;
     padding: 10px;
     height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   #homework-main-container:fullscreen .homework-workspace {
-    height: calc(100vh - 60px); /* Account for toolbar */
+    height: 100%;
+    flex: 1;
+    min-height: 0; /* Important for proper flex behavior */
+    overflow: hidden;
   }
 
   #homework-main-container:fullscreen .notebook-container {
     flex: 0 0 70%;
     border-radius: 8px;
+    height: 100%;
   }
 
   #homework-main-container:fullscreen .chat-panel {
     flex: 0 0 calc(30% - 16px);
+    height: 100%;
+    max-height: 100%;
   }
 
   /* Styles for when chat is hidden */
@@ -117,6 +127,7 @@
     background: #0a1018;
     border-radius: 10px;
     border: 1px solid rgba(255,255,255,.04);
+    min-height: 0; /* Important for proper flex behavior in fullscreen */
   }
 
   /* Custom scrollbar for chat */
@@ -373,7 +384,7 @@
   <button id="saveBtn" class="btn">Save to Server</button>
   <button id="submitBtn" class="btn btn-danger">Submit</button>
   <button id="fullscreenBtn" class="btn" title="Toggle Fullscreen">⛶ Fullscreen</button>
-  <button id="toggleChatBtn" class="btn" title="Toggle Chat Panel">💬</button>
+  <button id="toggleChatBtn" class="btn" title="Toggle Chat Panel">💬 Hide Chat</button>
   <span id="status" style="margin-left:10px;color:#9ecbff;"></span>
 </div>
 
@@ -382,7 +393,7 @@
   <div class="toolbar-fullscreen">
     <button id="saveBtn2" class="btn">Save</button>
     <button id="submitBtn2" class="btn btn-danger">Submit</button>
-    <button id="toggleChatBtn2" class="btn" title="Toggle Chat Panel">💬</button>
+    <button id="toggleChatBtn2" class="btn" title="Toggle Chat Panel">💬 Hide Chat</button>
     <button id="exitFullscreenBtn" class="btn">Exit Fullscreen</button>
     <span id="statusFullscreen" style="margin-left:10px;color:#9ecbff;"></span>
   </div>
@@ -664,6 +675,13 @@
 
   function toggleChatPanel() {
     workspace.classList.toggle('chat-hidden');
+    
+    // Update button text based on state
+    const isHidden = workspace.classList.contains('chat-hidden');
+    const btnText = isHidden ? '💬 Show Chat' : '💬 Hide Chat';
+    toggleChatBtn.textContent = btnText;
+    toggleChatBtn2.textContent = btnText;
+    
     // Notify JupyterLite to resize
     window.dispatchEvent(new Event('resize'));
   }
