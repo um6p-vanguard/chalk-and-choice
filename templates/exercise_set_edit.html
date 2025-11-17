@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 1000px; margin: 0 auto; padding: 20px;">
+  <div style="margin-bottom: 30px;">
+    <a href="/exercises/manage" style="color: #60a5fa; text-decoration: none;">← Back to Exercise Sets</a>
+    <h1 style="margin: 10px 0;">Edit Exercise Set</h1>
+  </div>
+  
+  {% if error %}
+  <div style="background: rgba(239,68,68,0.2); border: 1px solid #ef4444; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fca5a5;">
+    {{ error }}
+  </div>
+  {% endif %}
+  
+  <!-- Exercise Set Metadata Form -->
+  <div class="card" style="margin-bottom: 30px;">
+    <h2 style="margin-top: 0;">Set Information</h2>
+    <form method="POST" action="/exercises/{{ exercise_set.code }}/edit" style="display: flex; flex-direction: column; gap: 20px;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Set Title *</label>
+        <input type="text" name="title" value="{{ exercise_set.title }}" required style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Description</label>
+        <textarea name="description" rows="4" style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">{{ exercise_set.description or '' }}</textarea>
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Set Code</label>
+        <input type="text" value="{{ exercise_set.code }}" disabled style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 6px; color: var(--muted);">
+        <small style="color: var(--muted);">Code cannot be changed after creation</small>
+      </div>
+      
+      <fieldset style="border: 1px solid var(--border); border-radius: 8px; padding: 20px; background: rgba(99,127,190,0.05);">
+        <legend style="padding: 0 10px; color: var(--brand); font-weight: 600;">📅 Availability</legend>
+        
+        <div style="margin-bottom: 15px;">
+          <label style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" name="published" value="1" {% if exercise_set.is_published %}checked{% endif %}>
+            <span>Published (visible to students)</span>
+          </label>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+          <div>
+            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available From</label>
+            <input type="datetime-local" name="available_from" value="{% if exercise_set.available_from %}{{ exercise_set.available_from.strftime('%Y-%m-%dT%H:%M') }}{% endif %}" style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+            <small style="color: var(--muted);">Leave empty for always available</small>
+          </div>
+          
+          <div>
+            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available Until</label>
+            <input type="datetime-local" name="available_until" value="{% if exercise_set.available_until %}{{ exercise_set.available_until.strftime('%Y-%m-%dT%H:%M') }}{% endif %}" style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 6px; color: var(--text);">
+            <small style="color: var(--muted);">Leave empty for no expiration</small>
+          </div>
+        </div>
+      </fieldset>
+      
+      <div style="display: flex; gap: 10px;">
+        <button type="submit" class="btn-primary" style="padding: 12px 24px;">
+          Save Changes
+        </button>
+        <a href="/exercises/manage" class="btn" style="padding: 12px 24px; text-decoration: none;">
+          Cancel
+        </a>
+      </div>
+    </form>
+  </div>
+  
+  <!-- Exercises in this Set -->
+  <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h2 style="margin: 0;">Exercises in this Set ({{ exercise_set.exercises|length }})</h2>
+      <a href="/exercises/{{ exercise_set.code }}/new-exercise" class="btn-primary" style="text-decoration: none; padding: 10px 20px; border-radius: 6px;">
+        + Add Exercise
+      </a>
+    </div>
+    
+    {% if exercise_set.exercises %}
+    <div style="display: flex; flex-direction: column; gap: 15px;">
+      {% for ex in exercise_set.exercises | sort(attribute='order') %}
+      <div style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; padding: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: start;">
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+              <span style="background: var(--brand); color: #0b1120; padding: 4px 12px; border-radius: 4px; font-weight: 600; font-size: 12px;">
+                #{{ ex.order }}
+              </span>
+              <strong style="font-size: 16px;">{{ ex.title }}</strong>
+              <span style="color: var(--muted); font-size: 13px;">{{ ex.points }} points</span>
+            </div>
+            <p style="color: var(--muted); margin: 0; font-size: 14px;">
+              {{ ex.description[:100] }}{% if ex.description|length > 100 %}...{% endif %}
+            </p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <a href="/exercises/{{ exercise_set.code }}/{{ ex.order }}/edit-exercise" 
+               style="background: #3b82f6; color: white; text-decoration: none; padding: 6px 12px; border-radius: 4px; font-size: 13px;">
+              ✏️ Edit
+            </a>
+            <form method="POST" action="/exercises/{{ exercise_set.code }}/{{ ex.order }}/delete-exercise" style="display: inline;" 
+                  onsubmit="return confirm('Are you sure you want to delete this exercise?');">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button type="submit" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 13px; cursor: pointer;">
+                🗑️ Delete
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="text-align: center; padding: 40px; color: var(--muted);">
+      <p>No exercises in this set yet.</p>
+      <p style="font-size: 14px;">Click "Add Exercise" to create your first exercise.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

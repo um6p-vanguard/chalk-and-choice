@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto; padding: 20px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+    <h1>Manage Exercise Sets</h1>
+    <a href="/exercises/new" class="btn" style="background: #2563eb; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600;">
+      + New Exercise Set
+    </a>
+  </div>
+
+  {% if exercise_sets %}
+  <div style="display: grid; gap: 20px;">
+    {% for item in exercise_sets %}
+    {% set ex_set = item.set %}
+    <div style="background: rgba(96,165,250,0.05); border: 1px solid rgba(96,165,250,0.2); border-radius: 12px; padding: 24px;">
+      <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 15px;">
+        <div style="flex: 1;">
+          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+            <h2 style="margin: 0; font-size: 24px;">{{ ex_set.title }}</h2>
+            {% if ex_set.is_published %}
+              <span style="background: #10b981; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">
+                PUBLISHED
+              </span>
+            {% else %}
+              <span style="background: #64748b; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">
+                DRAFT
+              </span>
+            {% endif %}
+          </div>
+          
+          <div style="color: #94a3b8; font-family: monospace; font-size: 13px; margin-bottom: 8px;">
+            Code: {{ ex_set.code }}
+          </div>
+          
+          {% if ex_set.description %}
+          <p style="color: #cbd5e1; margin: 0; line-height: 1.6;">{{ ex_set.description }}</p>
+          {% endif %}
+        </div>
+      </div>
+      
+      <!-- Stats Row -->
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+        <div style="text-align: center;">
+          <div style="font-size: 28px; font-weight: 700; color: #60a5fa;">{{ item.exercise_count }}</div>
+          <div style="font-size: 13px; color: #94a3b8;">Exercises</div>
+        </div>
+        <div style="text-align: center;">
+          <div style="font-size: 28px; font-weight: 700; color: #34d399;">{{ item.unique_students }}</div>
+          <div style="font-size: 13px; color: #94a3b8;">Students</div>
+        </div>
+        <div style="text-align: center;">
+          <div style="font-size: 28px; font-weight: 700; color: #a78bfa;">{{ item.total_submissions }}</div>
+          <div style="font-size: 13px; color: #94a3b8;">Submissions</div>
+        </div>
+      </div>
+      
+      <!-- Availability Info -->
+      {% if ex_set.available_from or ex_set.available_until %}
+      <div style="background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); border-radius: 6px; padding: 10px; margin-bottom: 15px; font-size: 13px;">
+        <strong style="color: #fbbf24;">📅 Availability:</strong>
+        {% if ex_set.available_from %}
+          <span style="color: #cbd5e1;">From {{ ex_set.available_from.strftime('%b %d, %Y %I:%M %p') }}</span>
+        {% endif %}
+        {% if ex_set.available_until %}
+          <span style="color: #cbd5e1;">Until {{ ex_set.available_until.strftime('%b %d, %Y %I:%M %p') }}</span>
+        {% endif %}
+      </div>
+      {% endif %}
+      
+      <!-- Exercise List -->
+      {% if ex_set.exercises %}
+      <div style="background: rgba(0,0,0,0.2); border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+        <strong style="display: block; margin-bottom: 10px; color: #e2e8f0;">Exercises in this set:</strong>
+        <ol style="margin: 0; padding-left: 20px; color: #cbd5e1; line-height: 2;">
+          {% for ex in ex_set.exercises | sort(attribute='order') %}
+          <li>
+            <span style="font-weight: 500;">{{ ex.title }}</span>
+            <span style="color: #94a3b8; font-size: 12px;">({{ ex.points }} pts)</span>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
+      
+      <!-- Actions -->
+      <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <a href="/exercises/{{ ex_set.code }}/edit" 
+           style="background: #3b82f6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500;">
+          ✏️ Edit Set
+        </a>
+        <a href="/ex/{{ ex_set.code }}" 
+           style="background: #10b981; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500;">
+          👁️ Preview
+        </a>
+        <a href="/exercises/{{ ex_set.code }}/share" 
+           style="background: #8b5cf6; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500;">
+          🔗 Share Link
+        </a>
+        <a href="/exercises/{{ ex_set.code }}/submissions" 
+           style="background: #f59e0b; color: white; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500;">
+          📊 View Submissions
+        </a>
+        <button onclick="deleteSet('{{ ex_set.code }}')"
+                style="background: #ef4444; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500;">
+          🗑️ Delete
+        </button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 60px 20px; background: rgba(0,0,0,0.2); border-radius: 12px; border: 2px dashed rgba(255,255,255,0.1);">
+    <div style="font-size: 48px; margin-bottom: 20px;">📝</div>
+    <h2 style="color: #94a3b8; margin-bottom: 10px;">No Exercise Sets Yet</h2>
+    <p style="color: #64748b; margin-bottom: 25px;">Create your first exercise set to get started!</p>
+    <a href="/exercises/new" style="background: #2563eb; color: white; text-decoration: none; padding: 14px 28px; border-radius: 8px; font-weight: 600; display: inline-block;">
+      + Create Exercise Set
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+<script>
+function deleteSet(code) {
+  if (!confirm(`Are you sure you want to delete this exercise set?\n\nThis will permanently delete all exercises in the set and student submissions.`)) {
+    return;
+  }
+  
+  fetch(`/exercises/${code}/delete`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'csrf={{ csrf_token() }}'
+  })
+  .then(response => {
+    if (response.ok) {
+      window.location.reload();
+    } else {
+      alert('Failed to delete exercise set');
+    }
+  })
+  .catch(err => {
+    alert('Error deleting exercise set');
+    console.error(err);
+  });
+}
+</script>
+
+<style>
+.btn:hover {
+  opacity: 0.9;
+}
+
+button:hover, a:hover {
+  transform: translateY(-1px);
+  transition: transform 0.2s;
+}
+</style>
+{% endblock %}

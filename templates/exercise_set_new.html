@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 1000px; margin: 0 auto; padding: 20px;">
+  <h1>Create Exercise Set</h1>
+  
+  {% if error %}
+  <div style="background: rgba(239,68,68,0.2); border: 1px solid #ef4444; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fca5a5;">
+    {{ error }}
+  </div>
+  {% endif %}
+  
+  <form method="POST" action="/exercises/new" style="display: flex; flex-direction: column; gap: 25px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    
+    <!-- Set Info -->
+    <fieldset style="border: 2px solid rgba(96,165,250,0.3); border-radius: 8px; padding: 20px; background: rgba(96,165,250,0.05);">
+      <legend style="padding: 0 10px; color: #60a5fa; font-weight: 600; font-size: 18px;">📚 Exercise Set Details</legend>
+      
+      <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 15px; margin-bottom: 15px;">
+        <div>
+          <label style="display: block; margin-bottom: 8px; font-weight: 600;">Set Code *</label>
+          <input type="text" name="set_code" required placeholder="e.g., python-intro" 
+                 pattern="[a-z0-9-]+" title="Only lowercase letters, numbers, and hyphens"
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+          <small style="color: #94a3b8;">Unique identifier (lowercase, no spaces)</small>
+        </div>
+        
+        <div>
+          <label style="display: block; margin-bottom: 8px; font-weight: 600;">Set Title *</label>
+          <input type="text" name="set_title" required placeholder="e.g., Introduction to Python" 
+                 style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+        </div>
+      </div>
+      
+      <div style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Set Description</label>
+        <textarea name="set_description" rows="3" placeholder="Describe what students will learn in this set..."
+                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;"></textarea>
+      </div>
+      
+      <!-- Availability -->
+      <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px; margin-top: 15px;">
+        <div style="margin-bottom: 15px;">
+          <label style="display: flex; align-items: center; gap: 8px;">
+            <input type="checkbox" name="published" value="1" checked>
+            <span style="font-weight: 600;">Published (visible to students when available)</span>
+          </label>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+          <div>
+            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available From</label>
+            <input type="datetime-local" name="available_from" 
+                   style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+            <small style="color: #94a3b8;">Leave empty for immediate availability</small>
+          </div>
+          
+          <div>
+            <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available Until</label>
+            <input type="datetime-local" name="available_until" 
+                   style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+            <small style="color: #94a3b8;">Leave empty for no deadline</small>
+          </div>
+        </div>
+      </div>
+    </fieldset>
+    
+    <!-- Exercises -->
+    <div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h2 style="margin: 0;">Exercises in This Set</h2>
+        <button type="button" onclick="addExercise()" 
+                style="background: #10b981; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          + Add Exercise
+        </button>
+      </div>
+      
+      <div id="exercises-container" style="display: flex; flex-direction: column; gap: 20px;">
+        <!-- Exercises will be added here -->
+      </div>
+      
+      <input type="hidden" id="exercise-count" name="exercise_count" value="0">
+    </div>
+    
+    <!-- Submit -->
+    <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; padding-top: 20px; border-top: 2px solid rgba(255,255,255,0.1);">
+      <a href="/exercises/manage" style="background: #475569; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px;">Cancel</a>
+      <button type="submit" style="background: #2563eb; color: white; border: none; padding: 12px 32px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 16px;">
+        Create Exercise Set
+      </button>
+    </div>
+  </form>
+</div>
+
+<script>
+let exerciseCount = 0;
+
+function addExercise() {
+  const container = document.getElementById('exercises-container');
+  const exNum = exerciseCount;
+  
+  const exDiv = document.createElement('div');
+  exDiv.id = `exercise-${exNum}`;
+  exDiv.style.cssText = 'border: 2px solid rgba(34,197,94,0.3); border-radius: 8px; padding: 20px; background: rgba(34,197,94,0.05);';
+  
+  exDiv.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+      <strong style="font-size: 18px; color: #22c55e;">Exercise ${exNum + 1}</strong>
+      <button type="button" onclick="removeExercise(${exNum})" 
+              style="background: #ef4444; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer;">
+        Remove
+      </button>
+    </div>
+    
+    <div style="display: flex; flex-direction: column; gap: 15px;">
+      <!-- Title -->
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Exercise Title *</label>
+        <input type="text" name="ex_title_${exNum}" required placeholder="e.g., Print Hello World"
+               style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+      
+      <!-- Description -->
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Description (Markdown) *</label>
+        <textarea name="ex_description_${exNum}" rows="4" required placeholder="Describe the problem..."
+                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: monospace;"></textarea>
+      </div>
+      
+      <!-- Points -->
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Points</label>
+        <input type="number" name="ex_points_${exNum}" value="10" min="1" 
+               style="width: 150px; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+      
+      <!-- Starter Code -->
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Starter Code *</label>
+        <textarea name="ex_starter_code_${exNum}" rows="8" required placeholder="# Write your code here"
+                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;"></textarea>
+      </div>
+      
+      <!-- Default Input -->
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Default Input (stdin)</label>
+        <textarea name="ex_default_input_${exNum}" rows="3" placeholder="Sample input for testing..."
+                  style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;"></textarea>
+      </div>
+      
+      <!-- Test Cases -->
+      <div style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.1);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <strong>Test Cases</strong>
+          <button type="button" onclick="addTestCase(${exNum})" 
+                  style="background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">
+            + Add Test
+          </button>
+        </div>
+        
+        <div id="exercise-${exNum}-tests" style="display: flex; flex-direction: column; gap: 10px;">
+          <!-- Tests will be added here -->
+        </div>
+        
+        <input type="hidden" id="ex-${exNum}-test-count" name="ex_test_count_${exNum}" value="0">
+      </div>
+    </div>
+  `;
+  
+  container.appendChild(exDiv);
+  exerciseCount++;
+  document.getElementById('exercise-count').value = exerciseCount;
+  
+  // Add initial test case
+  addTestCase(exNum);
+}
+
+function removeExercise(num) {
+  const exDiv = document.getElementById(`exercise-${num}`);
+  if (exDiv) {
+    exDiv.remove();
+  }
+}
+
+function addTestCase(exNum) {
+  const container = document.getElementById(`exercise-${exNum}-tests`);
+  const testCountInput = document.getElementById(`ex-${exNum}-test-count`);
+  const testCount = parseInt(testCountInput.value);
+  
+  const testDiv = document.createElement('div');
+  testDiv.id = `ex-${exNum}-test-${testCount}`;
+  testDiv.style.cssText = 'background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 12px;';
+  
+  testDiv.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <strong style="font-size: 14px;">Test ${testCount + 1}</strong>
+      <button type="button" onclick="removeTestCase(${exNum}, ${testCount})" 
+              style="background: #dc2626; color: white; border: none; padding: 3px 10px; border-radius: 3px; cursor: pointer; font-size: 12px;">
+        Remove
+      </button>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+      <div>
+        <label style="display: block; margin-bottom: 5px; font-size: 13px;">Input (stdin)</label>
+        <textarea name="ex_${exNum}_test_input_${testCount}" rows="2" 
+                  style="width: 100%; padding: 6px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace; font-size: 12px;"></textarea>
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 5px; font-size: 13px;">Expected Output</label>
+        <textarea name="ex_${exNum}_test_expected_${testCount}" rows="2" 
+                  style="width: 100%; padding: 6px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace; font-size: 12px;"></textarea>
+      </div>
+    </div>
+    
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <input type="text" name="ex_${exNum}_test_desc_${testCount}" placeholder="Description (optional)" 
+             style="flex: 1; padding: 6px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-size: 12px; margin-right: 10px;">
+      
+      <label style="display: flex; align-items: center; gap: 6px; font-size: 13px;">
+        <input type="checkbox" name="ex_${exNum}_test_hidden_${testCount}" value="1" checked>
+        <span>Hidden</span>
+      </label>
+    </div>
+  `;
+  
+  container.appendChild(testDiv);
+  testCountInput.value = testCount + 1;
+}
+
+function removeTestCase(exNum, testNum) {
+  const testDiv = document.getElementById(`ex-${exNum}-test-${testNum}`);
+  if (testDiv) {
+    testDiv.remove();
+  }
+}
+
+// Add initial exercise on page load
+window.addEventListener('DOMContentLoaded', () => {
+  addExercise();
+});
+</script>
+
+<style>
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+button:hover {
+  opacity: 0.9;
+}
+
+textarea, input[type="text"], input[type="number"], input[type="datetime-local"], select {
+  font-size: 14px;
+}
+
+textarea {
+  resize: vertical;
+}
+</style>
+{% endblock %}

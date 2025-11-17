@@ -97,9 +97,57 @@
   </div>
   {% endif %}
 
+  {% if available_exercises and available_exercises|length %}
+  <div class="sec-card">
+    <h3 class="sec-title">📝 Available Coding Exercise Sets</h3>
+    <p class="sec-hint">Practice your coding skills with these exercise sets.</p>
+
+    <div class="list">
+      {% for ex in available_exercises %}
+      <div class="item-row">
+        <div class="item-main">
+          <div class="item-title">{{ ex.title }}</div>
+          <div class="item-desc">
+            {% if ex.description %}
+              {{ ex.description[:100] }}{% if ex.description|length > 100 %}...{% endif %}
+            {% else %}
+              Complete {{ ex.exercise_count }} coding exercise{{ 's' if ex.exercise_count != 1 else '' }}
+            {% endif %}
+          </div>
+          <div class="item-meta">
+            <span style="color: #60a5fa;">
+              {{ ex.exercise_count }} exercise{{ 's' if ex.exercise_count != 1 else '' }}
+            </span>
+            • {{ ex.total_points }} total points
+            {% if ex.completed_count > 0 %}
+              • <span style="color: #10b981;">{{ ex.completed_count }}/{{ ex.exercise_count }} completed</span>
+            {% endif %}
+          </div>
+        </div>
+        <div class="item-actions">
+          <a class="btn-cta" href="{{ url_for('exercise_play', code=ex.code) }}">
+            {% if ex.is_completed %}
+              ✓ Review
+            {% elif ex.completed_count > 0 %}
+              Continue
+            {% else %}
+              Start
+            {% endif %}
+          </a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    
+    <div style="text-align: center; margin-top: 16px;">
+      <a href="{{ url_for('exercises_list') }}" class="btn-ghost">View All Exercise Sets →</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="sec-card">
     <h3 class="sec-title">Live Lecture Feedback</h3>
-    <p class="sec-hint">Signed in as <strong>{{ student_name }}</strong>. Let your instructor know how you’re doing.</p>
+    <p class="sec-hint">Signed in as <strong>{{ student_name }}</strong>. Let your instructor know how you're doing.</p>
 
     <div class="item-row">
       <div class="item-main">
@@ -132,12 +180,19 @@
 {% elif user %}
   <div class="sec-card">
     <h3 class="sec-title">Welcome, {{ user.name or 'Instructor' }}</h3>
-    <p class="sec-hint">Use the navigation to manage polls, signals, and homework.</p>
+    <p class="sec-hint">Use the navigation to manage polls, signals, homework, and coding exercises.</p>
     <div class="item-row" style="justify-content:flex-start;">
       <div class="item-actions">
         <a class="btn-cta" href="{{ url_for('homework_list') }}">Homework Submissions</a>
         <a class="btn-ghost" href="{{ url_for('homework_new') }}">Create Homework</a>
         <a class="btn-ghost" href="{{ url_for('signals_dashboard') }}">Live Signals</a>
+      </div>
+    </div>
+    <div class="item-row" style="justify-content:flex-start; margin-top: 10px;">
+      <div class="item-actions">
+        <a class="btn-cta" style="background: linear-gradient(180deg,#10b981,#059669);" href="{{ url_for('exercise_new') }}">Create Exercises</a>
+        <a class="btn-ghost" href="{{ url_for('exercises_manage') }}">Manage Exercises</a>
+        <a class="btn-ghost" href="{{ url_for('exercises_list') }}">Browse Exercises</a>
       </div>
     </div>
   </div>

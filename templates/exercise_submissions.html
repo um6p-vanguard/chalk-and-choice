@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 1400px; margin: 0 auto; padding: 20px;">
+  <div style="margin-bottom: 30px;">
+    <a href="/exercises/manage" style="color: #60a5fa; text-decoration: none;">← Back to Exercises</a>
+    <h1 style="margin: 10px 0;">Submissions: {{ exercise_set.title }}</h1>
+    <p style="color: #94a3b8;">View all student submissions across {{ exercises|length }} exercise{{ 's' if exercises|length != 1 else '' }}</p>
+  </div>
+
+  {% if students_data %}
+  <div style="overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse; min-width: 800px;">
+      <thead>
+        <tr style="background: rgba(96,165,250,0.1); text-align: left;">
+          <th style="padding: 12px; position: sticky; left: 0; background: rgba(96,165,250,0.1); z-index: 10;">Student</th>
+          <th style="padding: 12px; text-align: center;">Total Score</th>
+          {% for ex in exercises %}
+          <th style="padding: 12px; text-align: center; min-width: 100px;">
+            <div style="font-size: 11px; color: #94a3b8;">Exercise {{ ex.order }}</div>
+            <div style="font-size: 13px; font-weight: 600;">{{ ex.title[:20] }}{{ '...' if ex.title|length > 20 else '' }}</div>
+          </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for data in students_data %}
+        <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
+          <td style="padding: 12px; position: sticky; left: 0; background: var(--bg); z-index: 5;">
+            <strong>{{ data.student.name }}</strong><br>
+            <small style="color: #94a3b8;">{{ data.student.email }}</small>
+          </td>
+          <td style="padding: 12px; text-align: center;">
+            <div style="font-size: 18px; font-weight: 700; 
+                        color: {% if data.percentage == 100 %}#10b981{% elif data.percentage >= 70 %}#60a5fa{% elif data.percentage >= 40 %}#fbbf24{% else %}#f87171{% endif %};">
+              {{ data.total_score|int }}/{{ data.max_score }}
+            </div>
+            <div style="font-size: 12px; color: #94a3b8;">{{ data.percentage }}%</div>
+          </td>
+          {% for prog in data.exercise_progress %}
+          <td style="padding: 12px; text-align: center; background: {% if prog.completed %}rgba(16,185,129,0.1){% elif prog.attempts > 0 %}rgba(251,191,36,0.1){% else %}rgba(100,116,139,0.05){% endif %};">
+            {% if prog.attempts > 0 %}
+              <div style="font-weight: 600; color: {% if prog.completed %}#10b981{% else %}#fbbf24{% endif %};">
+                {{ prog.best_score|int }}/{{ prog.exercise.points }}
+              </div>
+              <div style="font-size: 11px; color: #94a3b8;">
+                {% if prog.completed %}
+                  ✓ Complete
+                {% else %}
+                  {{ prog.attempts }} attempt{{ 's' if prog.attempts != 1 else '' }}
+                {% endif %}
+              </div>
+            {% else %}
+              <span style="color: #64748b;">—</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div style="text-align: center; padding: 60px 20px; color: #94a3b8;">
+    <p style="font-size: 18px;">No submissions yet</p>
+    <p>Students haven't started working on this exercise set yet.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

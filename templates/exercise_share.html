@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto; padding: 20px; text-align: center;">
+  <h1>Share Exercise: {{ exercise.title }}</h1>
+  
+  <div style="background: rgba(96,165,250,0.1); border: 1px solid rgba(96,165,250,0.3); border-radius: 12px; padding: 30px; margin: 30px 0;">
+    <h2>{{ link }}</h2>
+    <p style="color: #94a3b8; margin: 20px 0;">Students can access this exercise via the link or QR code</p>
+    
+    <div style="background: white; padding: 20px; border-radius: 12px; display: inline-block; margin: 20px 0;">
+      <img src="{{ data_url }}" alt="QR Code" style="max-width: 300px; display: block;">
+    </div>
+    
+    <div style="margin-top: 20px;">
+      <button onclick="copyLink()" style="background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; margin-right: 10px;">
+        Copy Link
+      </button>
+      <a href="/exercises/manage" style="background: #475569; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px; display: inline-block;">
+        Back to Exercises
+      </a>
+    </div>
+  </div>
+  
+  <div style="background: rgba(0,0,0,0.3); border-radius: 12px; padding: 20px; text-align: left;">
+    <h3>Exercise Details</h3>
+    <p><strong>Code:</strong> {{ exercise.code }}</p>
+    <p><strong>Difficulty:</strong> <span class="difficulty-badge {{ exercise.difficulty }}">{{ exercise.difficulty }}</span></p>
+    <p><strong>Points:</strong> {{ exercise.points }}</p>
+    <p><strong>Published:</strong> {{ 'Yes' if exercise.is_published else 'No' }}</p>
+    {% if exercise.available_from %}
+    <p><strong>Available From:</strong> {{ exercise.available_from.strftime('%Y-%m-%d %H:%M') }}</p>
+    {% endif %}
+    {% if exercise.available_until %}
+    <p><strong>Available Until:</strong> {{ exercise.available_until.strftime('%Y-%m-%d %H:%M') }}</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function copyLink() {
+  const link = '{{ link }}';
+  navigator.clipboard.writeText(link).then(() => {
+    alert('Link copied to clipboard!');
+  });
+}
+</script>
+
+<style>
+.difficulty-badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.difficulty-badge.easy { background: #10b981; color: white; }
+.difficulty-badge.medium { background: #f59e0b; color: white; }
+.difficulty-badge.hard { background: #ef4444; color: white; }
+</style>
+{% endblock %}

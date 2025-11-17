@@ -11,7 +11,8 @@ from sqlalchemy import or_
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
                     StudentStats, Intervention, Notebook, StudentHomework,
-                    Homework, HomeworkMessage, Mentor)
+                    Homework, HomeworkMessage, Mentor, CodeExercise,
+                    CodeSubmission, StudentProgress, ExerciseSet)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -26,6 +27,76 @@ def parse_dt_local(s):
         return datetime.strptime(s.strip(), "%Y-%m-%dT%H:%M")
     except Exception:
         return None
+
+def compare_outputs(actual, expected):
+    """
+    Smart comparison of code outputs that handles Python data structures.
+    Normalizes whitespace and evaluates Python literals when possible.
+    
+    Examples:
+    - "['h', 'a', 'm']" == "['h','a','m']"  -> True
+    - "[1, 2, 3]" == "[1,2,3]"  -> True
+    - "{'a': 1, 'b': 2}" == "{'a':1,'b':2}"  -> True
+    - "42" == "42.0"  -> False (different types)
+    """
+    if not actual and not expected:
+        return True
+    if not actual or not expected:
+        return False
+    
+    # Trim both
+    actual_trimmed = actual.strip()
+    expected_trimmed = expected.strip()
+    
+    # Exact match (fastest path)
+    if actual_trimmed == expected_trimmed:
+        return True
+    
+    # Normalize whitespace in Python data structures
+    def normalize_whitespace(s):
+        # Remove spaces around brackets, braces, parentheses, commas, colons
+        s = re.sub(r'\[\s+', '[', s)      # [ x -> [x
+        s = re.sub(r'\s+\]', ']', s)      # x ] -> x]
+        s = re.sub(r'\{\s+', '{', s)      # { x -> {x
+        s = re.sub(r'\s+\}', '}', s)      # x } -> x}
+        s = re.sub(r'\(\s+', '(', s)      # ( x -> (x
+        s = re.sub(r'\s+\)', ')', s)      # x ) -> x)
+        s = re.sub(r'\s*,\s*', ',', s)    # x , y -> x,y
+        s = re.sub(r'\s*:\s*', ':', s)    # x : y -> x:y
+        s = re.sub(r'\s+', ' ', s)        # multiple spaces -> single
+        return s.strip()
+    
+    actual_normalized = normalize_whitespace(actual_trimmed)
+    expected_normalized = normalize_whitespace(expected_trimmed)
+    
+    if actual_normalized == expected_normalized:
+        return True
+    
+    # Try to evaluate as Python literals if they look like data structures
+    def is_python_literal(s):
+        s = s.strip()
+        return (
+            (s.startswith('[') and s.endswith(']')) or   # List
+            (s.startswith('(') and s.endswith(')')) or   # Tuple
+            (s.startswith('{') and s.endswith('}')) or   # Dict/Set
+            s in ('True', 'False', 'None') or             # Boolean/None
+            re.match(r'^-?\d+$', s) or                    # Integer
+            re.match(r'^-?\d+\.\d+$', s)                  # Float
+        )
+    
+    if is_python_literal(actual_trimmed) and is_python_literal(expected_trimmed):
+        try:
+            # Safely evaluate Python literals
+            import ast
+            actual_val = ast.literal_eval(actual_trimmed)
+            expected_val = ast.literal_eval(expected_trimmed)
+            return actual_val == expected_val
+        except (ValueError, SyntaxError):
+            # If evaluation fails, fall through to string comparison
+            pass
+    
+    # Case-insensitive comparison as last resort (for text outputs)
+    return actual_normalized.lower() == expected_normalized.lower()
 
 # --------------------------------------------------------------------
 # Config
@@ -341,12 +412,59 @@ def index():
     polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
     if session.get("student_id"):
         s = current_student()
+        
+        # Get available exercise sets for student home
+        now = datetime.now()
+        available_sets_query = (
+            ExerciseSet.query
+            .filter(ExerciseSet.is_published == True)
+            .filter(or_(
+                ExerciseSet.available_from == None,
+                ExerciseSet.available_from <= now
+            ))
+            .filter(or_(
+                ExerciseSet.available_until == None,
+                ExerciseSet.available_until >= now
+            ))
+            .order_by(ExerciseSet.created_at.desc())
+            .limit(6)  # Show 6 most recent on home
+        )
+        
+        available_exercises = []
+        for ex_set in available_sets_query.all():
+            # Count exercises in set
+            exercise_count = len(ex_set.exercises)
+            
+            # Check progress - count completed exercises in this set
+            completed_count = 0
+            total_points = 0
+            for ex in ex_set.exercises:
+                total_points += ex.points
+                progress = StudentProgress.query.filter_by(
+                    student_id=s.id,
+                    exercise_id=ex.id,
+                    completed=True
+                ).first()
+                if progress:
+                    completed_count += 1
+            
+            available_exercises.append({
+                "code": ex_set.code,
+                "title": ex_set.title,
+                "description": ex_set.description,
+                "exercise_count": exercise_count,
+                "completed_count": completed_count,
+                "total_points": total_points,
+                "is_completed": completed_count == exercise_count if exercise_count > 0 else False
+            })
+        
         return render_template(
             "index.html",
             student_name=s.name,
             polls=polls,
             user=None,
-            active_homeworks=_active_homeworks_for_student(s)
+            active_homeworks=_active_homeworks_for_student(s),
+            available_exercises=available_exercises
         )
     return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
 
@@ -2179,6 +2297,872 @@ def dashboard_for_role():
 @require_student()
 def student_home():
     return redirect(url_for("index"))
+
+# --------------------------------------------------------------------
+# Code Exercises
+# --------------------------------------------------------------------
+
+# Admin: List all exercises
+@app.route("/exercises/manage")
+@require_user()
+def exercises_manage():
+    exercise_sets = ExerciseSet.query.order_by(ExerciseSet.created_at.desc()).all()
+    
+    # Get stats for each set
+    sets_data = []
+    for ex_set in exercise_sets:
+        exercise_count = len(ex_set.exercises)
+        
+        # Count total submissions and unique students across all exercises in the set
+        total_submissions = 0
+        unique_students_set = set()
+        for ex in ex_set.exercises:
+            total_submissions += CodeSubmission.query.filter_by(exercise_id=ex.id).count()
+            students = db.session.query(CodeSubmission.student_id).filter_by(exercise_id=ex.id).distinct().all()
+            unique_students_set.update([s[0] for s in students])
+        
+        sets_data.append({
+            'set': ex_set,
+            'exercise_count': exercise_count,
+            'total_submissions': total_submissions,
+            'unique_students': len(unique_students_set)
+        })
+    
+    return render_template("exercises_manage.html", exercise_sets=sets_data, 
+                         user=current_user(), student_name=session.get("student_name"))
+
+# Admin: Create new exercise set
+@app.route("/exercises/new", methods=["GET", "POST"])
+@require_user()
+def exercise_new():
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        # Exercise Set details
+        set_code = (request.form.get("set_code") or "").strip()
+        set_title = (request.form.get("set_title") or "").strip()
+        set_description = (request.form.get("set_description") or "").strip()
+        is_published = bool(request.form.get("published"))
+        
+        # Parse datetime fields
+        available_from = parse_dt_local(request.form.get("available_from"))
+        available_until = parse_dt_local(request.form.get("available_until"))
+        
+        if not set_code or not set_title:
+            return render_template("exercise_set_new.html", 
+                                 error="Set code and title are required",
+                                 user=current_user(), 
+                                 student_name=session.get("student_name"))
+        
+        # Check if code already exists
+        existing = ExerciseSet.query.filter_by(code=set_code).first()
+        if existing:
+            return render_template("exercise_set_new.html", 
+                                 error=f"A set with code '{set_code}' already exists",
+                                 user=current_user(), 
+                                 student_name=session.get("student_name"))
+        
+        # Create the exercise set
+        exercise_set = ExerciseSet(
+            code=set_code,
+            title=set_title,
+            description=set_description,
+            is_published=is_published,
+            available_from=available_from,
+            available_until=available_until,
+            creator_user_id=current_user().id,
+            created_at=datetime.now()
+        )
+        db.session.add(exercise_set)
+        db.session.flush()  # Get the ID
+        
+        # Parse exercises from form
+        exercise_count = int(request.form.get("exercise_count", 0))
+        for i in range(exercise_count):
+            title = (request.form.get(f"ex_title_{i}") or "").strip()
+            description = (request.form.get(f"ex_description_{i}") or "").strip()
+            starter_code = request.form.get(f"ex_starter_code_{i}", "")
+            default_input = request.form.get(f"ex_default_input_{i}", "")
+            points = int(request.form.get(f"ex_points_{i}", 10))
+            
+            if not title:  # Skip if no title
+                continue
+            
+            # Parse test cases for this exercise
+            test_cases = []
+            test_count = int(request.form.get(f"ex_test_count_{i}", 0))
+            for j in range(test_count):
+                input_data = request.form.get(f"ex_{i}_test_input_{j}", "")
+                expected = request.form.get(f"ex_{i}_test_expected_{j}", "")
+                hidden = bool(request.form.get(f"ex_{i}_test_hidden_{j}"))
+                desc = request.form.get(f"ex_{i}_test_desc_{j}", "")
+                
+                if input_data or expected:  # Only add if has data
+                    test_cases.append({
+                        "input": input_data,
+                        "expected_output": expected,
+                        "hidden": hidden,
+                        "description": desc
+                    })
+            
+            # Create exercise
+            exercise = CodeExercise(
+                exercise_set_id=exercise_set.id,
+                order=i + 1,
+                title=title,
+                description=description,
+                starter_code=starter_code,
+                language="python",
+                default_input=default_input,
+                test_cases_json=test_cases,
+                points=points,
+                created_at=datetime.now()
+            )
+            db.session.add(exercise)
+        
+        db.session.commit()
+        
+        return redirect(url_for("exercises_manage"))
+    
+    return render_template("exercise_set_new.html", user=current_user(), 
+                         student_name=session.get("student_name"))
+
+# Admin: Edit exercise SET
+@app.route("/exercises/<code>/edit", methods=["GET", "POST"])
+@require_user()
+def exercise_edit(code):
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        exercise_set.title = (request.form.get("title") or "").strip()
+        exercise_set.description = (request.form.get("description") or "").strip()
+        exercise_set.is_published = bool(request.form.get("published"))
+        
+        exercise_set.available_from = parse_dt_local(request.form.get("available_from"))
+        exercise_set.available_until = parse_dt_local(request.form.get("available_until"))
+        
+        db.session.commit()
+        
+        return redirect(url_for("exercises_manage"))
+    
+    # Use new exercise set edit template
+    return render_template("exercise_set_edit.html", exercise_set=exercise_set, 
+                         user=current_user(), student_name=session.get("student_name"))
+
+
+# Admin: Edit individual exercise
+@app.route("/exercises/<code>/<int:exercise_num>/edit-exercise", methods=["GET", "POST"])
+@require_user()
+def exercise_edit_individual(code, exercise_num):
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    exercise = CodeExercise.query.filter_by(
+        exercise_set_id=exercise_set.id, 
+        order=exercise_num
+    ).first_or_404()
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        exercise.title = (request.form.get("title") or "").strip()
+        exercise.description = (request.form.get("description") or "").strip()
+        exercise.difficulty = request.form.get("difficulty") or "medium"
+        exercise.category = (request.form.get("category") or "").strip()
+        exercise.points = int(request.form.get("points") or 10)
+        exercise.starter_code = request.form.get("starter_code") or ""
+        exercise.default_input = request.form.get("default_input") or ""
+        
+        # Handle test cases
+        test_cases = []
+        test_inputs = request.form.getlist("test_input[]")
+        test_outputs = request.form.getlist("test_output[]")
+        test_hidden = request.form.getlist("test_hidden[]")
+        test_descriptions = request.form.getlist("test_description[]")
+        
+        for i in range(len(test_inputs)):
+            test_cases.append({
+                "input": test_inputs[i],
+                "expected_output": test_outputs[i],
+                "hidden": str(i) in test_hidden,  # Checkboxes only send checked values
+                "description": test_descriptions[i] if i < len(test_descriptions) else ""
+            })
+        
+        exercise.test_cases_json = test_cases  # JSONText handles serialization automatically
+        
+        db.session.commit()
+        
+        return redirect(url_for("exercise_edit", code=code))
+    
+    # Get test cases (already deserialized by JSONText)
+    test_cases = exercise.test_cases_json if exercise.test_cases_json else []
+    
+    return render_template("exercise_edit_clean.html", 
+                         exercise=exercise, 
+                         exercise_set=exercise_set,
+                         test_cases=test_cases,
+                         user=current_user(), 
+                         student_name=session.get("student_name"))
+
+
+# Admin: Delete individual exercise
+@app.route("/exercises/<code>/<int:exercise_num>/delete-exercise", methods=["POST"])
+@require_user()
+def exercise_delete_individual(code, exercise_num):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    exercise = CodeExercise.query.filter_by(
+        exercise_set_id=exercise_set.id, 
+        order=exercise_num
+    ).first_or_404()
+    
+    db.session.delete(exercise)
+    
+    # Reorder remaining exercises
+    remaining = CodeExercise.query.filter_by(exercise_set_id=exercise_set.id).filter(
+        CodeExercise.order > exercise_num
+    ).all()
+    for ex in remaining:
+        ex.order -= 1
+    
+    db.session.commit()
+    
+    return redirect(url_for("exercise_edit", code=code))
+
+
+# Admin: Add new exercise to a set
+@app.route("/exercises/<code>/new-exercise", methods=["GET", "POST"])
+@require_user()
+def exercise_new_individual(code):
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        # Get next order number
+        max_order = db.session.query(db.func.max(CodeExercise.order)).filter_by(
+            exercise_set_id=exercise_set.id
+        ).scalar() or 0
+        
+        exercise = CodeExercise()
+        exercise.exercise_set_id = exercise_set.id
+        exercise.order = max_order + 1
+        exercise.title = (request.form.get("title") or "").strip()
+        exercise.description = (request.form.get("description") or "").strip()
+        exercise.difficulty = request.form.get("difficulty") or "medium"
+        exercise.category = (request.form.get("category") or "").strip()
+        exercise.points = int(request.form.get("points") or 10)
+        exercise.starter_code = request.form.get("starter_code") or ""
+        exercise.default_input = request.form.get("default_input") or ""
+        
+        # Handle test cases
+        test_cases = []
+        test_inputs = request.form.getlist("test_input[]")
+        test_outputs = request.form.getlist("test_output[]")
+        test_hidden = request.form.getlist("test_hidden[]")
+        test_descriptions = request.form.getlist("test_description[]")
+        
+        for i in range(len(test_inputs)):
+            test_cases.append({
+                "input": test_inputs[i],
+                "expected_output": test_outputs[i],
+                "hidden": str(i) in test_hidden,
+                "description": test_descriptions[i] if i < len(test_descriptions) else ""
+            })
+        
+        exercise.test_cases_json = test_cases  # JSONText handles serialization automatically
+        
+        db.session.add(exercise)
+        db.session.commit()
+        
+        return redirect(url_for("exercise_edit", code=code))
+    
+    # Show empty form for new exercise
+    return render_template("exercise_new_individual.html", 
+                         exercise_set=exercise_set,
+                         user=current_user(), 
+                         student_name=session.get("student_name"))
+
+
+# Admin: Delete exercise SET
+@app.route("/exercises/<code>/delete", methods=["POST"])
+@require_user()
+def exercise_delete(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    db.session.delete(exercise_set)
+    db.session.commit()
+    
+    return redirect(url_for("exercises_manage"))
+
+# Admin: Share exercise SET (QR code)
+@app.route("/exercises/<code>/share")
+@require_user()
+def exercise_share(code):
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    
+    scheme = "https" if request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https" else "http"
+    host = SHARE_HOST or request.host
+    link = f"{scheme}://{host}{url_for('exercise_play', code=exercise_set.code)}"
+    
+    img = qrcode.make(link)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    
+    # Pass as 'exercise' for template compatibility
+    return render_template("exercise_share.html", exercise=exercise_set, link=link, 
+                         data_url=data_url, user=current_user(), 
+                         student_name=session.get("student_name"))
+
+# Admin: View submissions for an exercise SET
+@app.route("/exercises/<code>/submissions")
+@require_user()
+def exercise_submissions(code):
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    
+    # Get all exercises in this set
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    # Get all students who submitted to any exercise in this set
+    students_data = []
+    student_ids = set()
+    
+    for exercise in exercises:
+        for submission in CodeSubmission.query.filter_by(exercise_id=exercise.id).all():
+            student_ids.add(submission.student_id)
+    
+    for student_id in student_ids:
+        student = db.session.get(Student, student_id)
+        if not student:
+            continue
+            
+        # Get progress for each exercise
+        exercise_progress = []
+        total_score = 0
+        max_score = 0
+        
+        for exercise in exercises:
+            progress = StudentProgress.query.filter_by(
+                student_id=student_id,
+                exercise_id=exercise.id
+            ).first()
+            
+            max_score += exercise.points
+            
+            if progress:
+                total_score += progress.best_score
+                exercise_progress.append({
+                    'exercise': exercise,
+                    'completed': progress.completed,
+                    'best_score': progress.best_score,
+                    'attempts': progress.attempts
+                })
+            else:
+                exercise_progress.append({
+                    'exercise': exercise,
+                    'completed': False,
+                    'best_score': 0,
+                    'attempts': 0
+                })
+        
+        students_data.append({
+            'student': student,
+            'total_score': total_score,
+            'max_score': max_score,
+            'percentage': round(total_score / max_score * 100) if max_score > 0 else 0,
+            'exercise_progress': exercise_progress
+        })
+    
+    # Sort by total score descending
+    students_data.sort(key=lambda x: x['total_score'], reverse=True)
+    
+    return render_template("exercise_submissions.html", 
+                         exercise_set=exercise_set,
+                         exercises=exercises,
+                         students_data=students_data,
+                         user=current_user(), 
+                         student_name=session.get("student_name"))
+    
+    items = []
+    for sub, student in submissions:
+        progress = StudentProgress.query.filter_by(
+            student_id=student.id,
+            exercise_id=exercise.id
+        ).first()
+        
+        items.append({
+            'student': student,
+            'submission': sub,
+            'progress': progress
+        })
+    
+    return render_template("exercise_submissions.html", exercise=exercise, 
+                         items=items, user=current_user(), 
+                         student_name=session.get("student_name"))
+
+# Student: Browse exercises
+@app.route("/exercises")
+@require_student()
+def exercises_list():
+    student = current_student()
+    now = datetime.now()
+    
+    # Get all available exercise sets
+    sets_query = (ExerciseSet.query
+                  .filter(ExerciseSet.is_published == True)
+                  .filter(or_(
+                      ExerciseSet.available_from == None,
+                      ExerciseSet.available_from <= now
+                  ))
+                  .filter(or_(
+                      ExerciseSet.available_until == None,
+                      ExerciseSet.available_until >= now
+                  ))
+                  .order_by(ExerciseSet.created_at.desc()))
+    
+    sets_data = []
+    for ex_set in sets_query.all():
+        # Count completed exercises in this set
+        completed_count = 0
+        total_points = 0
+        for ex in ex_set.exercises:
+            total_points += ex.points
+            progress = StudentProgress.query.filter_by(
+                student_id=student.id,
+                exercise_id=ex.id,
+                completed=True
+            ).first()
+            if progress:
+                completed_count += 1
+        
+        sets_data.append({
+            'set': ex_set,
+            'exercise_count': len(ex_set.exercises),
+            'completed_count': completed_count,
+            'total_points': total_points
+        })
+    
+    return render_template("exercises_list.html", exercise_sets=sets_data,
+                         user=None, student_name=student.name)
+
+# Student: Work on exercise set
+@app.route("/ex/<code>")
+@app.route("/ex/<code>/<int:exercise_num>")
+@require_student()
+def exercise_play(code, exercise_num=1):
+    # Find the exercise set
+    exercise_set = ExerciseSet.query.filter_by(code=code).first_or_404()
+    student = current_student()
+    
+    # Check if set is available
+    now = datetime.now()
+    if not exercise_set.is_published:
+        abort(403)
+    if exercise_set.available_from and exercise_set.available_from > now:
+        return render_template("exercise_locked.html", 
+                             exercise_set=exercise_set,
+                             reason="not_yet_available",
+                             available_from=exercise_set.available_from,
+                             user=None, student_name=student.name), 403
+    if exercise_set.available_until and exercise_set.available_until < now:
+        return render_template("exercise_locked.html", 
+                             exercise_set=exercise_set,
+                             reason="expired",
+                             available_until=exercise_set.available_until,
+                             user=None, student_name=student.name), 403
+    
+    # Get exercises in order
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    if not exercises:
+        abort(404, "No exercises in this set")
+    
+    # Validate exercise number
+    if exercise_num < 1 or exercise_num > len(exercises):
+        exercise_num = 1
+    
+    current_exercise = exercises[exercise_num - 1]
+    
+    # Get or create progress for this exercise
+    progress = StudentProgress.query.filter_by(
+        student_id=student.id,
+        exercise_id=current_exercise.id
+    ).first()
+    
+    if not progress:
+        progress = StudentProgress(
+            student_id=student.id,
+            exercise_id=current_exercise.id,
+            status='in_progress'
+        )
+        db.session.add(progress)
+        db.session.commit()
+    elif progress.status == 'not_started':
+        progress.status = 'in_progress'
+        db.session.commit()
+    
+    # Calculate set progress
+    completed_exercises = 0
+    for ex in exercises:
+        prog = StudentProgress.query.filter_by(
+            student_id=student.id,
+            exercise_id=ex.id,
+            completed=True
+        ).first()
+        if prog:
+            completed_exercises += 1
+    
+    return render_template("exercise_play.html", 
+                         exercise_set=exercise_set,
+                         exercise=current_exercise, 
+                         exercise_num=exercise_num,
+                         total_exercises=len(exercises),
+                         set_progress=f"{completed_exercises}/{len(exercises)}",
+                         progress=progress,
+                         user=None, student_name=student.name)
+
+# API: Get exercise data from set
+@app.get("/api/ex/<set_code>/<int:exercise_num>/data")
+@require_student()
+def api_exercise_data(set_code, exercise_num):
+    # Get the exercise set
+    exercise_set = ExerciseSet.query.filter_by(code=set_code).first_or_404()
+    student = current_student()
+    
+    # Check availability
+    now = datetime.now()
+    if not exercise_set.is_published:
+        abort(403, description="Exercise set not available")
+    if exercise_set.available_from and exercise_set.available_from > now:
+        abort(403, description="Exercise set not yet available")
+    if exercise_set.available_until and exercise_set.available_until < now:
+        abort(403, description="Exercise set has expired")
+    
+    # Get exercises in order
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    if exercise_num < 1 or exercise_num > len(exercises):
+        abort(404, description="Exercise not found")
+    
+    exercise = exercises[exercise_num - 1]
+    
+    # Get student progress
+    progress = StudentProgress.query.filter_by(
+        student_id=student.id,
+        exercise_id=exercise.id
+    ).first()
+    
+    # Get only visible test cases for initial display
+    visible_tests = [t for t in exercise.test_cases_json if not t.get('hidden', False)]
+    
+    return jsonify({
+        'id': exercise.id,
+        'title': exercise.title,
+        'description': exercise.description,
+        'starter_code': exercise.starter_code,
+        'default_input': exercise.default_input or '',
+        'points': exercise.points,
+        'visible_test_cases': visible_tests,
+        'progress': {
+            'status': progress.status if progress else 'not_started',
+            'attempts': progress.attempts if progress else 0,
+            'best_score': progress.best_score if progress else 0,
+            'completed': progress.completed if progress else False
+        } if progress else None
+    })
+
+# API: Get all test cases (for submission)
+@app.get("/api/ex/<set_code>/<int:exercise_num>/all-tests")
+@require_student()
+def api_exercise_all_tests(set_code, exercise_num):
+    exercise_set = ExerciseSet.query.filter_by(code=set_code).first_or_404()
+    
+    # Check availability
+    now = datetime.now()
+    if not exercise_set.is_published:
+        abort(403, description="Exercise set not available")
+    if exercise_set.available_from and exercise_set.available_from > now:
+        abort(403, description="Exercise set not yet available")
+    if exercise_set.available_until and exercise_set.available_until < now:
+        abort(403, description="Exercise set has expired")
+    
+    # Get exercises in order
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    if exercise_num < 1 or exercise_num > len(exercises):
+        abort(404, description="Exercise not found")
+    
+    exercise = exercises[exercise_num - 1]
+    
+    return jsonify({
+        'test_cases': exercise.test_cases_json,
+        'points': exercise.points
+    })
+
+# API: Submit solution
+@app.post("/api/ex/<set_code>/<int:exercise_num>/submit")
+@require_student()
+def api_exercise_submit(set_code, exercise_num):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    
+    exercise_set = ExerciseSet.query.filter_by(code=set_code).first_or_404()
+    student = current_student()
+    
+    # Check availability
+    now = datetime.now()
+    if not exercise_set.is_published:
+        abort(403, description="Exercise set not available")
+    if exercise_set.available_from and exercise_set.available_from > now:
+        abort(403, description="Exercise set not yet available")
+    if exercise_set.available_until and exercise_set.available_until < now:
+        abort(403, description="Exercise set has expired")
+    
+    # Get exercises in order
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    if exercise_num < 1 or exercise_num > len(exercises):
+        abort(404, description="Exercise not found")
+    
+    exercise = exercises[exercise_num - 1]
+    
+    data = request.get_json(silent=True) or {}
+    code_text = data.get("code", "").strip()
+    test_results = data.get("test_results", [])
+    
+    if not code_text:
+        abort(400, description="Code required")
+    
+    # Validate test results
+    expected_tests = exercise.test_cases_json
+    if len(test_results) != len(expected_tests):
+        abort(400, description="Invalid test results")
+    
+    # Verify and categorize results
+    visible_passed = 0
+    visible_total = 0
+    hidden_passed = 0
+    hidden_total = 0
+    
+    validated_results = []
+    
+    for i, (result, expected) in enumerate(zip(test_results, expected_tests)):
+        # Server validates the result using smart comparison
+        actual_output = (result.get("actual", "") or "")
+        expected_output = expected["expected_output"]
+        is_correct = compare_outputs(actual_output, expected_output)
+        
+        result["passed"] = is_correct
+        result["test_num"] = i + 1
+        
+        if expected.get("hidden"):
+            hidden_total += 1
+            if is_correct:
+                hidden_passed += 1
+        else:
+            visible_total += 1
+            if is_correct:
+                visible_passed += 1
+        
+        validated_results.append(result)
+    
+    total_passed = visible_passed + hidden_passed
+    total_tests = visible_total + hidden_total
+    all_passed = (total_passed == total_tests)
+    score = (total_passed / total_tests) * exercise.points if total_tests > 0 else 0
+    
+    # Get or create progress
+    progress = StudentProgress.query.filter_by(
+        student_id=student.id,
+        exercise_id=exercise.id
+    ).first()
+    
+    if not progress:
+        progress = StudentProgress(
+            student_id=student.id,
+            exercise_id=exercise.id,
+            status='in_progress'
+        )
+        db.session.add(progress)
+        db.session.flush()
+    
+    # Update progress
+    attempt_number = progress.attempts + 1
+    progress.attempts = attempt_number
+    progress.last_attempted_at = datetime.now()
+    
+    if score > progress.best_score:
+        progress.best_score = score
+    
+    if all_passed and not progress.completed:
+        progress.completed = True
+        progress.completed_at = datetime.now()
+        progress.status = 'completed'
+    
+    # Create submission
+    submission = CodeSubmission(
+        exercise_id=exercise.id,
+        student_id=student.id,
+        code=code_text,
+        test_results_json=validated_results,
+        visible_passed=visible_passed,
+        visible_total=visible_total,
+        hidden_passed=hidden_passed,
+        hidden_total=hidden_total,
+        total_passed=total_passed,
+        total_tests=total_tests,
+        all_passed=all_passed,
+        score=score,
+        attempt_number=attempt_number
+    )
+    db.session.add(submission)
+    db.session.commit()
+    
+    # Prepare filtered response
+    response_results = []
+    for result, expected in zip(validated_results, expected_tests):
+        if expected.get("hidden"):
+            # Hide details for hidden tests
+            response_results.append({
+                "test_num": result["test_num"],
+                "hidden": True,
+                "passed": result["passed"],
+                "time_ms": result.get("time_ms", 0)
+            })
+        else:
+            # Show full details for visible tests
+            response_results.append({
+                "test_num": result["test_num"],
+                "hidden": False,
+                "passed": result["passed"],
+                "input": result.get("input", ""),
+                "expected": expected["expected_output"],
+                "actual": result.get("actual", ""),
+                "time_ms": result.get("time_ms", 0),
+                "description": expected.get("description", "")
+            })
+    
+    return jsonify({
+        "ok": True,
+        "submission_id": submission.id,
+        "attempt_number": attempt_number,
+        "score": round(score, 1),
+        "max_score": exercise.points,
+        "all_passed": all_passed,
+        "visible": {
+            "passed": visible_passed,
+            "total": visible_total,
+            "percentage": round((visible_passed / visible_total * 100) if visible_total > 0 else 0, 1)
+        },
+        "hidden": {
+            "passed": hidden_passed,
+            "total": hidden_total,
+            "percentage": round((hidden_passed / hidden_total * 100) if hidden_total > 0 else 0, 1)
+        },
+        "test_results": response_results,
+        "is_best_score": (score == progress.best_score),
+        "completed": all_passed
+    })
+
+# API: Get student's submission history for a specific exercise
+@app.get("/api/ex/<set_code>/<int:exercise_num>/my-submissions")
+@require_student()
+def api_exercise_my_submissions(set_code, exercise_num):
+    exercise_set = ExerciseSet.query.filter_by(code=set_code).first_or_404()
+    student = current_student()
+    
+    # Get exercises in order
+    exercises = sorted(exercise_set.exercises, key=lambda e: e.order)
+    
+    if exercise_num < 1 or exercise_num > len(exercises):
+        abort(404, description="Exercise not found")
+    
+    exercise = exercises[exercise_num - 1]
+    
+    submissions = (CodeSubmission.query
+                   .filter_by(exercise_id=exercise.id, student_id=student.id)
+                   .order_by(CodeSubmission.submitted_at.desc())
+                   .all())
+    
+    progress = StudentProgress.query.filter_by(
+        student_id=student.id,
+        exercise_id=exercise.id
+    ).first()
+    
+    best_score = progress.best_score if progress else 0
+    
+    return jsonify({
+        "submissions": [{
+            "id": sub.id,
+            "attempt_number": sub.attempt_number,
+            "score": sub.score,
+            "max_score": exercise.points,
+            "all_passed": sub.all_passed,
+            "visible_passed": sub.visible_passed,
+            "visible_total": sub.visible_total,
+            "hidden_passed": sub.hidden_passed,
+            "hidden_total": sub.hidden_total,
+            "submitted_at": sub.submitted_at.isoformat(),
+            "is_best": (sub.score == best_score)
+        } for sub in submissions]
+    })
+
+# API: View specific submission
+@app.get("/api/submissions/<int:submission_id>")
+@require_student()
+def api_submission_detail(submission_id):
+    submission = CodeSubmission.query.get_or_404(submission_id)
+    student = current_student()
+    
+    # Students can only view their own submissions
+    if submission.student_id != student.id:
+        abort(403)
+    
+    exercise = submission.exercise
+    expected_tests = exercise.test_cases_json
+    
+    # Filter hidden test details
+    filtered_results = []
+    for result, expected in zip(submission.test_results_json, expected_tests):
+        if expected.get("hidden"):
+            filtered_results.append({
+                "test_num": result.get("test_num"),
+                "hidden": True,
+                "passed": result.get("passed"),
+                "time_ms": result.get("time_ms", 0)
+            })
+        else:
+            filtered_results.append({
+                "test_num": result.get("test_num"),
+                "hidden": False,
+                "passed": result.get("passed"),
+                "input": result.get("input", ""),
+                "expected": expected["expected_output"],
+                "actual": result.get("actual", ""),
+                "time_ms": result.get("time_ms", 0),
+                "description": expected.get("description", "")
+            })
+    
+    return jsonify({
+        "id": submission.id,
+        "code": submission.code,
+        "attempt_number": submission.attempt_number,
+        "score": submission.score,
+        "max_score": exercise.points,
+        "all_passed": submission.all_passed,
+        "submitted_at": submission.submitted_at.isoformat(),
+        "test_results": filtered_results
+    })
 
 # --------------------------------------------------------------------
 # Dev entry

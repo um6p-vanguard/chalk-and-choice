@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 900px; margin: 0 auto; padding: 20px;">
+  <h1>Create Code Exercise</h1>
+  
+  {% if error %}
+  <div style="background: rgba(239,68,68,0.2); border: 1px solid #ef4444; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fca5a5;">
+    {{ error }}
+  </div>
+  {% endif %}
+  
+  <form method="POST" action="/exercises/new" style="display: flex; flex-direction: column; gap: 20px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    
+    <!-- Basic Info -->
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Title *</label>
+      <input type="text" name="title" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+    </div>
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Description (Markdown) *</label>
+      <textarea name="description" rows="8" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: monospace;"></textarea>
+      <small style="color: #94a3b8;">Supports Markdown formatting</small>
+    </div>
+    
+    <!-- Settings Row -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Difficulty *</label>
+        <select name="difficulty" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+          <option value="easy">Easy</option>
+          <option value="medium" selected>Medium</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Category</label>
+        <input type="text" name="category" placeholder="e.g., Arrays, Strings" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Points *</label>
+        <input type="number" name="points" value="10" min="1" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+    </div>
+    
+    <!-- Availability -->
+    <fieldset style="border: 1px solid rgba(96,165,250,0.3); border-radius: 8px; padding: 20px; background: rgba(96,165,250,0.05);">
+      <legend style="padding: 0 10px; color: #60a5fa; font-weight: 600;">📅 Availability</legend>
+      
+      <div style="margin-bottom: 15px;">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" name="published" value="1" checked>
+          <span>Published (visible to students when available time arrives)</span>
+        </label>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+        <div>
+          <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available From</label>
+          <input type="datetime-local" name="available_from" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+          <small style="color: #94a3b8;">Leave empty for immediate availability</small>
+        </div>
+        
+        <div>
+          <label style="display: block; margin-bottom: 8px; font-weight: 600;">Available Until</label>
+          <input type="datetime-local" name="available_until" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+          <small style="color: #94a3b8;">Leave empty for no deadline</small>
+        </div>
+      </div>
+    </fieldset>
+    
+    <!-- Code -->
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Starter Code *</label>
+      <textarea name="starter_code" rows="12" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;"></textarea>
+      <small style="color: #94a3b8;">Initial code template students will start with</small>
+    </div>
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Default Input (for testing)</label>
+      <textarea name="default_input" rows="4" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;"></textarea>
+      <small style="color: #94a3b8;">Default stdin input shown to students</small>
+    </div>
+    
+    <!-- Test Cases -->
+    <fieldset style="border: 1px solid rgba(96,165,250,0.3); border-radius: 8px; padding: 20px; background: rgba(96,165,250,0.05);">
+      <legend style="padding: 0 10px; color: #60a5fa; font-weight: 600;">🧪 Test Cases</legend>
+      
+      <div id="test-cases">
+        <!-- Test cases will be added here -->
+      </div>
+      
+      <button type="button" onclick="addTestCase()" style="background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-top: 10px;">
+        + Add Test Case
+      </button>
+      
+      <input type="hidden" id="test-count" name="test_count" value="0">
+    </fieldset>
+    
+    <div style="display: flex; gap: 10px; justify-content: flex-end;">
+      <a href="/exercises/manage" style="background: #475569; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px;">Cancel</a>
+      <button type="submit" style="background: #10b981; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600;">Create Exercise</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let testCaseCount = 0;
+
+function addTestCase() {
+  const container = document.getElementById('test-cases');
+  const testNum = testCaseCount;
+  
+  const testDiv = document.createElement('div');
+  testDiv.style.cssText = 'border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2);';
+  testDiv.id = `test-${testNum}`;
+  
+  testDiv.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <strong>Test Case ${testNum + 1}</strong>
+      <button type="button" onclick="removeTestCase(${testNum})" style="background: #ef4444; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer;">Remove</button>
+    </div>
+    
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; margin-bottom: 5px;">Input (stdin)</label>
+      <textarea name="test_input_${testNum}" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;"></textarea>
+    </div>
+    
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; margin-bottom: 5px;">Expected Output</label>
+      <textarea name="test_expected_${testNum}" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;"></textarea>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px;">
+      <div>
+        <label style="display: block; margin-bottom: 5px;">Description</label>
+        <input type="text" name="test_desc_${testNum}" placeholder="e.g., Basic case, Edge case" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white;">
+      </div>
+      
+      <div style="display: flex; align-items: flex-end;">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" name="test_hidden_${testNum}" value="1">
+          <span>Hidden Test</span>
+        </label>
+      </div>
+    </div>
+  `;
+  
+  container.appendChild(testDiv);
+  testCaseCount++;
+  document.getElementById('test-count').value = testCaseCount;
+}
+
+function removeTestCase(num) {
+  const testDiv = document.getElementById(`test-${num}`);
+  if (testDiv) {
+    testDiv.remove();
+  }
+}
+
+// Add initial test case
+window.addEventListener('DOMContentLoaded', () => {
+  addTestCase();
+  addTestCase();
+});
+</script>
+{% endblock %}

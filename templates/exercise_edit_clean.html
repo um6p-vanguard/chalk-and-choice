@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 900px; margin: 0 auto; padding: 20px;">
+  <div style="margin-bottom: 30px;">
+    <a href="/exercises/{{ exercise_set.code }}/edit" style="color: #60a5fa; text-decoration: none;">← Back to Exercise Set</a>
+    <h1 style="margin: 10px 0;">Edit Exercise #{{ exercise.order }}</h1>
+  </div>
+  
+  {% if error %}
+  <div style="background: rgba(239,68,68,0.2); border: 1px solid #ef4444; padding: 15px; border-radius: 8px; margin-bottom: 20px; color: #fca5a5;">
+    {{ error }}
+  </div>
+  {% endif %}
+  
+  <form method="POST" action="/exercises/{{ exercise_set.code }}/{{ exercise.order }}/edit-exercise" style="display: flex; flex-direction: column; gap: 20px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Title *</label>
+      <input type="text" name="title" value="{{ exercise.title }}" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+    </div>
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Description (Markdown) *</label>
+      <textarea name="description" rows="8" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: monospace;">{{ exercise.description }}</textarea>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Difficulty *</label>
+        <select name="difficulty" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+          <option value="easy" {% if exercise.difficulty == 'easy' %}selected{% endif %}>Easy</option>
+          <option value="medium" {% if exercise.difficulty == 'medium' %}selected{% endif %}>Medium</option>
+          <option value="hard" {% if exercise.difficulty == 'hard' %}selected{% endif %}>Hard</option>
+        </select>
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Category</label>
+        <input type="text" name="category" value="{{ exercise.category or '' }}" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 8px; font-weight: 600;">Points *</label>
+        <input type="number" name="points" value="{{ exercise.points }}" min="1" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white;">
+      </div>
+    </div>
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Starter Code *</label>
+      <textarea name="starter_code" rows="12" required style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;">{{ exercise.starter_code }}</textarea>
+    </div>
+    
+    <div>
+      <label style="display: block; margin-bottom: 8px; font-weight: 600;">Default Input</label>
+      <textarea name="default_input" rows="4" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; color: white; font-family: 'Courier New', monospace;">{{ exercise.default_input or '' }}</textarea>
+    </div>
+    
+    <fieldset style="border: 1px solid rgba(96,165,250,0.3); border-radius: 8px; padding: 20px; background: rgba(96,165,250,0.05);">
+      <legend style="padding: 0 10px; color: #60a5fa; font-weight: 600;">🧪 Test Cases</legend>
+      
+      <div id="test-cases">
+        {% if test_cases %}
+        {% for test in test_cases %}
+        <div class="test-case" style="border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <strong>Test Case {{ loop.index }}</strong>
+            <button type="button" onclick="removeTestCase(this)" style="background: #ef4444; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer;">Remove</button>
+          </div>
+          
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Input</label>
+            <textarea name="test_input[]" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;">{{ test.input }}</textarea>
+          </div>
+          
+          <div style="margin-bottom: 10px;">
+            <label style="display: block; margin-bottom: 5px;">Expected Output</label>
+            <textarea name="test_output[]" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;">{{ test.expected_output }}</textarea>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px;">
+            <div>
+              <label style="display: block; margin-bottom: 5px;">Description</label>
+              <input type="text" name="test_description[]" value="{{ test.description or '' }}" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white;">
+            </div>
+            
+            <div style="display: flex; align-items: flex-end;">
+              <label style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" name="test_hidden[]" value="{{ loop.index0 }}" {% if test.hidden %}checked{% endif %}>
+                <span>Hidden Test</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+      </div>
+      
+      <button type="button" onclick="addTestCase()" style="background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin-top: 10px;">
+        + Add Test Case
+      </button>
+    </fieldset>
+    
+    <div style="display: flex; gap: 10px; justify-content: flex-end;">
+      <a href="/exercises/{{ exercise_set.code }}/edit" style="background: #475569; color: white; text-decoration: none; padding: 12px 24px; border-radius: 8px;">Cancel</a>
+      <button type="submit" style="background: #10b981; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600;">Save Changes</button>
+    </div>
+  </form>
+</div>
+
+<script>
+let testCaseCount = {{ test_cases|length if test_cases else 0 }};
+
+function addTestCase() {
+  const container = document.getElementById('test-cases');
+  
+  const testDiv = document.createElement('div');
+  testDiv.className = 'test-case';
+  testDiv.style.cssText = 'border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 15px; margin-bottom: 15px; background: rgba(0,0,0,0.2);';
+  
+  testDiv.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+      <strong>Test Case ${testCaseCount + 1}</strong>
+      <button type="button" onclick="removeTestCase(this)" style="background: #ef4444; color: white; border: none; padding: 4px 12px; border-radius: 4px; cursor: pointer;">Remove</button>
+    </div>
+    
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; margin-bottom: 5px;">Input</label>
+      <textarea name="test_input[]" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;"></textarea>
+    </div>
+    
+    <div style="margin-bottom: 10px;">
+      <label style="display: block; margin-bottom: 5px;">Expected Output</label>
+      <textarea name="test_output[]" rows="3" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white; font-family: monospace;"></textarea>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px;">
+      <div>
+        <label style="display: block; margin-bottom: 5px;">Description</label>
+        <input type="text" name="test_description[]" style="width: 100%; padding: 8px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: white;">
+      </div>
+      
+      <div style="display: flex; align-items: flex-end;">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" name="test_hidden[]" value="${testCaseCount}">
+          <span>Hidden Test</span>
+        </label>
+      </div>
+    </div>
+  `;
+  
+  container.appendChild(testDiv);
+  testCaseCount++;
+}
+
+function removeTestCase(button) {
+  const testDiv = button.closest('.test-case');
+  if (testDiv) {
+    testDiv.remove();
+  }
+}
+</script>
+{% endblock %}

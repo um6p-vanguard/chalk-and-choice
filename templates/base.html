@@ -65,6 +65,7 @@
     .bar-fill.correct { background: var(--heat); } /* optional: highlight correct bar */
     .text-danger { color: var(--danger); }
   </style>
+  {% block head %}{% endblock %}
 </head>
 <body>
   <div class="wrap">
@@ -81,6 +82,7 @@
             <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
             <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
             <a href="{{ url_for('homework_list') }}">Homework</a>
+            <a href="{{ url_for('exercises_manage') }}" style="color:#10b981;">Exercises</a>
             <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
           {% else %}
             <span>{% if user.role == 'admin' %}Admin{% else %}Instructor{% endif %}: <strong>{{ user.name }}</strong></span>
@@ -95,6 +97,7 @@
           {% endif %}
         {% elif student_name %}
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
+          <a href="{{ url_for('exercises_list') }}" style="margin-left:10px; color:#10b981;">Exercises</a>
           <a href="{{ url_for('my_notebooks_page') }}" style="margin-left:10px;">My Notebooks</a>
           <a href="{{ url_for('notebooks_page') }}" style="margin-left:10px;">Notebooks</a>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>

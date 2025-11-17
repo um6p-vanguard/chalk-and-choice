@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exercise: {{ exercise_set.title }}</title>
+  <link rel="stylesheet" href="/static/css/exercise.css?v=2">
+  <style>
+    /* Fallback styles in case main CSS doesn't load */
+    body { margin: 0; padding: 0; font-family: sans-serif; background: #1e1e1e; color: #ccc; }
+    .exercise-container { min-height: 100vh; display: flex; flex-direction: column; }
+    .exercise-header { background: #333; padding: 10px; border-bottom: 1px solid #444; }
+    .split-container { display: grid; grid-template-columns: 1fr 400px; flex: 1; min-height: 0; }
+    #code-editor { min-height: 400px; background: #252526; }
+    button { padding: 8px 16px; margin: 4px; cursor: pointer; }
+    
+    /* Enhanced Markdown Styles */
+    .markdown-content {
+      line-height: 1.7;
+      font-size: 14px;
+      color: #cccccc;
+      padding: 4px 0;
+    }
+    .markdown-content h1 {
+      color: #4ec9b0;
+      font-size: 24px;
+      font-weight: 600;
+      margin: 24px 0 16px 0;
+      padding-bottom: 8px;
+      border-bottom: 2px solid #454545;
+    }
+    .markdown-content h2 {
+      color: #569cd6;
+      font-size: 20px;
+      font-weight: 600;
+      margin: 20px 0 12px 0;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #454545;
+    }
+    .markdown-content h3 {
+      color: #dcdcaa;
+      font-size: 16px;
+      font-weight: 600;
+      margin: 16px 0 10px 0;
+    }
+    .markdown-content p {
+      margin: 0 0 14px 0;
+      line-height: 1.7;
+    }
+    .markdown-content code {
+      background: rgba(110, 118, 129, 0.2);
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+      font-size: 13px;
+      color: #ce9178;
+      border: 1px solid rgba(110, 118, 129, 0.1);
+    }
+    .markdown-content pre {
+      background: #2d2d2d;
+      padding: 14px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      border-left: 4px solid #007acc;
+      margin: 12px 0;
+      line-height: 1.5;
+    }
+    .markdown-content pre code {
+      background: transparent;
+      padding: 0;
+      color: #cccccc;
+      border: none;
+      font-size: 13px;
+    }
+    .markdown-content ul, .markdown-content ol {
+      margin: 12px 0;
+      padding-left: 28px;
+    }
+    .markdown-content li {
+      margin: 6px 0;
+      line-height: 1.6;
+    }
+    .markdown-content strong {
+      color: #569cd6;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+
+<div class="exercise-container">
+  <!-- Header -->
+  <div class="exercise-header">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <a href="/exercises">← All Exercises</a>
+      <h2 id="exercise-title">Loading exercise...</h2>
+    </div>
+    <div class="exercise-meta">
+      <span id="difficulty" class="difficulty-badge"></span>
+      <span id="points" class="points">0 points</span>
+    </div>
+  </div>
+
+  <!-- Loading/Error State -->
+  <div id="initialization-status" style="display: none; padding: 40px; text-align: center; background: #252526; color: #ccc;">
+    <div id="status-message">Initializing...</div>
+    <div id="status-spinner" style="margin: 20px auto; width: 40px; height: 40px; border: 4px solid #454545; border-top: 4px solid #007acc; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    <style>
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+  </div>
+
+  <!-- Main Content: Split View -->
+  <div class="split-container" id="main-content" style="display: none;">
+    
+    <!-- LEFT: Problem + Code -->
+    <div class="left-pane">
+      <!-- Problem Description -->
+      <div class="problem-section">
+        <h3>Problem Description</h3>
+        <div id="problem-description" class="markdown-content">Loading problem description...</div>
+      </div>
+
+      <!-- Code Editor -->
+      <div class="editor-section">
+        <div class="editor-toolbar">
+          <span>main.py</span>
+          <button id="reset-code" class="btn-secondary">↺ Reset</button>
+        </div>
+        <div id="code-editor"></div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="action-bar">
+        <div>
+          <button id="run-code" class="btn-primary">▶ Run Code</button>
+          <button id="run-tests" class="btn-secondary">🧪 Run Tests</button>
+          <button id="submit-solution" class="btn-success">✓ Submit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Input/Output -->
+    <div class="right-pane">
+      
+      <!-- Progress Info -->
+      <div class="progress-info">
+        <div>
+          <span id="attempts">0</span>
+          <small>Attempts</small>
+        </div>
+        <div>
+          <span id="best-score">-</span>
+          <small>Best Score</small>
+        </div>
+      </div>
+      
+      <!-- Input -->
+      <div class="input-section">
+        <h4>
+          Input (stdin)
+          <button id="reset-input" class="btn-secondary" style="float: right; padding: 2px 8px; font-size: 10px;">Reset</button>
+        </h4>
+        <textarea id="custom-input" placeholder="Enter test input here..."></textarea>
+      </div>
+
+      <!-- Output -->
+      <div class="output-section">
+        <div class="output-header">
+          <h4 style="margin: 0;">Output</h4>
+          <span id="execution-time"></span>
+        </div>
+        <pre id="output-display">(Run your code to see output)</pre>
+      </div>
+
+      <!-- Test Results -->
+      <div class="test-results-section" id="test-results" style="display:none;">
+        <h4>Test Results</h4>
+        <div id="test-list" style="padding: 12px; overflow-y: auto; flex: 1;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Modal -->
+<div id="loading-modal">
+  <div id="loading-content"></div>
+</div>
+
+<!-- Results Modal -->
+<div id="results-modal"></div>
+
+<!-- Scripts -->
+<script>
+  // Debug: Check if scripts are loading
+  console.log('=== Script Loading ===');
+  console.log('Document ready state:', document.readyState);
+</script>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script>console.log('✓ Pyodide script loaded');</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+<script>console.log('✓ Monaco loader loaded');</script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script src="/static/js/code_executor.js"></script>
+<script>console.log('✓ Code executor loaded');</script>
+<script src="/static/js/exercise.js?v=5"></script>
+<script>console.log('✓ Exercise.js loaded');</script>
+<script>
+  // Initialize exercise interface
+  console.log('=== Exercise Page Initialization ===');
+  const exerciseCode = '{{ exercise_set.code }}';
+  const exerciseNum = {{ exercise_num }};
+  const totalExercises = {{ total_exercises }};
+  const csrfToken = '{{ csrf_token() }}';
+  
+  console.log('Exercise Code:', exerciseCode);
+  console.log('Exercise Num:', exerciseNum);
+  console.log('Total Exercises:', totalExercises);
+  console.log('CSRF Token:', csrfToken ? 'Present' : 'Missing');
+  
+  // Check if class exists
+  if (typeof ExerciseInterface === 'undefined') {
+    console.error('ExerciseInterface class not found!');
+    alert('Failed to load exercise interface. Please check browser console.');
+  } else {
+    console.log('✓ ExerciseInterface class found');
+    
+    // Create and initialize (assign to global variable)
+    try {
+      exerciseInterface = new ExerciseInterface(exerciseCode, exerciseNum, totalExercises, csrfToken);
+      console.log('✓ ExerciseInterface instance created');
+      console.log('✓ exerciseInterface is now globally accessible');
+      
+      // Start initialization
+      exerciseInterface.initialize().catch(err => {
+        console.error('Failed to initialize exercise interface:', err);
+        alert('Failed to load exercise: ' + err.message + '\n\nCheck browser console for details.');
+      });
+    } catch (err) {
+      console.error('Failed to create ExerciseInterface:', err);
+      alert('Failed to create exercise interface: ' + err.message);
+    }
+  }
+</script>
+</body>
+</html>

@@ -246,3 +246,136 @@ class HomeworkMessage(db.Model):
     student_homework = db.relationship('StudentHomework', backref=db.backref('messages', cascade="all,delete-orphan", order_by='HomeworkMessage.created_at'))
     sender_user = db.relationship('User')
     sender_student = db.relationship('Student')
+
+class ExerciseSet(db.Model):
+    __tablename__ = 'exercise_sets'
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    
+    # Availability timing (applies to entire set)
+    available_from = db.Column(db.DateTime, nullable=True)
+    available_until = db.Column(db.DateTime, nullable=True)
+    
+    # Visibility control
+    is_published = db.Column(db.Boolean, default=False, nullable=False)
+    
+    # Metadata
+    creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    
+    creator = db.relationship('User')
+    
+    @property
+    def is_available_now(self):
+        """Check if exercise set is available to students right now"""
+        if not self.is_published:
+            return False
+        
+        now = datetime.now()
+        
+        if self.available_from and now < self.available_from:
+            return False
+        
+        if self.available_until and now > self.available_until:
+            return False
+        
+        return True
+
+class CodeExercise(db.Model):
+    __tablename__ = 'code_exercises'
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Link to exercise set (NEW)
+    exercise_set_id = db.Column(db.Integer, db.ForeignKey('exercise_sets.id', ondelete='CASCADE'), index=True, nullable=False)
+    order = db.Column(db.Integer, nullable=False)  # Order within the set (1, 2, 3...)
+    
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=False)  # Problem statement (markdown)
+    
+    # Code template
+    starter_code = db.Column(db.Text, nullable=False)
+    language = db.Column(db.String(20), default='python', nullable=False)
+    
+    # Default input for testing
+    default_input = db.Column(db.Text, nullable=True)
+    
+    # Test cases stored as JSON array
+    test_cases_json = db.Column(JSONText, nullable=False)
+    
+    # Optional: hints/solution
+    hints_json = db.Column(JSONText, nullable=True)
+    solution_code = db.Column(db.Text, nullable=True)
+    
+    # Points
+    points = db.Column(db.Integer, default=10, nullable=False)
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    
+    # Relationships
+    exercise_set = db.relationship('ExerciseSet', backref=db.backref('exercises', cascade='all,delete-orphan', order_by='CodeExercise.order'))
+
+class CodeSubmission(db.Model):
+    __tablename__ = 'code_submissions'
+    id = db.Column(db.Integer, primary_key=True)
+    exercise_id = db.Column(db.Integer, db.ForeignKey('code_exercises.id', ondelete='CASCADE'), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete='CASCADE'), index=True, nullable=False)
+    
+    # Student's code
+    code = db.Column(db.Text, nullable=False)
+    
+    # Test results from browser execution
+    test_results_json = db.Column(JSONText, nullable=False)
+    
+    # Results summary
+    visible_passed = db.Column(db.Integer, nullable=False)  # Visible tests passed
+    visible_total = db.Column(db.Integer, nullable=False)
+    hidden_passed = db.Column(db.Integer, nullable=False)   # Hidden tests passed
+    hidden_total = db.Column(db.Integer, nullable=False)
+    
+    total_passed = db.Column(db.Integer, nullable=False)
+    total_tests = db.Column(db.Integer, nullable=False)
+    
+    all_passed = db.Column(db.Boolean, nullable=False)  # True if 100% (visible + hidden)
+    score = db.Column(db.Float, nullable=False)  # (total_passed / total_tests) * points
+    
+    # Timestamps
+    submitted_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    
+    # Relationships
+    exercise = db.relationship('CodeExercise', backref=db.backref('submissions', cascade='all,delete-orphan'))
+    student = db.relationship('Student')
+    
+    # Track attempts
+    attempt_number = db.Column(db.Integer, nullable=False)
+    
+    __table_args__ = (
+        db.Index('idx_exercise_student_attempt', 'exercise_id', 'student_id', 'attempt_number'),
+    )
+
+class StudentProgress(db.Model):
+    __tablename__ = 'student_progress'
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete='CASCADE'), index=True, nullable=False)
+    exercise_id = db.Column(db.Integer, db.ForeignKey('code_exercises.id', ondelete='CASCADE'), index=True, nullable=False)
+    
+    # Status tracking
+    status = db.Column(db.String(20), default='not_started', nullable=False)  # not_started, in_progress, completed
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    best_score = db.Column(db.Float, default=0, nullable=False)
+    completed = db.Column(db.Boolean, default=False, nullable=False)  # True when 100% passed
+    
+    # Timing
+    first_opened_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)  # When first achieved 100%
+    last_attempted_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    student = db.relationship('Student')
+    exercise = db.relationship('CodeExercise')
+    
+    __table_args__ = (
+        db.UniqueConstraint('student_id', 'exercise_id', name='uq_student_exercise'),
+    )

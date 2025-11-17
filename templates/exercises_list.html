@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/exercise.css') }}?v=3">
+<style>
+/* Match home page background and styling */
+body {
+  background: #0f172a !important;
+}
+
+.wrap {
+  background: transparent;
+}
+
+/* Exercises list page styles */
+.exercises-page-header {
+  text-align: center;
+  margin-bottom: 32px;
+  padding-top: 12px;
+}
+
+.exercises-page-title {
+  font-size: 32px;
+  font-weight: 700;
+  margin: 0 0 12px 0;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 50%, var(--danger) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.5px;
+}
+
+.exercises-page-subtitle {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 0 0 16px 0;
+  font-weight: 400;
+}
+
+.exercises-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--brand-2);
+  text-decoration: none;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.exercises-back-link:hover {
+  background: #0b1220;
+  border-color: var(--brand);
+  transform: translateX(-4px);
+  text-decoration: none;
+}
+
+.exercises-stats-banner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.exercises-stat-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  text-align: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+
+.exercises-stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(99, 127, 190, 0.2);
+  border-color: var(--brand);
+}
+
+.exercises-stat-value {
+  font-size: 32px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-2) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.exercises-stat-label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="exercises-page-header">
+  <h1 class="exercises-page-title">Code Exercise Sets</h1>
+  <p class="exercises-page-subtitle">Practice coding problems and improve your programming skills</p>
+  <a href="/" class="exercises-back-link">
+    <span>←</span>
+    <span>Back to Home</span>
+  </a>
+</div>
+
+<!-- Stats Banner -->
+<div class="exercises-stats-banner">
+  <div class="exercises-stat-card">
+    <div class="exercises-stat-value">{{ exercise_sets|length }}</div>
+    <div class="exercises-stat-label">Exercise Sets</div>
+  </div>
+  <div class="exercises-stat-card">
+    <div class="exercises-stat-value">{{ exercise_sets|sum(attribute='exercise_count') }}</div>
+    <div class="exercises-stat-label">Total Challenges</div>
+  </div>
+  <div class="exercises-stat-card">
+    <div class="exercises-stat-value">{{ exercise_sets|sum(attribute='completed_count') }}</div>
+    <div class="exercises-stat-label">Completed</div>
+  </div>
+  <div class="exercises-stat-card">
+    <div class="exercises-stat-value">{{ exercise_sets|sum(attribute='total_points') }}</div>
+    <div class="exercises-stat-label">Total Points</div>
+  </div>
+</div>
+
+<!-- Exercise Grid -->
+<div class="exercise-grid">
+  {% for item in exercise_sets %}
+  {% set ex_set = item.set %}
+  {% set progress_percent = (item.completed_count / item.exercise_count * 100) if item.exercise_count > 0 else 0 %}
+  <div class="exercise-card {{ 'completed' if item.completed_count == item.exercise_count and item.exercise_count > 0 else '' }}">
+    <div class="card-badge">
+      {% if item.completed_count == item.exercise_count and item.exercise_count > 0 %}
+        <span class="badge-completed">✓ Completed</span>
+      {% elif item.completed_count > 0 %}
+        <span class="badge-progress">In Progress</span>
+      {% else %}
+        <span class="badge-new">New</span>
+      {% endif %}
+    </div>
+    
+    <div class="card-icon">
+      {% if item.completed_count == item.exercise_count and item.exercise_count > 0 %}
+        🏆
+      {% elif item.completed_count > 0 %}
+        📝
+      {% else %}
+        🚀
+      {% endif %}
+    </div>
+    
+    <div class="card-content">
+      <h3 class="card-title">{{ ex_set.title }}</h3>
+      
+      <p class="card-description">
+        {% if ex_set.description %}
+          {{ ex_set.description[:140] }}{% if ex_set.description|length > 140 %}...{% endif %}
+        {% else %}
+          Complete {{ item.exercise_count }} coding challenge{{ 's' if item.exercise_count != 1 else '' }} to master fundamental programming concepts.
+        {% endif %}
+      </p>
+      
+      <div class="card-stats">
+        <div class="stat-item">
+          <span class="stat-icon">📊</span>
+          <span class="stat-text">{{ item.exercise_count }} exercise{{ 's' if item.exercise_count != 1 else '' }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-icon">⭐</span>
+          <span class="stat-text">{{ item.total_points }} points</span>
+        </div>
+      </div>
+      
+      <!-- Progress Bar -->
+      {% if item.exercise_count > 0 %}
+      <div class="progress-container">
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{ progress_percent|round|int }}%"></div>
+        </div>
+        <div class="progress-text">
+          <span>{{ item.completed_count }}/{{ item.exercise_count }} completed</span>
+          <span>{{ progress_percent|round|int }}%</span>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    
+    <a href="/ex/{{ ex_set.code }}" class="card-action-button">
+      <span>
+        {% if item.completed_count == item.exercise_count and item.exercise_count > 0 %}
+          Review Exercises
+        {% elif item.completed_count > 0 %}
+          Continue Learning
+        {% else %}
+          Start Challenge
+        {% endif %}
+      </span>
+      <span class="button-arrow">→</span>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+{% if not exercise_sets %}
+<div class="empty-state">
+  <div class="empty-icon">📚</div>
+  <h3 class="empty-title">No Exercise Sets Available</h3>
+  <p class="empty-text">Check back later for new coding challenges!</p>
+</div>
+{% endif %}
+{% endblock %}
