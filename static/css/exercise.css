@@ -27,6 +27,21 @@ html, body {
     background: var(--vscode-bg);
 }
 
+/* Prevent text selection and interaction during resize */
+body.resizing {
+    user-select: none !important;
+    cursor: ns-resize !important;
+}
+
+body.resizing * {
+    user-select: none !important;
+    pointer-events: none !important;
+}
+
+body.resizing .resize-handle {
+    pointer-events: all !important;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
     width: 10px;
@@ -161,10 +176,9 @@ html, body {
 /* Problem Section */
 .problem-section {
     background: var(--vscode-sidebar);
-    border-bottom: 1px solid var(--vscode-border);
     padding: 16px 20px;
     overflow-y: auto;
-    max-height: 25vh;
+    height: 25vh; /* Changed from max-height to height for better resizing */
     min-height: 100px;
     flex-shrink: 0;
 }
@@ -176,6 +190,69 @@ html, body {
     color: var(--vscode-text-dim);
     text-transform: uppercase;
     letter-spacing: 0.5px;
+}
+
+/* Resize Handle - now a standalone separator */
+.resize-handle {
+    height: 8px;
+    background: transparent;
+    cursor: ns-resize;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    flex-shrink: 0;
+    border-top: 1px solid var(--vscode-border);
+    border-bottom: 1px solid var(--vscode-border);
+}
+
+.resize-handle:hover {
+    background: rgba(0, 122, 204, 0.2);
+}
+
+.resize-handle::before {
+    content: '';
+    width: 40px;
+    height: 3px;
+    background: var(--vscode-border);
+    border-radius: 2px;
+    transition: background 0.2s, height 0.2s, width 0.2s;
+}
+
+.resize-handle:hover::before {
+    background: var(--vscode-blue);
+    height: 4px;
+    width: 60px;
+}
+
+.resize-handle::after {
+    content: '⋮⋮⋮';
+    position: absolute;
+    font-size: 10px;
+    color: var(--vscode-text-dim);
+    letter-spacing: -2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+
+.resize-handle:hover::after {
+    opacity: 0.7;
+}
+
+.resize-handle.resizing {
+    background: rgba(0, 122, 204, 0.3);
+}
+
+.resize-handle.resizing::before {
+    background: var(--vscode-blue);
+    height: 4px;
+    width: 80px;
+}
+
+.resize-handle.resizing::after {
+    opacity: 1;
 }
 
 /* Markdown Content Styles */

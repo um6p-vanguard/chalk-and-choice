@@ -246,6 +246,78 @@ class ExerciseInterface {
                 console.error(`✗ Button not found: #${id}`);
             }
         }
+        
+        // Setup resize handle
+        this.setupResizeHandle();
+    }
+    
+    setupResizeHandle() {
+        const resizeHandle = document.getElementById('resize-handle');
+        const problemSection = document.getElementById('problem-section');
+        
+        if (!resizeHandle || !problemSection) {
+            console.warn('Resize handle or problem section not found');
+            return;
+        }
+        
+        let isResizing = false;
+        let startY = 0;
+        let startHeight = 0;
+        
+        const onMouseDown = (e) => {
+            isResizing = true;
+            startY = e.clientY;
+            startHeight = problemSection.offsetHeight;
+            resizeHandle.classList.add('resizing');
+            document.body.classList.add('resizing');
+            
+            e.preventDefault();
+        };
+        
+        const onMouseMove = (e) => {
+            if (!isResizing) return;
+            
+            const deltaY = e.clientY - startY;
+            const newHeight = startHeight + deltaY;
+            
+            // Set min and max heights
+            const minHeight = 100; // Minimum 100px
+            const maxHeight = window.innerHeight * 0.7; // Maximum 70% of viewport
+            
+            if (newHeight >= minHeight && newHeight <= maxHeight) {
+                problemSection.style.height = newHeight + 'px';
+                
+                // Trigger editor resize (Monaco editor needs to know about size changes)
+                if (this.editor) {
+                    this.editor.layout();
+                }
+            }
+        };
+        
+        const onMouseUp = () => {
+            if (!isResizing) return;
+            
+            isResizing = false;
+            resizeHandle.classList.remove('resizing');
+            document.body.classList.remove('resizing');
+            
+            // Save the height preference to localStorage
+            if (problemSection.style.height) {
+                localStorage.setItem('exercise-problem-height', problemSection.style.height);
+            }
+        };
+        
+        resizeHandle.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        
+        // Restore saved height preference
+        const savedHeight = localStorage.getItem('exercise-problem-height');
+        if (savedHeight) {
+            problemSection.style.height = savedHeight;
+        }
+        
+        console.log('✓ Resize handle initialized');
     }
     
     renderProgress() {
