@@ -27,9 +27,7 @@ class CodeExecutor {
             });
             
             this.isReady = true;
-            console.log('✓ Pyodide initialized');
         } catch (error) {
-            console.error('Failed to initialize Pyodide:', error);
             throw error;
         } finally {
             this.isLoading = false;
@@ -94,7 +92,6 @@ sys.stdout = sys.__stdout__
 sys.stderr = sys.__stderr__
                 `);
             } catch (e) {
-                console.warn('Failed to reset stdout/stderr:', e);
             }
         }
     }
@@ -113,7 +110,6 @@ sys.stderr = sys.__stderr__
         
         // Exact match (fastest path)
         if (actualTrimmed === expectedTrimmed) {
-            console.log('  ✓ Exact match');
             return true;
         }
         
@@ -138,7 +134,6 @@ sys.stderr = sys.__stderr__
         const expectedNormalized = normalize(expectedTrimmed);
         
         if (actualNormalized === expectedNormalized) {
-            console.log('  ✓ Match after whitespace normalization');
             return true;
         }
         
@@ -160,23 +155,17 @@ compare_python_values(${JSON.stringify(actualTrimmed)}, ${JSON.stringify(expecte
                 `);
                 
                 if (comparison) {
-                    console.log('  ✓ Match after Python evaluation (semantic comparison)');
                     return true;
                 }
             } catch (e) {
                 // If evaluation fails, fall through to string comparison
-                console.warn('  ⚠ Failed to evaluate outputs as Python:', e);
             }
         }
         
         // Case-insensitive comparison as last resort (for text outputs)
         const caseInsensitiveMatch = actualNormalized.toLowerCase() === expectedNormalized.toLowerCase();
         if (caseInsensitiveMatch) {
-            console.log('  ✓ Match after case-insensitive comparison');
         } else {
-            console.log('  ✗ No match found');
-            console.log('    Actual (normalized):', actualNormalized);
-            console.log('    Expected (normalized):', expectedNormalized);
         }
         return caseInsensitiveMatch;
     }
@@ -200,15 +189,12 @@ compare_python_values(${JSON.stringify(actualTrimmed)}, ${JSON.stringify(expecte
     async runTestCases(code, testCases) {
         const results = [];
         
-        console.log(`\n🧪 Running ${testCases.length} test cases...`);
         
         for (let i = 0; i < testCases.length; i++) {
             const test = testCases[i];
-            console.log(`\nTest ${i + 1}/${testCases.length}:`);
             const result = await this.runCode(code, test.input);
             
             // Use smart comparison
-            console.log('Comparing outputs...');
             const passed = result.success && 
                           this.compareOutputs(result.output || '', test.expected_output || '');
             
@@ -222,11 +208,9 @@ compare_python_values(${JSON.stringify(actualTrimmed)}, ${JSON.stringify(expecte
                 hidden: test.hidden || false
             });
             
-            console.log(`Result: ${passed ? '✓ PASS' : '✗ FAIL'}`);
         }
         
         const passedCount = results.filter(r => r.passed).length;
-        console.log(`\n📊 Test Results: ${passedCount}/${results.length} passed`);
         
         return results;
     }

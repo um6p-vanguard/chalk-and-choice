@@ -194,53 +194,30 @@
 <div id="results-modal"></div>
 
 <!-- Scripts -->
-<script>
-  // Debug: Check if scripts are loading
-  console.log('=== Script Loading ===');
-  console.log('Document ready state:', document.readyState);
-</script>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
-<script>console.log('✓ Pyodide script loaded');</script>
-<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
-<script>console.log('✓ Monaco loader loaded');</script>
 <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
 <script src="/static/js/code_executor.js"></script>
-<script>console.log('✓ Code executor loaded');</script>
 <script src="/static/js/exercise.js?v=5"></script>
-<script>console.log('✓ Exercise.js loaded');</script>
 <script>
   // Initialize exercise interface
-  console.log('=== Exercise Page Initialization ===');
   const exerciseCode = '{{ exercise_set.code }}';
   const exerciseNum = {{ exercise_num }};
   const totalExercises = {{ total_exercises }};
   const csrfToken = '{{ csrf_token() }}';
   
-  console.log('Exercise Code:', exerciseCode);
-  console.log('Exercise Num:', exerciseNum);
-  console.log('Total Exercises:', totalExercises);
-  console.log('CSRF Token:', csrfToken ? 'Present' : 'Missing');
-  
   // Check if class exists
   if (typeof ExerciseInterface === 'undefined') {
-    console.error('ExerciseInterface class not found!');
-    alert('Failed to load exercise interface. Please check browser console.');
+    alert('Failed to load exercise interface.');
   } else {
-    console.log('✓ ExerciseInterface class found');
-    
-    // Create and initialize (assign to global variable)
+    // Create and initialize
     try {
       exerciseInterface = new ExerciseInterface(exerciseCode, exerciseNum, totalExercises, csrfToken);
-      console.log('✓ ExerciseInterface instance created');
-      console.log('✓ exerciseInterface is now globally accessible');
       
       // Start initialization
       exerciseInterface.initialize().catch(err => {
-        console.error('Failed to initialize exercise interface:', err);
-        alert('Failed to load exercise: ' + err.message + '\n\nCheck browser console for details.');
+        alert('Failed to load exercise: ' + err.message);
       });
     } catch (err) {
-      console.error('Failed to create ExerciseInterface:', err);
       alert('Failed to create exercise interface: ' + err.message);
     }
   }

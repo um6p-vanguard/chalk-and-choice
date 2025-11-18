@@ -31,7 +31,6 @@ class ExerciseInterface {
             }
             this.exercise = await response.json();
             
-            console.log('Exercise data loaded:', this.exercise);
             
             // Render problem description
             this.renderProblemDescription();
@@ -63,9 +62,7 @@ class ExerciseInterface {
             if (statusDiv) statusDiv.style.display = 'none';
             if (mainContent) mainContent.style.display = 'grid';
             
-            console.log('✓ Exercise interface fully initialized');
         } catch (error) {
-            console.error('Initialization error:', error);
             this.hideLoading();
             
             // Show error in status div
@@ -89,7 +86,6 @@ class ExerciseInterface {
         const descEl = document.getElementById('problem-description');
         
         if (!titleEl || !pointsEl || !descEl) {
-            console.error('Missing DOM elements for problem description');
             return;
         }
         
@@ -147,28 +143,21 @@ class ExerciseInterface {
                 // Try different marked API versions
                 if (typeof markedLib.parse === 'function') {
                     descHtml = markedLib.parse(description);
-                    console.log('✓ Used marked.parse()');
                 } else if (typeof markedLib === 'function') {
                     descHtml = markedLib(description);
-                    console.log('✓ Used marked()');
                 } else if (markedLib.marked && typeof markedLib.marked === 'function') {
                     descHtml = markedLib.marked(description);
-                    console.log('✓ Used marked.marked()');
                 }
             }
             
             if (descHtml) {
                 descEl.innerHTML = descHtml;
-                console.log('✓ Markdown rendered successfully with marked library');
             } else {
                 // Use simple markdown renderer
                 descHtml = renderSimpleMarkdown(description);
                 descEl.innerHTML = descHtml;
-                console.log('✓ Markdown rendered with simple parser (marked library not available)');
             }
         } catch (error) {
-            console.warn('Failed to render markdown:', error);
-            console.log('Using simple markdown parser as fallback');
             // Fallback: use simple markdown renderer
             const descHtml = renderSimpleMarkdown(description);
             descEl.innerHTML = descHtml;
@@ -177,44 +166,60 @@ class ExerciseInterface {
     
     async setupEditor() {
         return new Promise((resolve, reject) => {
+            // Load Monaco loader dynamically to avoid conflicts with Pyodide
             if (typeof require === 'undefined') {
-                reject(new Error('Monaco loader not found'));
-                return;
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js';
+                script.onload = () => {
+                    this.loadMonacoEditor(resolve, reject);
+                };
+                script.onerror = () => {
+                    reject(new Error('Failed to load Monaco loader script'));
+                };
+                document.head.appendChild(script);
+            } else {
+                this.loadMonacoEditor(resolve, reject);
             }
-            
-            require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' }});
-            
-            require(['vs/editor/editor.main'], () => {
-                try {
-                    const editorContainer = document.getElementById('code-editor');
-                    if (!editorContainer) {
-                        reject(new Error('Editor container not found'));
-                        return;
-                    }
-                    
-                    this.editor = monaco.editor.create(editorContainer, {
-                        value: this.exercise.starter_code || '# Write your code here\n',
-                        language: 'python',
-                        theme: 'vs-dark',
-                        automaticLayout: true,
-                        minimap: { enabled: false },
-                        fontSize: 14,
-                        lineNumbers: 'on',
-                        scrollBeyondLastLine: false,
-                        wordWrap: 'on',
-                        folding: true,
-                        renderWhitespace: 'selection',
-                        tabSize: 4
-                    });
-                    
-                    console.log('✓ Monaco editor initialized');
-                    resolve();
-                } catch (error) {
-                    reject(error);
+        });
+    }
+    
+    loadMonacoEditor(resolve, reject) {
+        // Configure Monaco editor paths
+        require.config({ 
+            paths: { 
+                vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs' 
+            }
+        });
+        
+        require(['vs/editor/editor.main'], () => {
+            try {
+                const editorContainer = document.getElementById('code-editor');
+                if (!editorContainer) {
+                    reject(new Error('Editor container not found'));
+                    return;
                 }
-            }, (error) => {
-                reject(new Error('Failed to load Monaco editor: ' + error));
-            });
+                
+                this.editor = monaco.editor.create(editorContainer, {
+                    value: this.exercise.starter_code || '# Write your code here\n',
+                    language: 'python',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    lineNumbers: 'on',
+                    scrollBeyondLastLine: false,
+                    wordWrap: 'on',
+                    folding: true,
+                    renderWhitespace: 'selection',
+                    tabSize: 4
+                });
+                
+                resolve();
+            } catch (error) {
+                reject(error);
+            }
+        }, (error) => {
+            reject(new Error('Failed to load Monaco editor: ' + error));
         });
     }
     
@@ -227,7 +232,6 @@ class ExerciseInterface {
     }
     
     setupEventHandlers() {
-        console.log('Setting up event handlers...');
         
         const buttons = {
             'run-code': () => this.runCode(),
@@ -241,9 +245,7 @@ class ExerciseInterface {
             const btn = document.getElementById(id);
             if (btn) {
                 btn.addEventListener('click', handler);
-                console.log(`✓ Event handler attached to #${id}`);
             } else {
-                console.error(`✗ Button not found: #${id}`);
             }
         }
         
@@ -256,7 +258,6 @@ class ExerciseInterface {
         const problemSection = document.getElementById('problem-section');
         
         if (!resizeHandle || !problemSection) {
-            console.warn('Resize handle or problem section not found');
             return;
         }
         
@@ -317,7 +318,6 @@ class ExerciseInterface {
             problemSection.style.height = savedHeight;
         }
         
-        console.log('✓ Resize handle initialized');
     }
     
     renderProgress() {
@@ -337,16 +337,13 @@ class ExerciseInterface {
     }
     
     async runCode() {
-        console.log('▶ Running code...');
         
         if (!this.editor) {
-            console.error('Editor not initialized');
             alert('Editor not ready. Please wait for initialization to complete.');
             return;
         }
         
         if (!this.executor || !this.executor.isReady) {
-            console.error('Python executor not initialized');
             alert('Python environment not ready. Please wait...');
             return;
         }
@@ -354,14 +351,11 @@ class ExerciseInterface {
         const code = this.editor.getValue();
         const input = document.getElementById('custom-input').value;
         
-        console.log('Code length:', code.length, 'bytes');
-        console.log('Input length:', input.length, 'bytes');
         
         const outputDisplay = document.getElementById('output-display');
         const timeDisplay = document.getElementById('execution-time');
         
         if (!outputDisplay) {
-            console.error('Output display element not found');
             return;
         }
         
@@ -371,7 +365,6 @@ class ExerciseInterface {
         
         try {
             const result = await this.executor.runCode(code, input);
-            console.log('Execution result:', result);
             
             if (result.success) {
                 outputDisplay.textContent = result.output || '(no output)';
@@ -383,7 +376,6 @@ class ExerciseInterface {
                 timeDisplay.textContent = `Failed after ${result.executionTime}ms`;
             }
         } catch (error) {
-            console.error('Error running code:', error);
             outputDisplay.textContent = `Error:\n${error.message}`;
             outputDisplay.className = 'error';
         }
@@ -507,7 +499,6 @@ class ExerciseInterface {
             this.updateProgressDisplay(result);
             
         } catch (error) {
-            console.error('Submission error:', error);
             this.showModal(`
                 <h2>❌ Submission Failed</h2>
                 <p>${this.escapeHtml(error.message)}</p>
@@ -740,7 +731,6 @@ class ExerciseInterface {
             
             this.showModal(html);
         } catch (error) {
-            console.error('Failed to load submissions:', error);
             this.showModal(`
                 <div class="error-modal">
                     <h2>❌ Failed to Load Submissions</h2>
@@ -788,7 +778,6 @@ class ExerciseInterface {
         const modal = document.getElementById('loading-modal');
         const content = document.getElementById('loading-content');
         if (!modal || !content) {
-            console.error('Loading modal elements not found');
             return;
         }
         content.innerHTML = `
@@ -808,7 +797,6 @@ class ExerciseInterface {
     showModal(html) {
         const modal = document.getElementById('results-modal');
         if (!modal) {
-            console.error('Results modal not found');
             return;
         }
         modal.innerHTML = html;
