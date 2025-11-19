@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 {% if student_name and not user %}
+<div class="card" style="max-width:820px; margin-bottom:16px;">
+  <h3 style="margin-top:0;">Online Office Hours</h3>
+  <p class="muted" style="margin-top:-6px;">
+    Below are a list of slots of availability of mentors and students who need online office hours should send me an email (jalal.maaouni@um6p.ma) with what they want to go over during the office hour and what two slots work best for them.
+  </p>
+
+  <ul class="muted" style="margin-top:8px; padding-left:20px;">
+    <li>Wednesday from 3 to 5</li>
+    <li>Thursday from 9 to 12</li>
+    <li>Thursday from 3 to 5</li>
+    <li>Friday from 2 to 6</li>
+  </ul>
+</div>
+
 <div class="card" style="max-width:820px;">
   <h3 style="margin-top:0;">Exam Review Forms</h3>
   <p class="muted" style="margin-top:-6px;">Signed in as <strong>{{ student_name }}</strong></p>
