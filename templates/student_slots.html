@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Book Mentor Sessions - SASE COMP101</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --border: #334155;
+      --brand: #637FBE;
+      --brand-2: #5775B8;
+      --danger: #D95334;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial;
+    }
+
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border: 1px solid var(--border);
+      background: #0b1220;
+      border-radius: 12px;
+      margin-bottom: 24px;
+    }
+    
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 10px 24px rgba(0,0,0,.2);
+    }
+    
+    .btn {
+      display: inline-block;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      color: var(--text);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .btn:hover { border-color: var(--brand-2); }
+    .btn-primary {
+      background: var(--brand);
+      border: none;
+      color: #0b1120;
+      font-weight: 600;
+    }
+    .btn-primary:hover { background: var(--brand-2); }
+    .btn-danger {
+      background: var(--danger);
+      border: none;
+      color: #150b0a;
+      font-weight: 600;
+    }
+    
+    .muted { color: var(--muted); }
+    
+    .slot-card {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 12px;
+      transition: border-color 0.2s;
+    }
+    .slot-card:hover { border-color: var(--brand); }
+    
+    .mentor-section {
+      margin-bottom: 32px;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      border-bottom: 2px solid var(--border);
+    }
+    
+    .tab {
+      padding: 12px 20px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      color: var(--muted);
+      transition: all 0.2s;
+    }
+    
+    .tab.active {
+      color: var(--brand);
+      border-bottom-color: var(--brand);
+    }
+    
+    .tab:hover { color: var(--text); }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="nav">
+    <span>
+      <strong>{{ student_name }}</strong> <span class="muted">(Student)</span>
+    </span>
+    <div style="display: flex; gap: 12px; align-items: center;">
+      <a href="/">← Dashboard</a>
+      <form method="post" action="/logout" style="margin: 0;">
+        <button type="submit" class="btn" style="padding: 6px 12px;">Logout</button>
+      </form>
+    </div>
+  </div>
+
+  <h1>Book a Mentor Session</h1>
+  <p class="muted">Browse available time slots and book sessions with mentors</p>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('available')">Available Slots</div>
+    <div class="tab" onclick="switchTab('mybookings')">My Bookings</div>
+  </div>
+
+  <!-- Available Slots Tab -->
+  <div id="tab-available" class="tab-content active">
+    {% if slots_by_mentor %}
+      {% for mentor_name, slots in slots_by_mentor.items() %}
+        <div class="mentor-section">
+          <h2 style="margin-bottom: 16px; color: var(--brand);">{{ mentor_name }}</h2>
+          
+          <div style="display: grid; gap: 12px;">
+            {% for slot in slots %}
+              <div class="slot-card">
+                <div style="display: flex; justify-content: space-between; align-items: start;">
+                  <div style="flex: 1;">
+                    {% if slot.title %}
+                      <h3 style="margin: 0 0 8px 0; font-size: 16px;">{{ slot.title }}</h3>
+                    {% endif %}
+                    
+                    <div style="color: var(--muted); margin-bottom: 6px;">
+                      📅 {{ slot.start_time.strftime('%A, %B %d, %Y') }}
+                    </div>
+                    <div style="color: var(--muted); margin-bottom: 6px;">
+                      🕐 {{ slot.start_time.strftime('%I:%M %p') }} - {{ slot.end_time.strftime('%I:%M %p') }}
+                    </div>
+                    
+                    {% if slot.location %}
+                      <div style="color: var(--muted); margin-bottom: 6px;">
+                        📍 {{ slot.location }}
+                      </div>
+                    {% endif %}
+                    
+                    {% if slot.description %}
+                      <div style="margin-top: 8px; color: var(--text); font-size: 14px;">
+                        {{ slot.description }}
+                      </div>
+                    {% endif %}
+                    
+                    <div style="margin-top: 10px;">
+                      <span style="padding: 4px 10px; background: #1e2a4a; border-radius: 6px; font-size: 13px;">
+                        {{ slot.available_spots }} spot{% if slot.available_spots != 1 %}s{% endif %} available
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <button class="btn btn-primary" style="padding: 8px 16px;" 
+                          onclick="bookSlot({{ slot.id }}, '{{ slot.title or 'Mentor Session' }}')">
+                    Book
+                  </button>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="card" style="text-align: center; padding: 40px;">
+        <p class="muted">No available slots at the moment. Check back later!</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- My Bookings Tab -->
+  <div id="tab-mybookings" class="tab-content">
+    {% if my_bookings %}
+      <div style="display: grid; gap: 12px;">
+        {% for booking in my_bookings %}
+          {% set slot = booking.slot %}
+          <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: start;">
+              <div style="flex: 1;">
+                <h3 style="margin: 0 0 8px 0;">
+                  {% if slot.title %}{{ slot.title }}{% else %}Mentor Session{% endif %}
+                  with {{ slot.mentor.name }}
+                </h3>
+                
+                <div style="color: var(--muted); margin-bottom: 6px;">
+                  📅 {{ slot.start_time.strftime('%A, %B %d, %Y') }}
+                </div>
+                <div style="color: var(--muted); margin-bottom: 6px;">
+                  🕐 {{ slot.start_time.strftime('%I:%M %p') }} - {{ slot.end_time.strftime('%I:%M %p') }}
+                </div>
+                
+                {% if slot.location %}
+                  <div style="color: var(--muted); margin-bottom: 6px;">
+                    📍 {{ slot.location }}
+                  </div>
+                {% endif %}
+                
+                {% if booking.notes %}
+                  <div style="margin-top: 8px; padding: 8px; background: #0b1220; border-radius: 6px; font-size: 14px;">
+                    <strong>Your note:</strong> {{ booking.notes }}
+                  </div>
+                {% endif %}
+                
+                <div style="margin-top: 10px; font-size: 13px; color: var(--muted);">
+                  Booked {{ booking.booked_at.strftime('%b %d at %I:%M %p') }}
+                </div>
+              </div>
+              
+              {% if slot.start_time > now %}
+                <button class="btn btn-danger" style="padding: 8px 16px;" 
+                        onclick="cancelBooking({{ booking.id }})">
+                  Cancel
+                </button>
+              {% else %}
+                <span style="padding: 8px 16px; background: #2a2a2a; border-radius: 8px; color: var(--muted);">
+                  Completed
+                </span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="card" style="text-align: center; padding: 40px;">
+        <p class="muted">You haven't booked any sessions yet.</p>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Modal for booking notes -->
+<div id="booking-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center;">
+  <div class="card" style="max-width: 500px; width: 90%;">
+    <h2 style="margin-top: 0;">Book Session</h2>
+    <p id="modal-slot-title" class="muted"></p>
+    
+    <div style="margin: 20px 0;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+        Notes (Optional)
+      </label>
+      <textarea id="booking-notes" rows="3" placeholder="Let the mentor know what you'd like to discuss..." 
+                style="width: 100%; padding: 10px; background: #0b1220; border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: inherit;"></textarea>
+    </div>
+    
+    <div style="display: flex; gap: 12px;">
+      <button class="btn btn-primary" onclick="confirmBooking()">Confirm Booking</button>
+      <button class="btn" onclick="closeModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentSlotId = null;
+
+function switchTab(tabName) {
+  // Update tab buttons
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+  event.target.classList.add('active');
+  
+  // Update content
+  document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+  document.getElementById('tab-' + tabName).classList.add('active');
+}
+
+function bookSlot(slotId, title) {
+  currentSlotId = slotId;
+  document.getElementById('modal-slot-title').textContent = 'Booking: ' + title;
+  document.getElementById('booking-notes').value = '';
+  document.getElementById('booking-modal').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('booking-modal').style.display = 'none';
+  currentSlotId = null;
+}
+
+async function confirmBooking() {
+  if (!currentSlotId) return;
+  
+  const notes = document.getElementById('booking-notes').value.trim();
+  
+  try {
+    const response = await fetch(`/slots/${currentSlotId}/book`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ notes })
+    });
+    
+    if (response.ok) {
+      alert('Session booked successfully!');
+      closeModal();
+      window.location.reload();
+    } else {
+      const data = await response.json();
+      alert(data.error || 'Failed to book session');
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+
+async function cancelBooking(bookingId) {
+  if (!confirm('Cancel this booking?')) return;
+  
+  try {
+    const response = await fetch(`/slots/bookings/${bookingId}/cancel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (response.ok) {
+      alert('Booking cancelled successfully');
+      window.location.reload();
+    } else {
+      const data = await response.json();
+      alert(data.error || 'Failed to cancel booking');
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+</script>
+</body>
+</html>

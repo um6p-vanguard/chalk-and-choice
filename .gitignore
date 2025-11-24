@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.notebook/
 *.db
 .env
 seed_users.json

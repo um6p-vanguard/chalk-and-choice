@@ -379,3 +379,79 @@ class StudentProgress(db.Model):
     __table_args__ = (
         db.UniqueConstraint('student_id', 'exercise_id', name='uq_student_exercise'),
     )
+
+class MentorSlot(db.Model):
+    """Availability slots created by mentors"""
+    __tablename__ = 'mentor_slots'
+    id = db.Column(db.Integer, primary_key=True)
+    mentor_id = db.Column(db.Integer, db.ForeignKey('mentors.id', ondelete='CASCADE'), index=True, nullable=False)
+    
+    # Slot timing
+    start_time = db.Column(db.DateTime, nullable=False)
+    end_time = db.Column(db.DateTime, nullable=False)
+    
+    # Slot details
+    title = db.Column(db.String(255), nullable=True)  # Optional title (e.g., "Office Hours", "Homework Help")
+    description = db.Column(db.Text, nullable=True)  # Optional description
+    location = db.Column(db.String(255), nullable=True)  # Physical location or meeting link
+    
+    # Capacity
+    max_bookings = db.Column(db.Integer, default=1, nullable=False)  # How many students can book this slot
+    
+    # Status
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # Mentor can disable without deleting
+    
+    # Metadata
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    
+    # Relationships
+    mentor = db.relationship('Mentor', backref=db.backref('slots', cascade='all,delete-orphan'))
+    
+    @property
+    def is_available(self):
+        """Check if slot is still available for booking"""
+        if not self.is_active:
+            return False
+        if datetime.now() > self.start_time:
+            return False  # Slot has already started
+        current_bookings = SlotBooking.query.filter_by(
+            slot_id=self.id,
+            status='confirmed'
+        ).count()
+        return current_bookings < self.max_bookings
+    
+    @property
+    def available_spots(self):
+        """Number of spots still available"""
+        current_bookings = SlotBooking.query.filter_by(
+            slot_id=self.id,
+            status='confirmed'
+        ).count()
+        return max(0, self.max_bookings - current_bookings)
+
+class SlotBooking(db.Model):
+    """Student bookings for mentor slots"""
+    __tablename__ = 'slot_bookings'
+    id = db.Column(db.Integer, primary_key=True)
+    slot_id = db.Column(db.Integer, db.ForeignKey('mentor_slots.id', ondelete='CASCADE'), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete='CASCADE'), index=True, nullable=False)
+    
+    # Booking details
+    notes = db.Column(db.Text, nullable=True)  # Student can add notes/reason for booking
+    
+    # Status
+    status = db.Column(db.String(20), default='confirmed', nullable=False)  # confirmed, cancelled_by_student, cancelled_by_mentor
+    
+    # Timestamps
+    booked_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    slot = db.relationship('MentorSlot', backref=db.backref('bookings', cascade='all,delete-orphan'))
+    student = db.relationship('Student', backref=db.backref('slot_bookings'))
+    
+    # Ensure a student can't book the same slot multiple times
+    __table_args__ = (
+        db.UniqueConstraint('slot_id', 'student_id', name='uq_slot_student'),
+    )

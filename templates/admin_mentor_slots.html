@@ -1,0 +1,453 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .admin-slots-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 16px;
+  }
+  
+  .admin-slots-header h1 {
+    margin-top: 30px;
+    font-size: 28px;
+  }
+  
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+  }
+  .stat-card {
+    background: #0b1220;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-number {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--brand);
+    margin-bottom: 4px;
+  }
+  .stat-label {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .mentor-section {
+    margin-bottom: 32px;
+  }
+  .mentor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .mentor-info {
+    flex: 1;
+    min-width: 200px;
+  }
+  .mentor-name {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--brand);
+  }
+  .mentor-email {
+    color: var(--muted);
+    font-size: 14px;
+    margin-top: 4px;
+  }
+  .mentor-stats {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .mentor-stat-item {
+    text-align: center;
+  }
+  .mentor-stat-value {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--brand);
+  }
+  .mentor-stat-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  
+  .bookings-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: #0b1220;
+    min-width: 800px;
+  }
+  .bookings-table th {
+    background: #1a2332;
+    padding: 12px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text);
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+  .bookings-table td {
+    padding: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .bookings-table tr:last-child td {
+    border-bottom: none;
+  }
+  .bookings-table tr:hover {
+    background: rgba(99, 127, 190, 0.1);
+  }
+  .student-info {
+    min-width: 150px;
+  }
+  .student-name {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .student-email {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .slot-datetime {
+    min-width: 120px;
+  }
+  .slot-date {
+    display: block;
+    margin-bottom: 2px;
+  }
+  .slot-time {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .booking-notes {
+    max-width: 200px;
+    font-size: 13px;
+  }
+  .status-badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .status-upcoming {
+    background: #1e4620;
+    color: #4ade80;
+  }
+  .status-past {
+    background: #2a2a2a;
+    color: var(--muted);
+  }
+  .empty-state {
+    text-align: center;
+    padding: 40px;
+    color: var(--muted);
+  }
+  
+  /* Mobile Responsive */
+  @media (max-width: 768px) {
+    .admin-slots-container {
+      padding: 0 12px;
+    }
+    
+    .admin-slots-header h1 {
+      font-size: 22px;
+      margin-top: 20px;
+    }
+    
+    .stats-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    
+    .stat-card {
+      padding: 12px;
+    }
+    
+    .stat-number {
+      font-size: 22px;
+    }
+    
+    .stat-label {
+      font-size: 11px;
+    }
+    
+    .mentor-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    
+    .mentor-name {
+      font-size: 18px;
+    }
+    
+    .mentor-email {
+      font-size: 13px;
+    }
+    
+    .mentor-stats {
+      width: 100%;
+      justify-content: flex-start;
+    }
+    
+    .mentor-stat-value {
+      font-size: 16px;
+    }
+    
+    .bookings-table th,
+    .bookings-table td {
+      padding: 8px;
+      font-size: 13px;
+    }
+    
+    .student-info {
+      min-width: 130px;
+    }
+    
+    .booking-notes {
+      max-width: 150px;
+      font-size: 12px;
+    }
+  }
+  
+  @media (max-width: 480px) {
+    .admin-slots-container {
+      padding: 0 8px;
+    }
+    
+    .admin-slots-header h1 {
+      font-size: 18px;
+      margin-top: 16px;
+    }
+    
+    .admin-slots-header p {
+      font-size: 13px;
+    }
+    
+    .stats-grid {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin: 16px 0;
+    }
+    
+    .stat-card {
+      padding: 10px;
+    }
+    
+    .stat-number {
+      font-size: 18px;
+    }
+    
+    .stat-label {
+      font-size: 10px;
+    }
+    
+    .mentor-section {
+      margin-bottom: 24px;
+    }
+    
+    .mentor-name {
+      font-size: 16px;
+    }
+    
+    .mentor-email {
+      font-size: 12px;
+    }
+    
+    .mentor-stat-value {
+      font-size: 14px;
+    }
+    
+    .mentor-stat-label {
+      font-size: 11px;
+    }
+    
+    .bookings-table {
+      min-width: 700px;
+    }
+    
+    .bookings-table th,
+    .bookings-table td {
+      padding: 6px;
+      font-size: 12px;
+    }
+    
+    .student-info {
+      min-width: 110px;
+    }
+    
+    .student-name {
+      font-size: 13px;
+    }
+    
+    .student-email {
+      font-size: 11px;
+    }
+    
+    .slot-datetime {
+      min-width: 100px;
+    }
+    
+    .booking-notes {
+      max-width: 120px;
+      font-size: 11px;
+    }
+    
+    .status-badge {
+      padding: 3px 8px;
+      font-size: 11px;
+    }
+    
+    .empty-state {
+      padding: 30px 12px;
+      font-size: 14px;
+    }
+  }
+</style>
+
+<div class="admin-slots-container">
+  <div class="admin-slots-header">
+    <h1>Mentor Slot Management - Admin View</h1>
+    <p class="muted">Overview of all mentor availability and student bookings</p>
+  </div>
+
+  {% if mentor_data %}
+    <!-- Overall Statistics -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">{{ mentor_data|length }}</div>
+        <div class="stat-label">Active Mentors</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">{{ mentor_data|sum(attribute='total_slots') }}</div>
+        <div class="stat-label">Total Slots</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">{{ mentor_data|sum(attribute='upcoming_slots') }}</div>
+        <div class="stat-label">Upcoming Slots</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">{{ mentor_data|sum(attribute='total_bookings') }}</div>
+        <div class="stat-label">Total Bookings</div>
+      </div>
+    </div>
+
+    <!-- Mentor Sections -->
+    {% for data in mentor_data %}
+      <div class="mentor-section card">
+        <div class="mentor-header">
+          <div>
+            <div class="mentor-name">{{ data.mentor.name }}</div>
+            <div style="color: var(--muted); font-size: 14px; margin-top: 4px;">
+              {{ data.mentor.email }}
+            </div>
+          </div>
+          <div style="display: flex; gap: 16px; align-items: center;">
+            <div style="text-align: center;">
+              <div style="font-size: 18px; font-weight: 600; color: var(--brand);">{{ data.upcoming_slots }}</div>
+              <div style="font-size: 12px; color: var(--muted);">Upcoming Slots</div>
+            </div>
+            <div style="text-align: center;">
+              <div style="font-size: 18px; font-weight: 600; color: #10b981;">{{ data.total_bookings }}</div>
+              <div style="font-size: 12px; color: var(--muted);">Bookings</div>
+            </div>
+          </div>
+        </div>
+
+        {% if data.bookings %}
+          <table class="bookings-table">
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Slot Title</th>
+                <th>Date & Time</th>
+                <th>Location</th>
+                <th>Notes</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in data.bookings %}
+                {% set slot = item.slot %}
+                {% set booking = item.booking %}
+                {% set student = item.student %}
+                {% set is_upcoming = slot.start_time > now %}
+                <tr>
+                  <td>
+                    <strong>{{ student.name }}</strong><br>
+                    <span style="font-size: 12px; color: var(--muted);">{{ student.email }}</span>
+                  </td>
+                  <td>
+                    {% if slot.title %}
+                      {{ slot.title }}
+                    {% else %}
+                      <span style="color: var(--muted);">General Session</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <div>{{ slot.start_time.strftime('%b %d, %Y') }}</div>
+                    <div style="font-size: 12px; color: var(--muted);">
+                      {{ slot.start_time.strftime('%I:%M %p') }} - {{ slot.end_time.strftime('%I:%M %p') }}
+                    </div>
+                  </td>
+                  <td>
+                    {% if slot.location %}
+                      {{ slot.location }}
+                    {% else %}
+                      <span style="color: var(--muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if booking.notes %}
+                      <div style="max-width: 200px; font-size: 13px;">{{ booking.notes }}</div>
+                    {% else %}
+                      <span style="color: var(--muted);">—</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if is_upcoming %}
+                      <span class="status-badge status-upcoming">Upcoming</span>
+                    {% else %}
+                      <span class="status-badge status-past">Completed</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="empty-state">
+            <p>No bookings for this mentor yet.</p>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+  {% else %}
+    <div class="card empty-state">
+      <p>No active mentors found.</p>
+    </div>
+  {% endif %}
+</div>
+
+<script>
+// Pass current time for status checking
+const now = new Date();
+</script>
+{% endblock %}

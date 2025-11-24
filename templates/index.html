@@ -146,6 +146,21 @@
   {% endif %}
 
   <div class="sec-card">
+    <h3 class="sec-title">📅 Mentor Sessions</h3>
+    <p class="sec-hint">Book one-on-one time with mentors for help and guidance.</p>
+
+    <div class="item-row">
+      <div class="item-main">
+        <div class="item-title">Book a Mentor Session</div>
+        <div class="item-desc">View available time slots and schedule sessions with mentors</div>
+      </div>
+      <div class="item-actions">
+        <a class="btn-cta" href="{{ url_for('student_slots') }}">Browse & Book Sessions</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec-card">
     <h3 class="sec-title">Live Lecture Feedback</h3>
     <p class="sec-hint">Signed in as <strong>{{ student_name }}</strong>. Let your instructor know how you're doing.</p>
 
@@ -195,6 +210,21 @@
         <a class="btn-ghost" href="{{ url_for('exercises_list') }}">Browse Exercises</a>
       </div>
     </div>
+    {% if user.role == 'mentor' %}
+    <div class="item-row" style="justify-content:flex-start; margin-top: 10px;">
+      <div class="item-actions">
+        <a class="btn-cta" style="background: linear-gradient(180deg,#637FBE,#5775B8);" href="{{ url_for('mentor_slots') }}">📅 My Availability Slots</a>
+        <a class="btn-ghost" href="{{ url_for('mentor_slot_new') }}">+ Create New Slot</a>
+      </div>
+    </div>
+    {% elif user.role in ['admin', 'instructor'] %}
+    <div class="item-row" style="justify-content:flex-start; margin-top: 10px;">
+      <div class="item-actions">
+        <a class="btn-cta" style="background: linear-gradient(180deg,#637FBE,#5775B8);" href="{{ url_for('admin_mentor_slots') }}">📊 Mentor Slots Overview</a>
+        <a class="btn-ghost" href="{{ url_for('mentors_list') }}">Manage Mentors</a>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
 {# ------------------------------------------------------------------------

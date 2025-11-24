@@ -3,6 +3,13 @@
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/exercise.css') }}?v=3">
 <style>
+/* Override exercise.css overflow hidden for list page */
+html, body {
+  overflow: auto !important;
+  height: auto !important;
+  position: relative !important;
+}
+
 /* Match home page background and styling */
 body {
   background: #0f172a !important;
@@ -10,6 +17,8 @@ body {
 
 .wrap {
   background: transparent;
+  min-height: 100vh;
+  padding-bottom: 40px;
 }
 
 /* Exercises list page styles */
@@ -98,6 +107,76 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   font-weight: 500;
+}
+
+/* Mobile Responsive Styles */
+@media (max-width: 768px) {
+  .exercises-page-title {
+    font-size: 24px;
+  }
+  
+  .exercises-page-subtitle {
+    font-size: 14px;
+  }
+  
+  .exercises-stats-banner {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  
+  .exercises-stat-card {
+    padding: 16px;
+  }
+  
+  .exercises-stat-value {
+    font-size: 24px;
+  }
+  
+  .exercises-stat-label {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 480px) {
+  .wrap {
+    padding: 12px;
+  }
+  
+  .exercises-page-header {
+    margin-bottom: 20px;
+  }
+  
+  .exercises-page-title {
+    font-size: 20px;
+  }
+  
+  .exercises-page-subtitle {
+    font-size: 13px;
+  }
+  
+  .exercises-stats-banner {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  
+  .exercises-stat-card {
+    padding: 12px;
+  }
+  
+  .exercises-stat-value {
+    font-size: 20px;
+  }
+  
+  .exercises-stat-label {
+    font-size: 10px;
+  }
+  
+  .exercises-back-link {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
 }
 </style>
 {% endblock %}

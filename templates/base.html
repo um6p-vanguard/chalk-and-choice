@@ -75,32 +75,37 @@
         {% if user %}
           {% if user.role == 'mentor' %}
             <span>Mentor: <strong>{{ user.name }}</strong></span>
-            <a href="{{ url_for('mentor_profile') }}" style="margin-left:10px;">My Profile</a>
-            <a href="{{ url_for('signals_dashboard') }}" style="margin-left:10px;">Signals</a>
-            <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
-            <a href="{{ url_for('poll_new') }}">New Poll</a>
-            <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
-            <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
+            <span style="margin-left: 20px; margin-right: 4px; color: var(--border);">|</span>
+            <a href="{{ url_for('mentor_slots') }}">My Slots</a>
+            <a href="{{ url_for('mentor_profile') }}">Profile</a>
             <a href="{{ url_for('homework_list') }}">Homework</a>
             <a href="{{ url_for('exercises_manage') }}" style="color:#10b981;">Exercises</a>
-            <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
+            <span style="margin-left: 4px; margin-right: 4px; color: var(--border);">|</span>
+            <a href="{{ url_for('signals_dashboard') }}">Signals</a>
+            <a href="{{ url_for('poll_list') }}">Polls</a>
+            <a href="{{ url_for('forms_list') }}">Forms</a>
+            <a class="btn" href="{{ url_for('logout') }}" style="margin-left:12px; padding: 6px 12px;">Logout</a>
           {% else %}
             <span>{% if user.role == 'admin' %}Admin{% else %}Instructor{% endif %}: <strong>{{ user.name }}</strong></span>
-            <a href="{{ url_for('signals_dashboard') }}" style="margin-left:10px;">Signals</a>
-            <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
-            <a href="{{ url_for('poll_new') }}">New Poll</a>
-            <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
-            <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
-            <a class="nav-link" href="{{ url_for('homework_list') }}">Homework</a>
-            <a class="nav-link" href="{{ url_for('mentors_list') }}">Mentors</a>
-            <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
+            <span style="margin-left: 20px; margin-right: 4px; color: var(--border);">|</span>
+            <a href="{{ url_for('homework_list') }}">Homework</a>
+            <a href="{{ url_for('mentors_list') }}">Mentors</a>
+            <a href="{{ url_for('admin_mentor_slots') }}">Mentor Slots</a>
+            <a href="{{ url_for('exercises_manage') }}" style="color:#10b981;">Exercises</a>
+            <span style="margin-left: 4px; margin-right: 4px; color: var(--border);">|</span>
+            <a href="{{ url_for('signals_dashboard') }}">Signals</a>
+            <a href="{{ url_for('poll_list') }}">Polls</a>
+            <a href="{{ url_for('forms_list') }}">Forms</a>
+            <a class="btn" href="{{ url_for('logout') }}" style="margin-left:12px; padding: 6px 12px;">Logout</a>
           {% endif %}
         {% elif student_name %}
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
-          <a href="{{ url_for('exercises_list') }}" style="margin-left:10px; color:#10b981;">Exercises</a>
-          <a href="{{ url_for('my_notebooks_page') }}" style="margin-left:10px;">My Notebooks</a>
-          <a href="{{ url_for('notebooks_page') }}" style="margin-left:10px;">Notebooks</a>
-          <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
+          <span style="margin-left: 20px; margin-right: 4px; color: var(--border);">|</span>
+          <a href="{{ url_for('student_slots') }}">Book Mentors</a>
+          <a href="{{ url_for('exercises_list') }}" style="color:#10b981;">Exercises</a>
+          <a href="{{ url_for('my_notebooks_page') }}">My Notebooks</a>
+          <a href="{{ url_for('notebooks_page') }}">Notebooks</a>
+          <a class="btn" href="{{ url_for('logout') }}" style="margin-left:12px; padding: 6px 12px;">Logout</a>
         {% else %}
           <a class="btn" href="{{ url_for('login') }}">Login</a>
         {% endif %}

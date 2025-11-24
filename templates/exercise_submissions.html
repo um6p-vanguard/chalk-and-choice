@@ -1,24 +1,238 @@
 {% extends "base.html" %}
 
+{% block head %}
+<style>
+  /* Override exercise.css overflow:hidden on body */
+  html, body {
+    overflow: auto !important;
+    height: auto !important;
+  }
+  
+  .submissions-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+  
+  .header-section {
+    margin-bottom: 30px;
+  }
+  
+  .back-link {
+    color: #60a5fa;
+    text-decoration: none;
+    display: inline-block;
+    margin-bottom: 10px;
+  }
+  
+  .submissions-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  
+  .submissions-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 800px;
+  }
+  
+  .submissions-table thead tr {
+    background: rgba(96,165,250,0.1);
+  }
+  
+  .submissions-table th,
+  .submissions-table td {
+    padding: 12px;
+  }
+  
+  .submissions-table th {
+    text-align: left;
+  }
+  
+  .sticky-col {
+    position: sticky;
+    left: 0;
+    z-index: 10;
+    background: var(--bg);
+  }
+  
+  .sticky-col-header {
+    position: sticky;
+    left: 0;
+    z-index: 20;
+    background: rgba(96,165,250,0.1);
+  }
+  
+  .student-cell {
+    min-width: 200px;
+  }
+  
+  .score-cell {
+    text-align: center;
+    min-width: 100px;
+  }
+  
+  .exercise-cell {
+    text-align: center;
+    min-width: 120px;
+  }
+  
+  .exercise-header {
+    font-size: 11px;
+    color: #94a3b8;
+  }
+  
+  .exercise-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+  
+  .total-score {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  
+  .score-percentage {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 2px;
+  }
+  
+  .student-name {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 2px;
+  }
+  
+  .student-email {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+  
+  .attempt-score {
+    font-weight: 600;
+  }
+  
+  .attempt-info {
+    font-size: 11px;
+    color: #94a3b8;
+    margin-top: 2px;
+  }
+  
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #94a3b8;
+  }
+  
+  /* Mobile Responsive */
+  @media (max-width: 768px) {
+    .submissions-container {
+      padding: 12px;
+    }
+    
+    .header-section h1 {
+      font-size: 22px;
+      margin: 8px 0;
+    }
+    
+    .header-section p {
+      font-size: 14px;
+    }
+    
+    .submissions-table th,
+    .submissions-table td {
+      padding: 8px;
+    }
+    
+    .student-cell {
+      min-width: 160px;
+    }
+    
+    .student-name {
+      font-size: 14px;
+    }
+    
+    .student-email {
+      font-size: 11px;
+    }
+    
+    .score-cell {
+      min-width: 80px;
+    }
+    
+    .total-score {
+      font-size: 16px;
+    }
+    
+    .exercise-cell {
+      min-width: 100px;
+    }
+    
+    .exercise-title {
+      font-size: 12px;
+    }
+    
+    .empty-state {
+      padding: 40px 12px;
+    }
+    
+    .empty-state p:first-child {
+      font-size: 16px;
+    }
+  }
+  
+  @media (max-width: 480px) {
+    .submissions-container {
+      padding: 8px;
+    }
+    
+    .header-section h1 {
+      font-size: 18px;
+    }
+    
+    .submissions-table th,
+    .submissions-table td {
+      padding: 6px;
+    }
+    
+    .student-cell {
+      min-width: 140px;
+    }
+    
+    .total-score {
+      font-size: 14px;
+    }
+    
+    .exercise-cell {
+      min-width: 90px;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div style="max-width: 1400px; margin: 0 auto; padding: 20px;">
-  <div style="margin-bottom: 30px;">
-    <a href="/exercises/manage" style="color: #60a5fa; text-decoration: none;">← Back to Exercises</a>
-    <h1 style="margin: 10px 0;">Submissions: {{ exercise_set.title }}</h1>
-    <p style="color: #94a3b8;">View all student submissions across {{ exercises|length }} exercise{{ 's' if exercises|length != 1 else '' }}</p>
+<div class="submissions-container">
+  <div class="header-section">
+    <a href="/exercises/manage" class="back-link">← Back to Exercises</a>
+    <h1>Submissions: {{ exercise_set.title }}</h1>
+    <p>View all student submissions across {{ exercises|length }} exercise{{ 's' if exercises|length != 1 else '' }}</p>
   </div>
 
   {% if students_data %}
-  <div style="overflow-x: auto;">
-    <table style="width: 100%; border-collapse: collapse; min-width: 800px;">
+  <div class="submissions-table-wrapper">
+    <table class="submissions-table">
       <thead>
-        <tr style="background: rgba(96,165,250,0.1); text-align: left;">
-          <th style="padding: 12px; position: sticky; left: 0; background: rgba(96,165,250,0.1); z-index: 10;">Student</th>
-          <th style="padding: 12px; text-align: center;">Total Score</th>
+        <tr>
+          <th class="sticky-col-header student-cell">Student</th>
+          <th class="score-cell">Total Score</th>
           {% for ex in exercises %}
-          <th style="padding: 12px; text-align: center; min-width: 100px;">
-            <div style="font-size: 11px; color: #94a3b8;">Exercise {{ ex.order }}</div>
-            <div style="font-size: 13px; font-weight: 600;">{{ ex.title[:20] }}{{ '...' if ex.title|length > 20 else '' }}</div>
+          <th class="exercise-cell">
+            <div class="exercise-header">Exercise {{ ex.order }}</div>
+            <div class="exercise-title">{{ ex.title[:20] }}{{ '...' if ex.title|length > 20 else '' }}</div>
           </th>
           {% endfor %}
         </tr>
@@ -26,24 +240,23 @@
       <tbody>
         {% for data in students_data %}
         <tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">
-          <td style="padding: 12px; position: sticky; left: 0; background: var(--bg); z-index: 5;">
-            <strong>{{ data.student.name }}</strong><br>
-            <small style="color: #94a3b8;">{{ data.student.email }}</small>
+          <td class="sticky-col student-cell">
+            <span class="student-name">{{ data.student.name }}</span>
+            <span class="student-email">{{ data.student.email }}</span>
           </td>
-          <td style="padding: 12px; text-align: center;">
-            <div style="font-size: 18px; font-weight: 700; 
-                        color: {% if data.percentage == 100 %}#10b981{% elif data.percentage >= 70 %}#60a5fa{% elif data.percentage >= 40 %}#fbbf24{% else %}#f87171{% endif %};">
+          <td class="score-cell">
+            <div class="total-score" style="color: {% if data.percentage == 100 %}#10b981{% elif data.percentage >= 70 %}#60a5fa{% elif data.percentage >= 40 %}#fbbf24{% else %}#f87171{% endif %};">
               {{ data.total_score|int }}/{{ data.max_score }}
             </div>
-            <div style="font-size: 12px; color: #94a3b8;">{{ data.percentage }}%</div>
+            <div class="score-percentage">{{ data.percentage }}%</div>
           </td>
           {% for prog in data.exercise_progress %}
-          <td style="padding: 12px; text-align: center; background: {% if prog.completed %}rgba(16,185,129,0.1){% elif prog.attempts > 0 %}rgba(251,191,36,0.1){% else %}rgba(100,116,139,0.05){% endif %};">
+          <td class="exercise-cell" style="background: {% if prog.completed %}rgba(16,185,129,0.1){% elif prog.attempts > 0 %}rgba(251,191,36,0.1){% else %}rgba(100,116,139,0.05){% endif %};">
             {% if prog.attempts > 0 %}
-              <div style="font-weight: 600; color: {% if prog.completed %}#10b981{% else %}#fbbf24{% endif %};">
+              <div class="attempt-score" style="color: {% if prog.completed %}#10b981{% else %}#fbbf24{% endif %};">
                 {{ prog.best_score|int }}/{{ prog.exercise.points }}
               </div>
-              <div style="font-size: 11px; color: #94a3b8;">
+              <div class="attempt-info">
                 {% if prog.completed %}
                   ✓ Complete
                 {% else %}
@@ -61,8 +274,8 @@
     </table>
   </div>
   {% else %}
-  <div style="text-align: center; padding: 60px 20px; color: #94a3b8;">
-    <p style="font-size: 18px;">No submissions yet</p>
+  <div class="empty-state">
+    <p style="font-size: 18px; margin-bottom: 8px;">No submissions yet</p>
     <p>Students haven't started working on this exercise set yet.</p>
   </div>
   {% endif %}

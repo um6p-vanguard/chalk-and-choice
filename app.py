@@ -12,7 +12,8 @@ from models import (db, Poll, Vote, Student, User, Form,
                     FormResponse, LectureQuestion, LectureSignal,
                     StudentStats, Intervention, Notebook, StudentHomework,
                     Homework, HomeworkMessage, Mentor, CodeExercise,
-                    CodeSubmission, StudentProgress, ExerciseSet)
+                    CodeSubmission, StudentProgress, ExerciseSet, MentorSlot,
+                    SlotBooking)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -3163,6 +3164,366 @@ def api_submission_detail(submission_id):
         "submitted_at": submission.submitted_at.isoformat(),
         "test_results": filtered_results
     })
+
+# --------------------------------------------------------------------
+# Mentor Slot Management
+# --------------------------------------------------------------------
+
+# Admin: View all mentor slots and bookings
+@app.route("/admin/mentor-slots")
+@require_user(role=['admin', 'instructor'])
+def admin_mentor_slots():
+    user = current_user()
+    
+    # Get all mentors
+    mentors = Mentor.query.filter_by(is_active=True).order_by(Mentor.name).all()
+    
+    mentor_data = []
+    for mentor in mentors:
+        # Get all slots for this mentor
+        slots = MentorSlot.query.filter_by(mentor_id=mentor.id).order_by(MentorSlot.start_time).all()
+        
+        # Get stats
+        total_slots = len(slots)
+        active_slots = len([s for s in slots if s.is_active])
+        upcoming_slots = len([s for s in slots if s.start_time > datetime.now()])
+        
+        # Get all bookings
+        all_bookings = []
+        for slot in slots:
+            bookings = SlotBooking.query.filter_by(
+                slot_id=slot.id,
+                status='confirmed'
+            ).all()
+            for booking in bookings:
+                all_bookings.append({
+                    'slot': slot,
+                    'booking': booking,
+                    'student': booking.student
+                })
+        
+        mentor_data.append({
+            'mentor': mentor,
+            'total_slots': total_slots,
+            'active_slots': active_slots,
+            'upcoming_slots': upcoming_slots,
+            'total_bookings': len(all_bookings),
+            'bookings': sorted(all_bookings, key=lambda x: x['slot'].start_time)
+        })
+    
+    return render_template("admin_mentor_slots.html", 
+                         user=user,
+                         mentor_data=mentor_data,
+                         now=datetime.now())
+
+# Mentor: View/manage their slots
+@app.route("/mentor/slots")
+@require_user(role='mentor')
+def mentor_slots():
+    mentor = current_mentor()
+    if not mentor:
+        abort(403, description="Not linked to a mentor profile")
+    
+    # Get all slots for this mentor, ordered by start time
+    slots = MentorSlot.query.filter_by(mentor_id=mentor.id).order_by(MentorSlot.start_time).all()
+    
+    # Get booking info for each slot
+    slots_with_bookings = []
+    for slot in slots:
+        bookings = SlotBooking.query.filter_by(slot_id=slot.id, status='confirmed').all()
+        slots_with_bookings.append({
+            'slot': slot,
+            'bookings': bookings,
+            'bookings_count': len(bookings)
+        })
+    
+    user = current_user()
+    return render_template("mentor_slots.html", 
+                         user=user, 
+                         mentor=mentor,
+                         slots=slots_with_bookings)
+
+# Mentor: Create new slot
+@app.route("/mentor/slots/new", methods=["GET", "POST"])
+@require_user(role='mentor')
+def mentor_slot_new():
+    mentor = current_mentor()
+    if not mentor:
+        abort(403, description="Not linked to a mentor profile")
+    
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        description = request.form.get("description", "").strip()
+        location = request.form.get("location", "").strip()
+        start_time_str = request.form.get("start_time", "").strip()
+        end_time_str = request.form.get("end_time", "").strip()
+        max_bookings = request.form.get("max_bookings", "1").strip()
+        
+        # Validate
+        if not start_time_str or not end_time_str:
+            return render_template("mentor_slot_new.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 error="Start time and end time are required"), 400
+        
+        start_time = parse_dt_local(start_time_str)
+        end_time = parse_dt_local(end_time_str)
+        
+        if not start_time or not end_time:
+            return render_template("mentor_slot_new.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 error="Invalid date/time format"), 400
+        
+        if end_time <= start_time:
+            return render_template("mentor_slot_new.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 error="End time must be after start time"), 400
+        
+        if start_time < datetime.now():
+            return render_template("mentor_slot_new.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 error="Cannot create slots in the past"), 400
+        
+        try:
+            max_bookings_int = int(max_bookings)
+            if max_bookings_int < 1:
+                raise ValueError()
+        except ValueError:
+            return render_template("mentor_slot_new.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 error="Max bookings must be a positive number"), 400
+        
+        # Create slot
+        slot = MentorSlot(
+            mentor_id=mentor.id,
+            title=title or None,
+            description=description or None,
+            location=location or None,
+            start_time=start_time,
+            end_time=end_time,
+            max_bookings=max_bookings_int
+        )
+        db.session.add(slot)
+        db.session.commit()
+        
+        return redirect(url_for("mentor_slots"))
+    
+    user = current_user()
+    return render_template("mentor_slot_new.html", user=user, mentor=mentor)
+
+# Mentor: Edit slot
+@app.route("/mentor/slots/<int:slot_id>/edit", methods=["GET", "POST"])
+@require_user(role='mentor')
+def mentor_slot_edit(slot_id):
+    mentor = current_mentor()
+    if not mentor:
+        abort(403, description="Not linked to a mentor profile")
+    
+    slot = MentorSlot.query.get_or_404(slot_id)
+    
+    # Verify ownership
+    if slot.mentor_id != mentor.id:
+        abort(403)
+    
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        description = request.form.get("description", "").strip()
+        location = request.form.get("location", "").strip()
+        start_time_str = request.form.get("start_time", "").strip()
+        end_time_str = request.form.get("end_time", "").strip()
+        max_bookings = request.form.get("max_bookings", "1").strip()
+        is_active = request.form.get("is_active") == "on"
+        
+        # Validate
+        if not start_time_str or not end_time_str:
+            return render_template("mentor_slot_edit.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 slot=slot,
+                                 error="Start time and end time are required"), 400
+        
+        start_time = parse_dt_local(start_time_str)
+        end_time = parse_dt_local(end_time_str)
+        
+        if not start_time or not end_time:
+            return render_template("mentor_slot_edit.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 slot=slot,
+                                 error="Invalid date/time format"), 400
+        
+        if end_time <= start_time:
+            return render_template("mentor_slot_edit.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 slot=slot,
+                                 error="End time must be after start time"), 400
+        
+        try:
+            max_bookings_int = int(max_bookings)
+            if max_bookings_int < 1:
+                raise ValueError()
+        except ValueError:
+            return render_template("mentor_slot_edit.html", 
+                                 user=current_user(), 
+                                 mentor=mentor,
+                                 slot=slot,
+                                 error="Max bookings must be a positive number"), 400
+        
+        # Update slot
+        slot.title = title or None
+        slot.description = description or None
+        slot.location = location or None
+        slot.start_time = start_time
+        slot.end_time = end_time
+        slot.max_bookings = max_bookings_int
+        slot.is_active = is_active
+        db.session.commit()
+        
+        return redirect(url_for("mentor_slots"))
+    
+    user = current_user()
+    return render_template("mentor_slot_edit.html", user=user, mentor=mentor, slot=slot)
+
+# Mentor: Delete slot
+@app.route("/mentor/slots/<int:slot_id>/delete", methods=["POST"])
+@require_user(role='mentor')
+def mentor_slot_delete(slot_id):
+    mentor = current_mentor()
+    if not mentor:
+        abort(403, description="Not linked to a mentor profile")
+    
+    slot = MentorSlot.query.get_or_404(slot_id)
+    
+    # Verify ownership
+    if slot.mentor_id != mentor.id:
+        abort(403)
+    
+    db.session.delete(slot)
+    db.session.commit()
+    
+    return redirect(url_for("mentor_slots"))
+
+# Student: Browse available slots
+@app.route("/slots")
+@require_student()
+def student_slots():
+    student = current_student()
+    
+    # Get all active slots that haven't started yet
+    now = datetime.now()
+    available_slots = MentorSlot.query.filter(
+        MentorSlot.is_active == True,
+        MentorSlot.start_time > now
+    ).order_by(MentorSlot.start_time).all()
+    
+    # Group by mentor and filter by availability
+    slots_by_mentor = {}
+    for slot in available_slots:
+        if slot.is_available:
+            mentor_name = slot.mentor.name
+            if mentor_name not in slots_by_mentor:
+                slots_by_mentor[mentor_name] = []
+            slots_by_mentor[mentor_name].append(slot)
+    
+    # Get student's bookings
+    my_bookings = SlotBooking.query.filter_by(
+        student_id=student.id,
+        status='confirmed'
+    ).order_by(SlotBooking.booked_at.desc()).all()
+    
+    return render_template("student_slots.html", 
+                         student_name=student.name,
+                         slots_by_mentor=slots_by_mentor,
+                         my_bookings=my_bookings,
+                         now=now)
+
+# Student: Book a slot
+@app.route("/slots/<int:slot_id>/book", methods=["POST"])
+@require_student()
+def student_slot_book(slot_id):
+    student = current_student()
+    slot = MentorSlot.query.get_or_404(slot_id)
+    
+    # Verify slot is available
+    if not slot.is_available:
+        return jsonify({"error": "Slot is no longer available"}), 400
+    
+    # Check if student already booked this slot
+    existing = SlotBooking.query.filter_by(
+        slot_id=slot_id,
+        student_id=student.id,
+        status='confirmed'
+    ).first()
+    
+    if existing:
+        return jsonify({"error": "You have already booked this slot"}), 400
+    
+    # Get notes from request
+    data = request.get_json(silent=True) or {}
+    notes = data.get("notes", "").strip()
+    
+    # Create booking
+    booking = SlotBooking(
+        slot_id=slot_id,
+        student_id=student.id,
+        notes=notes or None
+    )
+    db.session.add(booking)
+    db.session.commit()
+    
+    return jsonify({"success": True, "booking_id": booking.id})
+
+# Student: Cancel booking
+@app.route("/slots/bookings/<int:booking_id>/cancel", methods=["POST"])
+@require_student()
+def student_booking_cancel(booking_id):
+    student = current_student()
+    booking = SlotBooking.query.get_or_404(booking_id)
+    
+    # Verify ownership
+    if booking.student_id != student.id:
+        abort(403)
+    
+    # Only allow canceling confirmed bookings
+    if booking.status != 'confirmed':
+        return jsonify({"error": "Cannot cancel this booking"}), 400
+    
+    # Update status
+    booking.status = 'cancelled_by_student'
+    booking.cancelled_at = datetime.now()
+    db.session.commit()
+    
+    return jsonify({"success": True})
+
+# Mentor: Cancel a booking
+@app.route("/mentor/bookings/<int:booking_id>/cancel", methods=["POST"])
+@require_user(role='mentor')
+def mentor_booking_cancel(booking_id):
+    mentor = current_mentor()
+    if not mentor:
+        abort(403, description="Not linked to a mentor profile")
+    
+    booking = SlotBooking.query.get_or_404(booking_id)
+    
+    # Verify the booking is for this mentor's slot
+    if booking.slot.mentor_id != mentor.id:
+        abort(403)
+    
+    # Only allow canceling confirmed bookings
+    if booking.status != 'confirmed':
+        return jsonify({"error": "Cannot cancel this booking"}), 400
+    
+    # Update status
+    booking.status = 'cancelled_by_mentor'
+    booking.cancelled_at = datetime.now()
+    db.session.commit()
+    
+    return jsonify({"success": True})
 
 # --------------------------------------------------------------------
 # Dev entry

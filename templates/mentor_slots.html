@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width: 1200px; margin: 0 auto;">
+  <h1 style="margin-top:30px;">My Availability Slots</h1>
+  <p class="muted">Manage your availability for student bookings</p>
+
+  <div style="margin: 20px 0;">
+    <a href="/mentor/slots/new" class="btn btn-primary" style="padding: 10px 16px;">+ Create New Slot</a>
+  </div>
+
+  {% if slots %}
+    <div style="display: grid; gap: 16px; margin-top: 24px;">
+      {% for item in slots %}
+        {% set slot = item.slot %}
+        {% set bookings = item.bookings %}
+        {% set bookings_count = item.bookings_count %}
+        
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <div style="flex: 1;">
+              <h3 style="margin: 0 0 8px 0;">
+                {% if slot.title %}
+                  {{ slot.title }}
+                {% else %}
+                  Availability Slot
+                {% endif %}
+              </h3>
+              
+              <div style="color: var(--muted); margin-bottom: 8px;">
+                📅 {{ slot.start_time.strftime('%B %d, %Y') }} | 
+                🕐 {{ slot.start_time.strftime('%I:%M %p') }} - {{ slot.end_time.strftime('%I:%M %p') }}
+              </div>
+              
+              {% if slot.location %}
+                <div style="color: var(--muted); margin-bottom: 8px;">
+                  📍 {{ slot.location }}
+                </div>
+              {% endif %}
+              
+              {% if slot.description %}
+                <div style="margin-top: 8px; color: var(--text);">
+                  {{ slot.description }}
+                </div>
+              {% endif %}
+              
+              <div style="margin-top: 12px;">
+                <span style="padding: 4px 10px; background: {% if slot.is_active %}#1e4620{% else %}#4a1e1e{% endif %}; border-radius: 6px; font-size: 13px;">
+                  {% if slot.is_active %}✓ Active{% else %}✗ Inactive{% endif %}
+                </span>
+                <span style="padding: 4px 10px; background: #1e2a4a; border-radius: 6px; font-size: 13px; margin-left: 8px;">
+                  {{ slot.available_spots }}/{{ slot.max_bookings }} spots available
+                </span>
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <a href="/mentor/slots/{{ slot.id }}/edit" class="btn" style="padding: 8px 14px; display: inline-block; text-decoration: none;">Edit</a>
+              <form method="post" action="/mentor/slots/{{ slot.id }}/delete" style="margin: 0;" 
+                    onsubmit="return confirm('Delete this slot? All bookings will be removed.');">
+                <button type="submit" class="btn btn-danger" style="padding: 8px 14px; border: none; cursor: pointer;">Delete</button>
+              </form>
+            </div>
+          </div>
+          
+          {% if bookings %}
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+              <h4 style="margin: 0 0 12px 0; font-size: 14px; color: var(--muted);">
+                Bookings ({{ bookings_count }})
+              </h4>
+              <div style="display: grid; gap: 8px;">
+                {% for booking in bookings %}
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px; background: #0b1220; border-radius: 6px;">
+                    <div>
+                      <strong>{{ booking.student.name }}</strong>
+                      <span class="muted" style="margin-left: 8px; font-size: 13px;">
+                        Booked {{ booking.booked_at.strftime('%b %d at %I:%M %p') }}
+                      </span>
+                      {% if booking.notes %}
+                        <div style="margin-top: 4px; font-size: 13px; color: var(--muted);">
+                          Note: {{ booking.notes }}
+                        </div>
+                      {% endif %}
+                    </div>
+                    <button class="btn btn-danger" style="padding: 6px 12px; font-size: 13px;"
+                            onclick="cancelBooking({{ booking.id }})">
+                      Cancel
+                    </button>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card" style="margin-top: 24px; text-align: center; padding: 40px;">
+      <p class="muted">No slots created yet. Create your first availability slot to allow students to book time with you.</p>
+    </div>
+  {% endif %}
+</div>
+
+<script>
+async function cancelBooking(bookingId) {
+  if (!confirm('Cancel this booking?')) return;
+  
+  try {
+    const response = await fetch(`/mentor/bookings/${bookingId}/cancel`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (response.ok) {
+      alert('Booking cancelled successfully');
+      window.location.reload();
+    } else {
+      const data = await response.json();
+      alert(data.error || 'Failed to cancel booking');
+    }
+  } catch (error) {
+    alert('Error: ' + error.message);
+  }
+}
+</script>
+{% endblock %}

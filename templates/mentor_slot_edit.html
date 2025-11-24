@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width: 800px; margin: 0 auto;">
+  <h1 style="margin-top:30px;">Edit Availability Slot</h1>
+
+  {% if error %}
+    <div style="padding: 12px; background: #4a1e1e; border: 1px solid var(--danger); border-radius: 8px; margin: 20px 0;">
+      {{ error }}
+    </div>
+  {% endif %}
+
+  <form method="post" class="card" style="margin-top: 24px; max-width: 600px;">
+    <div style="margin-bottom: 20px;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+        Title (Optional)
+      </label>
+      <input type="text" name="title" placeholder="e.g., Office Hours, Homework Help" 
+             style="width: 100%;" value="{{ request.form.get('title', slot.title or '') }}">
+      <small class="muted">Give your slot a descriptive name</small>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+        Description (Optional)
+      </label>
+      <textarea name="description" rows="3" placeholder="What will you help students with during this time?" 
+                style="width: 100%;">{{ request.form.get('description', slot.description or '') }}</textarea>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+        Location (Optional)
+      </label>
+      <input type="text" name="location" placeholder="e.g., Room 304, Zoom link, etc." 
+             style="width: 100%;" value="{{ request.form.get('location', slot.location or '') }}">
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
+      <div>
+        <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+          Start Time <span style="color: var(--danger);">*</span>
+        </label>
+        <input type="datetime-local" name="start_time" required style="width: 100%;" 
+               value="{{ request.form.get('start_time', slot.start_time.strftime('%Y-%m-%dT%H:%M') if slot.start_time else '') }}">
+      </div>
+      
+      <div>
+        <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+          End Time <span style="color: var(--danger);">*</span>
+        </label>
+        <input type="datetime-local" name="end_time" required style="width: 100%;" 
+               value="{{ request.form.get('end_time', slot.end_time.strftime('%Y-%m-%dT%H:%M') if slot.end_time else '') }}">
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <label style="display: block; margin-bottom: 6px; font-weight: 500;">
+        Max Number of Students
+      </label>
+      <input type="number" name="max_bookings" min="1" 
+             value="{{ request.form.get('max_bookings', slot.max_bookings) }}" 
+             style="width: 150px;">
+      <small class="muted">How many students can book this slot?</small>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+        <input type="checkbox" name="is_active" {% if request.form.get('is_active') or (not request.form and slot.is_active) %}checked{% endif %}>
+        <span style="font-weight: 500;">Slot is Active</span>
+      </label>
+      <small class="muted">Uncheck to hide this slot from students without deleting it</small>
+    </div>
+
+    <div style="display: flex; gap: 12px; margin-top: 24px;">
+      <button type="submit" class="btn btn-primary" style="padding: 10px 16px;">Save Changes</button>
+      <a href="/mentor/slots" class="btn" style="padding: 10px 16px;">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
