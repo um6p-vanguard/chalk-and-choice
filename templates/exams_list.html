@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Exams &amp; proctoring</h3>
+      <p class="muted" style="margin-top:4px;">Build proctored exams with MCQ, text, and Python code prompts.</p>
+    </div>
+    <div>
+      <a class="btn btn-primary" href="{{ url_for('exams_new') }}">New exam</a>
+    </div>
+  </div>
+  <div class="sp"></div>
+  {% if exams %}
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Window</th>
+        <th>Status</th>
+        <th>Submissions</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for exam in exams %}
+      <tr>
+        <td>
+          <strong>{{ exam.title }}</strong><br>
+          <span class="muted">Code: {{ exam.code }}</span>
+        </td>
+        <td>
+          {% if exam.starts_at %}{{ exam.starts_at.strftime("%b %d %H:%M UTC") }}{% else %}Now{% endif %}
+          —
+          {% if exam.ends_at %}{{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %}No end{% endif %}
+        </td>
+        <td>
+          {% if exam.is_available %}
+            <span style="color:#4ade80;">Open</span>
+          {% elif not exam.is_open %}
+            <span class="text-danger">Closed</span>
+          {% elif exam.starts_at %}
+            <span class="muted">Scheduled</span>
+          {% else %}
+            <span class="muted">Inactive</span>
+          {% endif %}
+        </td>
+        <td>
+          {% set stat = stats.get(exam.id) %}
+          {% if stat %}
+            {{ stat["submitted"] }} / {{ stat["total"] }}
+          {% else %}
+            0 / 0
+          {% endif %}
+        </td>
+        <td style="text-align:right;">
+          <a class="btn" href="{{ url_for('exams_show', code=exam.code) }}">Manage</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No exams yet. Create your first one to start proctoring.</p>
+  {% endif %}
+</div>
+{% endblock %}

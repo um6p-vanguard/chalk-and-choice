@@ -77,6 +77,7 @@
           <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
           <a href="{{ url_for('poll_new') }}">New Poll</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
+          <a href="{{ url_for('exams_list') }}" style="margin-left:10px;">Exams</a>
           <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% elif student_name %}
@@ -92,6 +93,7 @@
     <div class="sp"></div>
 
     <div class="muted">SASE Poll login</div>
+    {% block scripts %}{% endblock %}
   </div>
 </body>
 </html>

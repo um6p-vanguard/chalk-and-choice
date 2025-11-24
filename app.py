@@ -9,7 +9,7 @@ from itsdangerous import URLSafeSerializer
 
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention)
+                    StudentStats, Intervention, Exam, ExamSubmission)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -255,7 +255,18 @@ def password_new():
 def index():
     u = current_user()
     polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
-    return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
+    student = current_student()
+    exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
+    available_exams = [ex for ex in exams if ex.is_available] if student else []
+    return render_template(
+        "index.html",
+        user=u,
+        polls=polls,
+        student_name=session.get("student_name"),
+        exams=exams,
+        available_exams=available_exams,
+        now_utc=datetime.utcnow(),
+    )
 
 # --------------------------------------------------------------------
 # Polls
@@ -857,6 +868,307 @@ def forms_results(code):
     form = Form.query.filter_by(code=code).first_or_404()
     rows = [{"name": r.student_name or "(anonymous)", "when": r.created_at, "payload": r.payload_json} for r in form.responses]
     return render_template("forms_results.html", form=form, rows=rows, user=current_user(), student_name=session.get("student_name"))
+
+# --------------------------------------------------------------------
+# Exams & proctoring
+# --------------------------------------------------------------------
+
+def _normalize_exam_questions(payload):
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("Add at least one question.")
+    cleaned = []
+    seen = set()
+    for idx, raw in enumerate(payload):
+        if not isinstance(raw, dict):
+            raise ValueError("Question payload must be objects.")
+        q_type = (raw.get("type") or "").strip().lower()
+        if q_type not in ("mcq", "text", "code"):
+            raise ValueError(f"Unsupported question type '{q_type}'.")
+        prompt = (raw.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError("Every question needs a prompt.")
+        q_id = (raw.get("id") or "").strip() or f"q{idx+1}"
+        if q_id in seen:
+            q_id = f"{q_id}_{idx+1}"
+        seen.add(q_id)
+        normalized = {"id": q_id, "type": q_type, "prompt": prompt}
+
+        if q_type == "mcq":
+            options_raw = raw.get("options") or []
+            if isinstance(options_raw, str):
+                options = [line.strip() for line in options_raw.splitlines() if line.strip()]
+            else:
+                options = [(line or "").strip() for line in options_raw if (line or "").strip()]
+            if len(options) < 2:
+                raise ValueError("Multiple-choice questions need at least two options.")
+            normalized["options"] = options
+            normalized["shuffle"] = bool(raw.get("shuffle"))
+        elif q_type == "text":
+            normalized["placeholder"] = (raw.get("placeholder") or "").strip()
+            lines_raw = raw.get("lines") or raw.get("rows")
+            try:
+                line_count = int(lines_raw) if lines_raw not in (None, "") else 4
+            except Exception:
+                line_count = 4
+            normalized["lines"] = max(1, min(line_count, 12))
+        else:  # code
+            statement = (raw.get("statement") or "").strip()
+            if not statement:
+                raise ValueError("Code questions need a statement/description.")
+            normalized["statement"] = statement
+            normalized["starter"] = raw.get("starter") or ""
+            normalized["language"] = "python"
+            samples_clean = []
+            samples_raw = raw.get("samples") or []
+            if isinstance(samples_raw, list):
+                for s_idx, sample in enumerate(samples_raw):
+                    if not isinstance(sample, dict):
+                        continue
+                    name = (sample.get("name") or f"Sample {s_idx+1}").strip()
+                    samples_clean.append({
+                        "name": name or f"Sample {s_idx+1}",
+                        "input": sample.get("input") or "",
+                        "output": sample.get("output") or "",
+                    })
+            normalized["samples"] = samples_clean
+
+        cleaned.append(normalized)
+    return cleaned
+
+def _exam_share_url(exam):
+    return request.url_root.rstrip("/") + url_for("exam_take", code=exam.code)
+
+@app.route("/exams")
+@require_user()
+def exams_list():
+    exams = Exam.query.order_by(Exam.created_at.desc()).all()
+    stats = {}
+    for ex in exams:
+        total = len(ex.submissions)
+        submitted = sum(1 for sub in ex.submissions if sub.status == "submitted")
+        stats[ex.id] = {"total": total, "submitted": submitted}
+    return render_template(
+        "exams_list.html",
+        exams=exams,
+        stats=stats,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/exams/new", methods=["GET", "POST"])
+@require_user()
+def exams_new():
+    error = None
+    form_data = {
+        "title": request.form.get("title") or "",
+        "description": request.form.get("description") or "",
+        "instructions": request.form.get("instructions") or "",
+        "duration_minutes": request.form.get("duration_minutes") or "",
+        "starts_at": request.form.get("starts_at") or "",
+        "ends_at": request.form.get("ends_at") or "",
+        "questions_payload": request.form.get("questions_payload") or "[]",
+    }
+
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        description = form_data["description"].strip() or None
+        instructions = form_data["instructions"].strip() or None
+        duration = None
+        if form_data["duration_minutes"]:
+            try:
+                duration = max(5, int(form_data["duration_minutes"]))
+            except Exception:
+                error = "Duration must be a number (minutes)."
+        starts_at = parse_dt_local(form_data["starts_at"])
+        ends_at = parse_dt_local(form_data["ends_at"])
+        raw_questions = form_data["questions_payload"]
+        questions = []
+        if not error:
+            try:
+                payload = json.loads(raw_questions or "[]")
+                questions = _normalize_exam_questions(payload)
+            except ValueError as e:
+                error = str(e)
+            except Exception:
+                error = "Unable to parse the questions payload."
+        if not title and not error:
+            error = "Title is required."
+        if not error:
+            code = gen_code(8)
+            while Exam.query.filter_by(code=code).first() is not None:
+                code = gen_code(8)
+            exam = Exam(
+                code=code,
+                title=title,
+                description=description,
+                instructions=instructions,
+                duration_minutes=duration,
+                starts_at=starts_at,
+                ends_at=ends_at,
+                questions_json=questions,
+                creator_user_id=current_user().id if current_user() else None,
+            )
+            db.session.add(exam)
+            db.session.commit()
+            return redirect(url_for("exams_show", code=exam.code))
+
+    return render_template(
+        "exams_new.html",
+        error=error,
+        form_data=form_data,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/exams/<code>")
+@require_user()
+def exams_show(code):
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    submissions = ExamSubmission.query.filter_by(exam_id=exam.id).order_by(ExamSubmission.started_at.asc()).all()
+    questions = exam.questions_json if isinstance(exam.questions_json, list) else []
+    return render_template(
+        "exams_show.html",
+        exam=exam,
+        submissions=submissions,
+        share_url=_exam_share_url(exam),
+        questions=questions,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/exams/<code>/open")
+@require_user()
+def exams_open(code):
+    if not verify_csrf(): abort(400, "bad csrf")
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    exam.is_open = True
+    db.session.commit()
+    return redirect(url_for("exams_show", code=exam.code))
+
+@app.post("/exams/<code>/close")
+@require_user()
+def exams_close(code):
+    if not verify_csrf(): abort(400, "bad csrf")
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    exam.is_open = False
+    db.session.commit()
+    return redirect(url_for("exams_show", code=exam.code))
+
+@app.route("/exam/<code>", methods=["GET", "POST"])
+def exam_take(code):
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    user = current_user()
+    student = current_student()
+    preview = bool(user and not student)
+    if not (student or preview):
+        return redirect(url_for("login", next=url_for("exam_take", code=code)))
+
+    questions = exam.questions_json if isinstance(exam.questions_json, list) else []
+    submission = None
+    previous_answers = {}
+    if student:
+        submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
+        if not submission:
+            submission = ExamSubmission(
+                exam_id=exam.id,
+                student_id=student.id,
+                student_name=student.name,
+                answers_json={},
+                run_logs=[],
+                ip_address=(request.remote_addr or "")[:64],
+            )
+            db.session.add(submission)
+            db.session.commit()
+        previous_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+        submission.last_activity_at = datetime.utcnow()
+        db.session.commit()
+    can_submit = bool(student and exam.is_available and (not submission or submission.status != "submitted"))
+
+    if request.method == "POST":
+        if preview:
+            abort(403)
+        if not verify_csrf(): abort(400, "bad csrf")
+        if not can_submit:
+            return render_template(
+                "exams_take.html",
+                exam=exam,
+                questions=questions,
+                can_submit=False,
+                preview=preview,
+                already_submitted=True,
+                previous_answers=previous_answers,
+                user=user,
+                student_name=session.get("student_name"),
+            ), 403
+        answers = {}
+        for q in questions:
+            qid = q.get("id")
+            if not qid:
+                continue
+            field = f"answer_{qid}"
+            val = request.form.get(field, "")
+            answers[qid] = val
+        submission.answers_json = answers
+        submission.status = "submitted"
+        submission.submitted_at = datetime.utcnow()
+        submission.last_activity_at = submission.submitted_at
+        db.session.commit()
+        return render_template(
+            "exams_submitted.html",
+            exam=exam,
+            submission=submission,
+            user=user,
+            student_name=session.get("student_name"),
+        )
+
+    return render_template(
+        "exams_take.html",
+        exam=exam,
+        questions=questions,
+        can_submit=can_submit,
+        preview=preview,
+        already_submitted=(submission and submission.status == "submitted"),
+        previous_answers=previous_answers,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/api/exams/<code>/log-run", methods=["POST"])
+def exams_log_run(code):
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    student = current_student()
+    if not student:
+        abort(401)
+    submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
+    if not submission:
+        submission = ExamSubmission(
+            exam_id=exam.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+            ip_address=(request.remote_addr or "")[:64],
+        )
+        db.session.add(submission)
+        db.session.commit()
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    question_id = data.get("question_id")
+    samples = data.get("samples") or []
+    summary = {
+        "question_id": question_id,
+        "samples": samples,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
+    logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+    logs.append(summary)
+    submission.run_logs = logs
+    submission.last_activity_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "log_count": len(logs)})
 
 # --------------------------------------------------------------------
 # Lecture interaction dashboard

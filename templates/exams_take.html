@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin:0;">{{ exam.title }}</h3>
+  {% if exam.description %}<p class="muted" style="margin:6px 0;">{{ exam.description }}</p>{% endif %}
+  <p class="muted" style="margin:6px 0;">
+    {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }}, {% else %}Open now, {% endif %}
+    {% if exam.ends_at %} closes {{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %} no end date{% endif %}.
+    {% if exam.duration_minutes %} Time limit: {{ exam.duration_minutes }} minutes.{% endif %}
+  </p>
+  {% if exam.instructions %}
+    <div style="margin-top:12px; padding:12px; border:1px dashed #334155; border-radius:10px;">
+      <strong>Instructions</strong>
+      <p class="muted" style="margin:6px 0 0 0;">{{ exam.instructions }}</p>
+    </div>
+  {% endif %}
+</div>
+<div class="sp"></div>
+<div class="card" data-exam-take data-run-log-url="{{ url_for('exams_log_run', code=exam.code) }}" data-csrf="{{ csrf_token() }}">
+  {% if preview %}
+    <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
+  {% elif already_submitted %}
+    <p class="muted">You already submitted this exam. Your responses are shown below.</p>
+  {% elif not can_submit %}
+    <p class="text-danger">This exam is not currently accepting submissions.</p>
+  {% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    {% for q in questions %}
+      <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
+        <div class="muted" style="font-size:0.9rem;">Question {{ loop.index }} • {{ q.type|capitalize }}</div>
+        <p class="q" style="margin:8px 0 12px 0;">{{ q.prompt }}</p>
+        {% if q.type == "mcq" %}
+          {% set prev = previous_answers.get(q.id) %}
+          {% set prev_value = '' if prev is none else prev ~ '' %}
+          {% for option in q.options %}
+            {% set opt_value = loop.index0 ~ '' %}
+            <label style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+              <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if prev_value == opt_value %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+              <span>{{ option }}</span>
+            </label>
+          {% endfor %}
+        {% elif q.type == "text" %}
+          <textarea name="answer_{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
+        {% elif q.type == "code" %}
+          {% if q.statement %}
+            <div style="padding:10px; border-radius:8px; background:#0b1220; margin-bottom:10px;">
+              <strong>Problem statement</strong>
+              <p class="muted" style="margin:6px 0 0 0;">{{ q.statement }}</p>
+            </div>
+          {% endif %}
+          {% set prior_code = previous_answers.get(q.id) %}
+          {% set starter = prior_code if prior_code else (q.starter or "") %}
+          <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+          {% if q.samples %}
+            <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
+              <div class="row" style="justify-content:space-between; align-items:center;">
+                <strong>Sample tests</strong>
+                <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-samples='{{ q.samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
+              </div>
+              <p class="muted" style="margin:6px 0;">Runs execute in-browser using Pyodide. Outputs appear below.</p>
+              <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    {% endfor %}
+    {% if can_submit %}
+      <button class="btn btn-primary" type="submit">Submit exam</button>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+{% endblock %}

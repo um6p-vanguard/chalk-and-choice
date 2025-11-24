@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">{{ exam.title }}</h3>
+      {% if exam.description %}<p class="muted" style="margin:6px 0;">{{ exam.description }}</p>{% endif %}
+      <p class="muted" style="margin:6px 0;">Code: <code>{{ exam.code }}</code></p>
+      <p class="muted" style="margin:6px 0;">
+        {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }}{% else %}Opens immediately{% endif %} •
+        {% if exam.ends_at %}Closes {{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %}No end date{% endif %} •
+        {{ questions|length }} questions
+      </p>
+      {% if exam.instructions %}
+        <div style="margin-top:12px; padding:12px; border:1px dashed #334155; border-radius:10px;">
+          <strong>Student instructions</strong>
+          <p class="muted" style="margin:6px 0 0 0;">{{ exam.instructions }}</p>
+        </div>
+      {% endif %}
+      <div style="margin-top:12px;">
+        <label class="muted">Share link</label>
+        <div class="row" style="gap:10px;">
+          <input type="text" readonly value="{{ share_url }}" style="flex:1;">
+          <a class="btn" href="{{ share_url }}" target="_blank" rel="noopener">Open exam</a>
+        </div>
+      </div>
+    </div>
+    <div>
+      {% if exam.is_open %}
+        <form method="post" action="{{ url_for('exams_close', code=exam.code) }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-danger" type="submit">Close exam</button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('exams_open', code=exam.code) }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-primary" type="submit">Open exam</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Submissions &amp; proctoring log</h3>
+    <a class="btn" href="{{ url_for('exams_list') }}">Back to list</a>
+  </div>
+  {% if submissions %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>Status</th>
+          <th>Started</th>
+          <th>Last activity</th>
+          <th>Code runs</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sub in submissions %}
+        <tr>
+          <td>{{ sub.student_name or "(anonymous)" }}</td>
+          <td>
+            {% if sub.status == "submitted" %}
+              <span style="color:#4ade80;">Submitted</span>
+            {% else %}
+              <span class="muted">In progress</span>
+            {% endif %}
+          </td>
+          <td>{{ sub.started_at.strftime("%b %d %H:%M:%S") if sub.started_at else "—" }}</td>
+          <td>{{ sub.last_activity_at.strftime("%b %d %H:%M:%S") if sub.last_activity_at else "—" }}</td>
+          <td>
+            {% set logs = sub.run_logs if sub.run_logs else [] %}
+            {% if logs %}
+              <details>
+                <summary>{{ logs|length }} runs</summary>
+                <ul style="margin:6px 0 0 14px; padding:0; list-style:square;">
+                  {% for log in logs %}
+                  <li>
+                    {{ log.ts }} • Question {{ log.question_id }}
+                    {% if log.samples %}
+                      <ul style="margin:4px 0 0 14px; list-style:circle;">
+                        {% for sample in log.samples %}
+                          <li>{{ sample.name }} — {{ sample.status }}</li>
+                        {% endfor %}
+                      </ul>
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% else %}
+              <span class="muted">No runs</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:12px;">No submissions yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

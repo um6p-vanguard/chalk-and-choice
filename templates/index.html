@@ -53,10 +53,93 @@
 
   </div>
 </div>
+<div class="sp"></div>
+<div class="card" style="max-width:820px;">
+  <h3 style="margin-top:0;">Assigned Exams</h3>
+  {% if available_exams %}
+    <p class="muted" style="margin-top:-4px;">Exams that are currently open for you.</p>
+    <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+      {% for exam in available_exams %}
+      <div style="border:1px solid #1f2937; border-radius:10px; padding:12px; background:#020617;">
+        <div class="row" style="justify-content:space-between; align-items:flex-start;">
+          <div>
+            <h4 style="margin:0 0 4px 0;">{{ exam.title }}</h4>
+            {% if exam.description %}<p class="muted" style="margin:0 0 8px 0;">{{ exam.description }}</p>{% endif %}
+            <p class="muted" style="margin:0;">
+              {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }},{% else %}Open now,{% endif %}
+              {% if exam.ends_at %} closes {{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %} no end date{% endif %}
+            </p>
+          </div>
+          <div>
+            <a class="btn btn-primary" href="{{ url_for('exam_take', code=exam.code) }}">Enter exam</a>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="margin-top:-4px;">You don't have any active exams at the moment.</p>
+  {% endif %}
+</div>
+{% elif user %}
+<div class="card">
+  <h3>Instructor dashboard</h3>
+  <p class="muted">Use the navigation bar to manage polls, forms, spotlight interventions, and proctored exams.</p>
+</div>
+<div class="sp"></div>
+<div class="card">
+  <h3 style="margin-top:0;">Exam overview</h3>
+  {% if exams %}
+    <p class="muted" style="margin-top:-4px;">Recent exams with their current state.</p>
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th>Status</th>
+          <th>Window</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for exam in exams[:4] %}
+        <tr>
+          <td>
+            <strong>{{ exam.title }}</strong><br>
+            <span class="muted">Code: {{ exam.code }}</span>
+          </td>
+          <td>
+            {% if exam.is_available %}
+              <span style="color:#4ade80;">Open</span>
+            {% elif not exam.is_open %}
+              <span class="text-danger">Closed</span>
+            {% elif exam.starts_at and now_utc and exam.starts_at > now_utc %}
+              <span class="muted">Scheduled</span>
+            {% else %}
+              <span class="muted">Inactive</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if exam.starts_at %}{{ exam.starts_at.strftime("%b %d %H:%M") }}{% else %}Now{% endif %} —
+            {% if exam.ends_at %}{{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %}No end{% endif %}
+          </td>
+          <td>
+            <a class="btn" href="{{ url_for('exams_show', code=exam.code) }}">Manage</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="sp"></div>
+    <a class="btn btn-primary" href="{{ url_for('exams_new') }}">Create new exam</a>
+  {% else %}
+    <p class="muted" style="margin-top:-4px;">No proctored exams yet. Create one to get started.</p>
+    <a class="btn btn-primary" href="{{ url_for('exams_new') }}">Create exam</a>
+  {% endif %}
+</div>
 {% else %}
 <div class="card">
   <h3>Welcome</h3>
-  <p class="muted">Log in to see the exam review forms.</p>
+  <p class="muted">Log in to see the exam review forms and active proctored exams.</p>
   <a class="btn" href="{{ url_for('login') }}">Login</a>
 </div>
 {% endif %}

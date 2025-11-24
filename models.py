@@ -105,6 +105,55 @@ class FormResponse(db.Model):
     form = db.relationship('Form', backref=db.backref('responses', cascade="all,delete-orphan"))
     student = db.relationship('Student')
 
+class Exam(db.Model):
+    __tablename__ = "exams"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    instructions = db.Column(db.Text, nullable=True)
+    questions_json = db.Column(JSONText, nullable=False)
+    settings_json = db.Column(JSONText, nullable=True)
+    starts_at = db.Column(db.DateTime, nullable=True)
+    ends_at = db.Column(db.DateTime, nullable=True)
+    duration_minutes = db.Column(db.Integer, nullable=True)
+    is_open = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
+    creator = db.relationship('User')
+
+    @property
+    def is_available(self):
+        now = datetime.utcnow()
+        if not self.is_open:
+            return False
+        if self.starts_at and now < self.starts_at:
+            return False
+        if self.ends_at and now > self.ends_at:
+            return False
+        return True
+
+class ExamSubmission(db.Model):
+    __tablename__ = "exam_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    exam_id = db.Column(db.Integer, db.ForeignKey('exams.id', ondelete="CASCADE"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), index=True, nullable=True)
+    student_name = db.Column(db.String(120), nullable=True)
+    answers_json = db.Column(JSONText, nullable=False, default=dict)
+    run_logs = db.Column(JSONText, nullable=False, default=list)
+    status = db.Column(db.String(32), nullable=False, default="in_progress")  # in_progress|submitted
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    last_activity_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    ip_address = db.Column(db.String(64), nullable=True)
+
+    exam = db.relationship('Exam', backref=db.backref('submissions', cascade="all,delete-orphan"))
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        UniqueConstraint('exam_id', 'student_id', name='uq_exam_submission_student'),
+    )
+
 class LectureSignal(db.Model):
     __tablename__ = "lecture_signals"
     id = db.Column(db.Integer, primary_key=True)

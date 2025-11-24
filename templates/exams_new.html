@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" data-exam-builder>
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Create exam</h3>
+      <p class="muted" style="margin-top:4px;">Add MCQ, text, and code prompts. Students can run Python samples before submitting.</p>
+    </div>
+    <a class="btn" href="{{ url_for('exams_list') }}">Back</a>
+  </div>
+  {% if error %}<p class="text-danger" style="margin-top:10px;">{{ error }}</p>{% endif %}
+  <form method="post" autocomplete="off" id="exam-builder-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Title</label>
+    <input type="text" name="title" required placeholder="e.g., Midterm 1" value="{{ form_data.title }}">
+
+    <label>Description (optional)</label>
+    <textarea name="description" rows="3" placeholder="Short blurb shown on the dashboard.">{{ form_data.description }}</textarea>
+
+    <label>Instructions for students</label>
+    <textarea name="instructions" rows="4" placeholder="These appear before the questions.">{{ form_data.instructions }}</textarea>
+
+    <div class="row" style="gap:20px;">
+      <div style="flex:1;">
+        <label>Starts at (UTC)</label>
+        <input type="datetime-local" name="starts_at" value="{{ form_data.starts_at }}">
+      </div>
+      <div style="flex:1;">
+        <label>Ends at (UTC)</label>
+        <input type="datetime-local" name="ends_at" value="{{ form_data.ends_at }}">
+      </div>
+    </div>
+
+    <label>Duration (minutes, optional)</label>
+    <input type="number" name="duration_minutes" min="5" step="5" placeholder="e.g., 90" value="{{ form_data.duration_minutes }}">
+
+    <div class="sp"></div>
+    <h4>Questions</h4>
+    <p class="muted" style="margin-top:-4px;">Add at least one question. MCQ options require one per line. Code prompts get sample I/O runs.</p>
+
+    <div data-question-list style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
+
+    <div class="row" style="gap:12px; margin-top:8px;">
+      <select data-question-type style="padding:10px; border-radius:8px; background:#0b1220; color:#e5e7eb; border:1px solid #334155;">
+        <option value="mcq">Multiple choice</option>
+        <option value="text">Text answer</option>
+        <option value="code">Python code</option>
+      </select>
+      <button type="button" class="btn" data-add-question>Add question</button>
+    </div>
+
+    <input type="hidden" name="questions_payload" id="questions_payload" value="{{ form_data.questions_payload|e }}">
+
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Save exam</button>
+    <a class="btn" href="{{ url_for('exams_list') }}" style="margin-left:8px;">Cancel</a>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+{% endblock %}
