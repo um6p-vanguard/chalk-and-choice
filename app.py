@@ -918,18 +918,45 @@ def _normalize_exam_questions(payload):
             normalized["statement"] = statement
             normalized["starter"] = raw.get("starter") or ""
             normalized["language"] = "python"
+            mode = (raw.get("mode") or "script").strip().lower()
+            if mode not in ("script", "function"):
+                mode = "script"
+            normalized["mode"] = mode
             samples_clean = []
             samples_raw = raw.get("samples") or []
-            if isinstance(samples_raw, list):
-                for s_idx, sample in enumerate(samples_raw):
-                    if not isinstance(sample, dict):
-                        continue
-                    name = (sample.get("name") or f"Sample {s_idx+1}").strip()
-                    samples_clean.append({
-                        "name": name or f"Sample {s_idx+1}",
-                        "input": sample.get("input") or "",
-                        "output": sample.get("output") or "",
-                    })
+            if mode == "function":
+                signature = (raw.get("function_signature") or "").strip()
+                if not signature.startswith("def"):
+                    raise ValueError("Function questions need a signature like 'def foo(x):'.")
+                normalized["function_signature"] = signature
+                if isinstance(samples_raw, list):
+                    for s_idx, sample in enumerate(samples_raw):
+                        if not isinstance(sample, dict):
+                            continue
+                        call_expr = (sample.get("call") or sample.get("input") or "").strip()
+                        if not call_expr:
+                            continue
+                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
+                        expected = (sample.get("expected") or sample.get("output") or "").strip()
+                        samples_clean.append({
+                            "name": name,
+                            "call": call_expr,
+                            "expected": expected,
+                            "input": call_expr,
+                        })
+                if not samples_clean:
+                    raise ValueError("Function code questions need at least one sample call.")
+            else:
+                if isinstance(samples_raw, list):
+                    for s_idx, sample in enumerate(samples_raw):
+                        if not isinstance(sample, dict):
+                            continue
+                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
+                        samples_clean.append({
+                            "name": name,
+                            "input": sample.get("input") or "",
+                            "output": sample.get("output") or "",
+                        })
             normalized["samples"] = samples_clean
 
         cleaned.append(normalized)

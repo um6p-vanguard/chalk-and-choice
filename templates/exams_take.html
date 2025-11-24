@@ -49,6 +49,12 @@
               <p class="muted" style="margin:6px 0 0 0;">{{ q.statement }}</p>
             </div>
           {% endif %}
+          {% if q.mode == "function" and q.function_signature %}
+            <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px;">
+              <strong>Implement:</strong>
+              <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px;">{{ q.function_signature }}</pre>
+            </div>
+          {% endif %}
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
           <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
@@ -56,9 +62,9 @@
             <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
               <div class="row" style="justify-content:space-between; align-items:center;">
                 <strong>Sample tests</strong>
-                <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-samples='{{ q.samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
+                <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ q.samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
               </div>
-              <p class="muted" style="margin:6px 0;">Test your code on the sample cases.</p>
+              <p class="muted" style="margin:6px 0;">Runs execute in-browser using Pyodide. Outputs appear below.</p>
               <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
             </div>
           {% endif %}

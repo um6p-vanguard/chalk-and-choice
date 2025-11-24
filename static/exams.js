@@ -56,9 +56,15 @@
         syncHidden();
       }
       if (target.dataset.action === "add-sample") {
-        const container = target.closest("[data-question-id]")?.querySelector("[data-sample-list]");
+        const card = target.closest("[data-question-id]");
+        if (!card) return;
+        const modeField = card.querySelector('[data-field="code-mode"]');
+        const mode = modeField ? (modeField.value || "script") : "script";
+        const selector = mode === "function" ? '[data-sample-list="function"]' : '[data-sample-list="script"]';
+        const container = card.querySelector(selector);
         if (container) {
-          container.appendChild(buildSampleRow());
+          const row = mode === "function" ? buildFunctionSampleRow() : buildScriptSampleRow();
+          container.appendChild(row);
           syncHidden();
         }
       }
@@ -162,6 +168,38 @@
       starter.value = data.starter || "";
       card.appendChild(starter);
 
+      const modeField = document.createElement("input");
+      modeField.type = "hidden";
+      modeField.dataset.field = "code-mode";
+      modeField.value = data.mode || "script";
+      card.appendChild(modeField);
+
+      const modePicker = document.createElement("div");
+      modePicker.className = "row";
+      modePicker.style.gap = "8px";
+      modePicker.style.alignItems = "center";
+      modePicker.style.marginTop = "8px";
+      modePicker.innerHTML = `
+        <span class="muted">Mode:</span>
+        <button type="button" class="btn" data-mode-choice="script">Script (stdin/stdout)</button>
+        <button type="button" class="btn" data-mode-choice="function">Function (call/return)</button>
+      `;
+      card.appendChild(modePicker);
+
+      const signatureWrap = document.createElement("div");
+      signatureWrap.dataset.codeMode = "function";
+      signatureWrap.style.marginTop = "10px";
+      const signatureLabel = document.createElement("label");
+      signatureLabel.textContent = "Function signature";
+      signatureWrap.appendChild(signatureLabel);
+      const signatureInput = document.createElement("input");
+      signatureInput.type = "text";
+      signatureInput.dataset.field = "function-signature";
+      signatureInput.placeholder = "def square(n):";
+      signatureInput.value = data.function_signature || "";
+      signatureWrap.appendChild(signatureInput);
+      card.appendChild(signatureWrap);
+
       const sampleHeader = document.createElement("div");
       sampleHeader.className = "row";
       sampleHeader.style.justifyContent = "space-between";
@@ -171,24 +209,64 @@
         <button type="button" class="btn" data-action="add-sample">Add sample</button>`;
       card.appendChild(sampleHeader);
 
-      const sampleList = document.createElement("div");
-      sampleList.dataset.sampleList = "1";
-      sampleList.setAttribute("data-sample-list", "1");
-      sampleList.style.display = "flex";
-      sampleList.style.flexDirection = "column";
-      sampleList.style.gap = "10px";
-      card.appendChild(sampleList);
+      const sampleHelper = document.createElement("p");
+      sampleHelper.className = "muted";
+      sampleHelper.style.marginTop = "-4px";
+      sampleHelper.textContent = "Provide input/output pairs for script mode, or function calls and expected returns for function mode.";
+      card.appendChild(sampleHelper);
+
+      const scriptSampleList = document.createElement("div");
+      scriptSampleList.dataset.sampleList = "script";
+      scriptSampleList.style.display = "flex";
+      scriptSampleList.style.flexDirection = "column";
+      scriptSampleList.style.gap = "10px";
+      card.appendChild(scriptSampleList);
+
+      const functionSampleList = document.createElement("div");
+      functionSampleList.dataset.sampleList = "function";
+      functionSampleList.style.display = "flex";
+      functionSampleList.style.flexDirection = "column";
+      functionSampleList.style.gap = "10px";
+      card.appendChild(functionSampleList);
 
       const samples = Array.isArray(data.samples) && data.samples.length ? data.samples : [{}];
       samples.forEach((sample) => {
-        sampleList.appendChild(buildSampleRow(sample));
+        if (sample.call) {
+          functionSampleList.appendChild(buildFunctionSampleRow(sample));
+        } else {
+          scriptSampleList.appendChild(buildScriptSampleRow(sample));
+        }
       });
+      if (!scriptSampleList.children.length) {
+        scriptSampleList.appendChild(buildScriptSampleRow());
+      }
+      if (!functionSampleList.children.length) {
+        functionSampleList.appendChild(buildFunctionSampleRow());
+      }
+
+      const updateModeUI = () => {
+        const mode = modeField.value || "script";
+        scriptSampleList.style.display = mode === "script" ? "flex" : "none";
+        functionSampleList.style.display = mode === "function" ? "flex" : "none";
+        signatureWrap.style.display = mode === "function" ? "block" : "none";
+        modePicker.querySelectorAll("button[data-mode-choice]").forEach((btn) => {
+          const active = btn.dataset.modeChoice === mode;
+          btn.classList.toggle("btn-primary", active);
+        });
+      };
+      modePicker.querySelectorAll("button[data-mode-choice]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          modeField.value = btn.dataset.modeChoice;
+          updateModeUI();
+        });
+      });
+      updateModeUI();
     }
 
     return card;
   }
 
-  function buildSampleRow(sample = {}) {
+  function buildScriptSampleRow(sample = {}) {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
     wrapper.style.border = "1px dashed #334155";
@@ -236,6 +314,56 @@
     return wrapper;
   }
 
+  function buildFunctionSampleRow(sample = {}) {
+    const wrapper = document.createElement("div");
+    wrapper.dataset.sampleRow = "1";
+    wrapper.style.border = "1px dashed #334155";
+    wrapper.style.borderRadius = "8px";
+    wrapper.style.padding = "10px";
+
+    const nameLabel = document.createElement("label");
+    nameLabel.textContent = "Name";
+    wrapper.appendChild(nameLabel);
+
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.dataset.field = "sample-name";
+    nameInput.value = sample.name || "";
+    wrapper.appendChild(nameInput);
+
+    const callLabel = document.createElement("label");
+    callLabel.textContent = "Function call";
+    wrapper.appendChild(callLabel);
+
+    const callInput = document.createElement("input");
+    callInput.type = "text";
+    callInput.dataset.field = "sample-call";
+    callInput.placeholder = "square(5)";
+    callInput.value = sample.call || sample.input || "";
+    wrapper.appendChild(callInput);
+
+    const expectedLabel = document.createElement("label");
+    expectedLabel.textContent = "Expected return";
+    wrapper.appendChild(expectedLabel);
+
+    const expectedInput = document.createElement("input");
+    expectedInput.type = "text";
+    expectedInput.dataset.field = "sample-expected";
+    expectedInput.placeholder = "25";
+    expectedInput.value = sample.expected || sample.output || "";
+    wrapper.appendChild(expectedInput);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "btn";
+    removeBtn.dataset.action = "remove-sample";
+    removeBtn.style.marginTop = "6px";
+    removeBtn.textContent = "Remove sample";
+    wrapper.appendChild(removeBtn);
+
+    return wrapper;
+  }
+
   function serializeQuestions(list) {
     if (!list) return [];
     return Array.from(list.querySelectorAll("[data-question-id]")).map((card) => {
@@ -250,13 +378,26 @@
         payload.placeholder = getFieldValue(card, "placeholder");
         payload.lines = getFieldValue(card, "lines") || 4;
       } else if (type === "code") {
+        const mode = getFieldValue(card, "code-mode") || "script";
+        payload.mode = mode;
         payload.statement = getFieldValue(card, "statement");
         payload.starter = getFieldValue(card, "starter");
-        payload.samples = Array.from(card.querySelectorAll("[data-sample-row]")).map((row) => ({
-          name: getFieldValue(row, "sample-name"),
-          input: getFieldValue(row, "sample-input"),
-          output: getFieldValue(row, "sample-output"),
-        }));
+        if (mode === "function") {
+          payload.function_signature = getFieldValue(card, "function-signature");
+          const rows = card.querySelectorAll('[data-sample-list="function"] [data-sample-row]');
+          payload.samples = Array.from(rows).map((row) => ({
+            name: getFieldValue(row, "sample-name"),
+            call: getFieldValue(row, "sample-call"),
+            expected: getFieldValue(row, "sample-expected"),
+          }));
+        } else {
+          const rows = card.querySelectorAll('[data-sample-list="script"] [data-sample-row]');
+          payload.samples = Array.from(rows).map((row) => ({
+            name: getFieldValue(row, "sample-name"),
+            input: getFieldValue(row, "sample-input"),
+            output: getFieldValue(row, "sample-output"),
+          }));
+        }
       }
       return payload;
     });
@@ -394,50 +535,94 @@
           const pyodide = await ensurePyodide();
           pyodide.globals.set("runner_code", codeArea.value);
           pyodide.globals.set("runner_samples", samples);
+          pyodide.globals.set("runner_mode", btn.getAttribute("data-mode") || "script");
           const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins
 code = str(runner_code)
 samples = runner_samples.to_py()
+mode = str(runner_mode)
 results = []
+namespace = {}
+setup_error = None
+if mode == "function":
+    try:
+        exec(code, namespace, namespace)
+    except Exception:
+        setup_error = traceback.format_exc()
 for sample in samples:
     name = sample.get("name") or "Sample"
-    stdin = io.StringIO(sample.get("input") or "")
-    expected_output = sample.get("output") or ""
-    input_payload = sample.get("input") or ""
-    stdout = io.StringIO()
-    original_stdout = sys.stdout
-    original_stdin = sys.stdin
-    original_input = builtins.input
-    sys.stdout = stdout
-    sys.stdin = stdin
-    builtins.input = lambda prompt=None: stdin.readline().rstrip("\\n")
-    status = "passed"
-    error_text = ""
-    try:
-        exec(code, {"__name__": "__main__"})
-    except Exception as exc:
-        status = "error"
-        error_text = traceback.format_exc()
-    finally:
-        sys.stdout = original_stdout
-        sys.stdin = original_stdin
-        builtins.input = original_input
-    output_value = stdout.getvalue()
-    if status == "passed":
-        if output_value.strip() != expected_output.strip():
+    if mode == "function":
+        call_expr = (sample.get("call") or sample.get("input") or "").strip()
+        expected_output = (sample.get("expected") or sample.get("output") or "").strip()
+        status = "passed"
+        error_text = ""
+        output_value = ""
+        if not call_expr:
+            status = "error"
+            error_text = "Missing call expression."
+        elif setup_error:
+            status = "error"
+            error_text = setup_error
+        else:
+            stdout = io.StringIO()
+            original_stdout = sys.stdout
+            sys.stdout = stdout
+            try:
+                result = eval(call_expr, namespace, namespace)
+                output_value = repr(result)
+            except Exception:
+                status = "error"
+                error_text = traceback.format_exc()
+            finally:
+                sys.stdout = original_stdout
+        if status == "passed" and output_value.strip() != expected_output.strip():
             status = "mismatch"
-    results.append({
-        "name": name,
-        "status": status,
-        "output": output_value,
-        "expected": expected_output,
-        "input": input_payload,
-        "error": error_text,
-    })
+        results.append({
+            "name": name,
+            "status": status,
+            "input": call_expr,
+            "output": output_value,
+            "expected": expected_output,
+            "error": error_text,
+        })
+    else:
+        sample_input = sample.get("input") or ""
+        expected_output = sample.get("output") or ""
+        stdin = io.StringIO(sample_input)
+        stdout = io.StringIO()
+        original_stdout = sys.stdout
+        original_stdin = sys.stdin
+        original_input = builtins.input
+        sys.stdout = stdout
+        sys.stdin = stdin
+        builtins.input = lambda prompt=None: stdin.readline().rstrip("\\n")
+        status = "passed"
+        error_text = ""
+        try:
+            exec(code, {"__name__": "__main__"})
+        except Exception:
+            status = "error"
+            error_text = traceback.format_exc()
+        finally:
+            sys.stdout = original_stdout
+            sys.stdin = original_stdin
+            builtins.input = original_input
+        output_value = stdout.getvalue()
+        if status == "passed" and output_value.strip() != expected_output.strip():
+            status = "mismatch"
+        results.append({
+            "name": name,
+            "status": status,
+            "input": sample_input,
+            "output": output_value,
+            "expected": expected_output,
+            "error": error_text,
+        })
 json.dumps(results)
           `);
           pyodide.globals.delete("runner_code");
           pyodide.globals.delete("runner_samples");
+          pyodide.globals.delete("runner_mode");
           const parsed = JSON.parse(output);
           renderResults(resultsContainer, parsed);
           postLog(questionId, parsed);
