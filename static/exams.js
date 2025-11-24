@@ -363,6 +363,7 @@ results = []
 for sample in samples:
     name = sample.get("name") or "Sample"
     stdin = io.StringIO(sample.get("input") or "")
+    expected_output = sample.get("output") or ""
     stdout = io.StringIO()
     original_stdout = sys.stdout
     original_stdin = sys.stdin
@@ -381,11 +382,15 @@ for sample in samples:
         sys.stdout = original_stdout
         sys.stdin = original_stdin
         builtins.input = original_input
+    output_value = stdout.getvalue()
+    if status == "passed":
+        if output_value.strip() != expected_output.strip():
+            status = "mismatch"
     results.append({
         "name": name,
         "status": status,
-        "output": stdout.getvalue(),
-        "expected": sample.get("output") or "",
+        "output": output_value,
+        "expected": expected_output,
         "error": error_text,
     })
 json.dumps(results)
