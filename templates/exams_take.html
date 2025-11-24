@@ -58,7 +58,7 @@
                 <strong>Sample tests</strong>
                 <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-samples='{{ q.samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
               </div>
-              <p class="muted" style="margin:6px 0;">Runs execute in-browser using Pyodide. Outputs appear below.</p>
+              <p class="muted" style="margin:6px 0;">Test your code on the sample cases.</p>
               <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
             </div>
           {% endif %}

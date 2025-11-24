@@ -40,12 +40,13 @@
 
     <div data-question-list style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
 
-    <div class="row" style="gap:12px; margin-top:8px;">
-      <select data-question-type style="padding:10px; border-radius:8px; background:#0b1220; color:#e5e7eb; border:1px solid #334155;">
-        <option value="mcq">Multiple choice</option>
-        <option value="text">Text answer</option>
-        <option value="code">Python code</option>
-      </select>
+    <div class="row" style="gap:12px; margin-top:8px; flex-wrap:wrap; align-items:flex-start;">
+      <input type="hidden" name="question_type" data-question-type value="{{ form_data.question_type or 'mcq' }}">
+      <div data-question-type-picker style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'mcq' %}btn-primary{% endif %}" data-type-choice="mcq">Multiple choice</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'text' %}btn-primary{% endif %}" data-type-choice="text">Text answer</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'code' %}btn-primary{% endif %}" data-type-choice="code">Python code</button>
+      </div>
       <button type="button" class="btn" data-add-question>Add question</button>
     </div>
 

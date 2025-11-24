@@ -7,6 +7,22 @@
     const list = root.querySelector("[data-question-list]");
     const addBtn = root.querySelector("[data-add-question]");
     const typeSelect = root.querySelector("[data-question-type]");
+    const typeButtons = root.querySelectorAll("[data-type-choice]");
+    const applyTypeSelection = (value) => {
+      if (!typeSelect) return;
+      const next = value || "mcq";
+      typeSelect.value = next;
+      typeButtons.forEach((btn) => {
+        const active = btn.dataset.typeChoice === next;
+        btn.classList.toggle("btn-primary", active);
+      });
+    };
+    if (typeButtons.length && typeSelect) {
+      typeButtons.forEach((btn) => {
+        btn.addEventListener("click", () => applyTypeSelection(btn.dataset.typeChoice));
+      });
+      applyTypeSelection(typeSelect.value || typeButtons[0].dataset.typeChoice);
+    }
     const hidden = root.querySelector("#questions_payload");
     const form = root.querySelector("#exam-builder-form");
     if (!list || !addBtn || !typeSelect || !hidden || !form) return;
@@ -301,15 +317,38 @@
         block.innerHTML = `
           <strong>${sample.name || "Sample"}</strong>
           <span style="color:${statusColor}; margin-left:8px;">${sample.status}</span>
-          <div style="margin-top:4px;">
-            <div class="muted">Output</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px;">${escapeHtml(sample.output || "")}</pre>
+        `;
+
+        const splitRow = document.createElement("div");
+        splitRow.style.display = "flex";
+        splitRow.style.flexWrap = "wrap";
+        splitRow.style.gap = "12px";
+        splitRow.style.marginTop = "8px";
+
+        const leftCol = document.createElement("div");
+        leftCol.style.flex = "1 1 240px";
+        leftCol.innerHTML = `
+          <div class="muted">Input</div>
+          <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.input || "")}</pre>
+        `;
+
+        const rightCol = document.createElement("div");
+        rightCol.style.flex = "1 1 240px";
+        rightCol.innerHTML = `
+          <div style="margin-bottom:6px;">
+            <div class="muted">Your output</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
           </div>
-          <div style="margin-top:4px;">
-            <div class="muted">Expected</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px;">${escapeHtml(sample.expected || "")}</pre>
+          <div>
+            <div class="muted">Expected output</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.expected || "")}</pre>
           </div>
         `;
+
+        splitRow.appendChild(leftCol);
+        splitRow.appendChild(rightCol);
+        block.appendChild(splitRow);
+
         if (sample.error) {
           const errBlock = document.createElement("pre");
           errBlock.textContent = sample.error;
@@ -364,6 +403,7 @@ for sample in samples:
     name = sample.get("name") or "Sample"
     stdin = io.StringIO(sample.get("input") or "")
     expected_output = sample.get("output") or ""
+    input_payload = sample.get("input") or ""
     stdout = io.StringIO()
     original_stdout = sys.stdout
     original_stdin = sys.stdin
@@ -391,6 +431,7 @@ for sample in samples:
         "status": status,
         "output": output_value,
         "expected": expected_output,
+        "input": input_payload,
         "error": error_text,
     })
 json.dumps(results)

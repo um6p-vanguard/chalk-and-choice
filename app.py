@@ -967,6 +967,7 @@ def exams_new():
         "starts_at": request.form.get("starts_at") or "",
         "ends_at": request.form.get("ends_at") or "",
         "questions_payload": request.form.get("questions_payload") or "[]",
+        "question_type": request.form.get("question_type") or "mcq",
     }
 
     if request.method == "POST":
