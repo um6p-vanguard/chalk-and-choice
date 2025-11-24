@@ -390,8 +390,8 @@ for sample in samples:
     })
 json.dumps(results)
           `);
-          pyodide.globals.del("runner_code");
-          pyodide.globals.del("runner_samples");
+          pyodide.globals.delete("runner_code");
+          pyodide.globals.delete("runner_samples");
           const parsed = JSON.parse(output);
           renderResults(resultsContainer, parsed);
           postLog(questionId, parsed);
