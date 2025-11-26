@@ -20,6 +20,10 @@
     <label>Instructions for students</label>
     <textarea name="instructions" rows="4" placeholder="These appear before the questions.">{{ form_data.instructions }}</textarea>
 
+    <label>Student access password (optional)</label>
+    <input type="password" name="access_password" placeholder="Leave blank for no password">
+    <p class="muted" style="margin-top:4px;">If set, students must enter this once before seeing the exam.</p>
+
     <div class="row" style="gap:20px;">
       <div style="flex:1;">
         <label>Starts at (UTC)</label>

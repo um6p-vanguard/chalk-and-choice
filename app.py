@@ -86,6 +86,7 @@ def logout_everyone():
     session.pop("student_id", None)
     session.pop("student_name", None)
     session.pop("must_change_pw", None)
+    session.pop("exam_access", None)
 
 def require_user(role=None):
     def deco(fn):
@@ -965,6 +966,26 @@ def _normalize_exam_questions(payload):
 def _exam_share_url(exam):
     return request.url_root.rstrip("/") + url_for("exam_take", code=exam.code)
 
+def _exam_access_table():
+    data = session.get("exam_access")
+    if isinstance(data, dict):
+        return data
+    session["exam_access"] = {}
+    session.modified = True
+    return session["exam_access"]
+
+def _exam_has_access(exam_id):
+    data = session.get("exam_access")
+    if not isinstance(data, dict):
+        return False
+    return str(exam_id) in data
+
+def _grant_exam_access(exam_id):
+    data = _exam_access_table()
+    data[str(exam_id)] = True
+    session["exam_access"] = data
+    session.modified = True
+
 @app.route("/exams")
 @require_user()
 def exams_list():
@@ -1002,6 +1023,7 @@ def exams_new():
         title = form_data["title"].strip()
         description = form_data["description"].strip() or None
         instructions = form_data["instructions"].strip() or None
+        access_password = (request.form.get("access_password") or "").strip()
         duration = None
         if form_data["duration_minutes"]:
             try:
@@ -1037,6 +1059,7 @@ def exams_new():
                 questions_json=questions,
                 creator_user_id=current_user().id if current_user() else None,
             )
+            exam.set_access_password(access_password)
             db.session.add(exam)
             db.session.commit()
             return redirect(url_for("exams_show", code=exam.code))
@@ -1091,6 +1114,25 @@ def exam_take(code):
     preview = bool(user and not student)
     if not (student or preview):
         return redirect(url_for("login", next=url_for("exam_take", code=code)))
+
+    locked = bool(exam.access_password_hash) and student and not _exam_has_access(exam.id)
+    if locked:
+        error = None
+        if request.method == "POST":
+            if not verify_csrf(): abort(400, "bad csrf")
+            attempt = request.form.get("unlock_password") or ""
+            if exam.check_access_password(attempt):
+                _grant_exam_access(exam.id)
+                return redirect(url_for("exam_take", code=code))
+            else:
+                error = "Incorrect password."
+        return render_template(
+            "exams_unlock.html",
+            exam=exam,
+            error=error,
+            user=user,
+            student_name=session.get("student_name"),
+        )
 
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
     submission = None
@@ -1168,6 +1210,8 @@ def exams_log_run(code):
     student = current_student()
     if not student:
         abort(401)
+    if exam.access_password_hash and not _exam_has_access(exam.id):
+        abort(403)
     submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
     if not submission:
         submission = ExamSubmission(

@@ -121,6 +121,7 @@ class Exam(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
     creator = db.relationship('User')
+    access_password_hash = db.Column(db.String(255), nullable=True)
 
     @property
     def is_available(self):
@@ -132,6 +133,18 @@ class Exam(db.Model):
         if self.ends_at and now > self.ends_at:
             return False
         return True
+
+    def set_access_password(self, password):
+        password = (password or "").strip()
+        if not password:
+            self.access_password_hash = None
+        else:
+            self.access_password_hash = generate_password_hash(password)
+
+    def check_access_password(self, password):
+        if not self.access_password_hash:
+            return True
+        return check_password_hash(self.access_password_hash, password or "")
 
 class ExamSubmission(db.Model):
     __tablename__ = "exam_submissions"

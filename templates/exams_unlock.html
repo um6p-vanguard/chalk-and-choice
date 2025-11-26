@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0;">{{ exam.title }}</h3>
+  <p class="muted">This exam is password-protected. Enter the password provided by your instructor to continue.</p>
+  {% if error %}<p class="text-danger">{{ error }}</p>{% endif %}
+  <form method="post" style="margin-top:12px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Exam password</label>
+    <input type="password" name="unlock_password" required placeholder="Enter password">
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Unlock exam</button>
+    <a class="btn" href="{{ url_for('index') }}" style="margin-left:8px;">Cancel</a>
+  </form>
+</div>
+{% endblock %}
