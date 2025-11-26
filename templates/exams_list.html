@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 900px; margin: 0 auto;">
+  <h2 style="margin: 12px 0;">Exams</h2>
+  <div style="margin-bottom:12px; display:flex; gap:8px;">
+    <a class="btn" href="{{ url_for('exams_new') }}" style="padding:8px 12px; border:1px solid #334155; border-radius:8px; text-decoration:none;">+ New Exam</a>
+  </div>
+  <div>
+    {% if exams %}
+      {% for ex in exams %}
+      <div style="border:1px solid #1f2937; background:#0b1220; padding:12px; border-radius:10px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-weight:600;">{{ ex.title }}</div>
+          <div style="color:#94a3b8; font-size:14px;">
+            Starts: {{ ex.start_at }}
+            {% if ex.end_at %} • Ends: {{ ex.end_at }}{% endif %}
+            • Code: {{ ex.code }}
+          </div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <a class="btn" href="{{ url_for('exams_edit', code=ex.code) }}" style="padding:8px 12px; border:1px solid #334155; border-radius:8px; text-decoration:none;">Edit</a>
+          <a class="btn" href="{{ url_for('exam_play', code=ex.code) }}" style="padding:8px 12px; border:1px solid #334155; border-radius:8px; text-decoration:none;">Open</a>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div style="color:#94a3b8;">No exams yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

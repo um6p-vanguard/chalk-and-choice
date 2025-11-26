@@ -455,3 +455,78 @@ class SlotBooking(db.Model):
     __table_args__ = (
         db.UniqueConstraint('slot_id', 'student_id', name='uq_slot_student'),
     )
+
+class Exam(db.Model):
+    __tablename__ = 'exams'
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    start_at = db.Column(db.DateTime, nullable=False)
+    end_at = db.Column(db.DateTime, nullable=True)
+    is_published = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), index=True, nullable=True)
+    creator = db.relationship('User')
+
+    @property
+    def is_open(self) -> bool:
+        now = datetime.now()
+        if self.start_at and now < self.start_at:
+            return False
+        if self.end_at and now > self.end_at:
+            return False
+        return bool(self.is_published)
+
+
+class ExamQuestion(db.Model):
+    __tablename__ = 'exam_questions'
+    id = db.Column(db.Integer, primary_key=True)
+    exam_id = db.Column(db.Integer, db.ForeignKey('exams.id', ondelete='CASCADE'), index=True, nullable=False)
+    order = db.Column(db.Integer, nullable=False)
+    q_type = db.Column(db.String(10), nullable=False)
+    title = db.Column(db.String(255), nullable=True)
+    prompt = db.Column(db.Text, nullable=True)
+    points = db.Column(db.Integer, default=1, nullable=False)
+
+    options_json = db.Column(JSONText, nullable=True)
+    correct_indices_json = db.Column(JSONText, nullable=True)
+    multiple_select = db.Column(db.Boolean, default=False, nullable=False)
+
+    code_exercise_id = db.Column(db.Integer, db.ForeignKey('code_exercises.id', ondelete='SET NULL'), index=True, nullable=True)
+    code_exercise = db.relationship('CodeExercise')
+    # Optional: allow inline code starter for code questions not tied to CodeExercise
+    code_starter_code = db.Column(db.Text, nullable=True)
+
+    exam = db.relationship('Exam', backref=db.backref('questions', cascade='all,delete-orphan', order_by='ExamQuestion.order'))
+
+
+class ExamSubmission(db.Model):
+    __tablename__ = 'exam_submissions'
+    id = db.Column(db.Integer, primary_key=True)
+    exam_id = db.Column(db.Integer, db.ForeignKey('exams.id', ondelete='CASCADE'), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete='CASCADE'), index=True, nullable=False)
+    started_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    score = db.Column(db.Float, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    exam = db.relationship('Exam', backref=db.backref('submissions', cascade='all,delete-orphan'))
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        db.UniqueConstraint('exam_id', 'student_id', name='uq_exam_student_unique_submission'),
+    )
+
+
+class ExamAnswer(db.Model):
+    __tablename__ = 'exam_answers'
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey('exam_submissions.id', ondelete='CASCADE'), index=True, nullable=False)
+    question_id = db.Column(db.Integer, db.ForeignKey('exam_questions.id', ondelete='CASCADE'), index=True, nullable=False)
+    answer_json = db.Column(JSONText, nullable=True)
+    score_awarded = db.Column(db.Float, default=0, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.now, nullable=False)
+
+    submission = db.relationship('ExamSubmission', backref=db.backref('answers', cascade='all,delete-orphan'))
+    question = db.relationship('ExamQuestion')

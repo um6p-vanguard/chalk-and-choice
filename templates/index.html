@@ -97,6 +97,41 @@
   </div>
   {% endif %}
 
+  {% if available_exams and available_exams|length %}
+  <div class="sec-card">
+    <h3 class="sec-title">🧪 Scheduled Exams</h3>
+    <p class="sec-hint">Exams become accessible at their scheduled start time.</p>
+
+    <div class="list">
+      {% for ex in available_exams %}
+      <div class="item-row">
+        <div class="item-main">
+          <div class="item-title">{{ ex.title }}</div>
+          {% if ex.description %}
+            <div class="item-desc">{{ ex.description[:120] }}{% if ex.description|length > 120 %}...{% endif %}</div>
+          {% endif %}
+          <div class="item-meta">
+            <span class="pill-due">
+              Starts <time class="due-abs" datetime="{{ ex.start_at.isoformat() if ex.start_at }}">{{ ex.start_at }}</time>
+              {% if ex.end_at %}<span>•</span> Ends <time class="due-abs" datetime="{{ ex.end_at.isoformat() }}">{{ ex.end_at }}</time>{% endif %}
+            </span>
+          </div>
+        </div>
+        <div class="item-actions">
+          {% if ex.submitted %}
+            <span class="btn-ghost" aria-disabled="true">Submitted</span>
+          {% elif ex.is_open %}
+            <a class="btn-cta" href="{{ url_for('exam_play', code=ex.code) }}">Enter Exam</a>
+          {% else %}
+            <span class="btn-ghost" aria-disabled="true">Locked until start</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   {% if available_exercises and available_exercises|length %}
   <div class="sec-card">
     <h3 class="sec-title">📝 Available Coding Exercise Sets</h3>
@@ -222,6 +257,12 @@
       <div class="item-actions">
         <a class="btn-cta" style="background: linear-gradient(180deg,#637FBE,#5775B8);" href="{{ url_for('admin_mentor_slots') }}">📊 Mentor Slots Overview</a>
         <a class="btn-ghost" href="{{ url_for('mentors_list') }}">Manage Mentors</a>
+      </div>
+    </div>
+    <div class="item-row" style="justify-content:flex-start; margin-top: 10px;">
+      <div class="item-actions">
+        <a class="btn-cta" style="background: linear-gradient(180deg,#637FBE,#5775B8);" href="{{ url_for('exams_new') }}">Create Exam</a>
+        <a class="btn-ghost" href="{{ url_for('exams_list') }}">Manage Exams</a>
       </div>
     </div>
     {% endif %}

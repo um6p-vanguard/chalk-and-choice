@@ -13,7 +13,7 @@ from models import (db, Poll, Vote, Student, User, Form,
                     StudentStats, Intervention, Notebook, StudentHomework,
                     Homework, HomeworkMessage, Mentor, CodeExercise,
                     CodeSubmission, StudentProgress, ExerciseSet, MentorSlot,
-                    SlotBooking)
+                    SlotBooking, Exam, ExamQuestion, ExamSubmission, ExamAnswer)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -459,13 +459,30 @@ def index():
                 "is_completed": completed_count == exercise_count if exercise_count > 0 else False
             })
         
+        exams_data = []
+        now = datetime.now()
+        for exm in Exam.query.filter_by(is_published=True).order_by(Exam.start_at.asc()).all():
+            is_open = bool(exm.start_at and exm.start_at <= now and (exm.end_at is None or now <= exm.end_at))
+            sub = ExamSubmission.query.filter_by(exam_id=exm.id, student_id=s.id).first()
+            submitted = bool(sub and sub.submitted_at)
+            exams_data.append({
+                "code": exm.code,
+                "title": exm.title,
+                "description": exm.description,
+                "start_at": exm.start_at,
+                "end_at": exm.end_at,
+                "is_open": is_open,
+                "submitted": submitted
+            })
+
         return render_template(
             "index.html",
             student_name=s.name,
             polls=polls,
             user=None,
             active_homeworks=_active_homeworks_for_student(s),
-            available_exercises=available_exercises
+            available_exercises=available_exercises,
+            available_exams=exams_data
         )
     return render_template("index.html", user=u, polls=polls, student_name=session.get("student_name"))
 
@@ -3525,9 +3542,421 @@ def mentor_booking_cancel(booking_id):
     
     return jsonify({"success": True})
 
-# --------------------------------------------------------------------
-# Dev entry
-# --------------------------------------------------------------------
+@app.route("/exams")
+@require_user(role=["admin", "instructor"])
+def exams_list():
+    exams = Exam.query.order_by(Exam.start_at.desc()).all()
+    return render_template("exams_list.html", exams=exams, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/exams/new", methods=["GET","POST"])
+@require_user(role=["admin", "instructor"])
+def exams_new():
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        title = (request.form.get("title") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        start_at = parse_dt_local(request.form.get("start_at"))
+        end_at = parse_dt_local(request.form.get("end_at"))
+        is_published = bool(request.form.get("published"))
+        if not title or not start_at:
+            sets = ExerciseSet.query.order_by(ExerciseSet.created_at.desc()).all()
+            sets_payload = []
+            for st in sets:
+                exs = CodeExercise.query.filter_by(exercise_set_id=st.id).order_by(CodeExercise.order.asc()).all()
+                sets_payload.append({
+                    "set": {"id": st.id, "code": st.code, "title": st.title},
+                    "exercises": [{"id": e.id, "order": e.order, "title": e.title} for e in exs]
+                })
+            return render_template("exam_new.html", error="Title and start time required", user=current_user(), sets_data=sets_payload, student_name=session.get("student_name"))
+        code = gen_code()
+        while Exam.query.filter_by(code=code).first() is not None:
+            code = gen_code()
+        exm = Exam(code=code, title=title, description=description, start_at=start_at, end_at=end_at, is_published=is_published, creator_user_id=current_user().id)
+        db.session.add(exm)
+        db.session.flush()
+        spec_raw = request.form.get("spec_json") or "{}"
+        try:
+            spec = json.loads(spec_raw)
+        except Exception:
+            spec = {}
+        qlist = spec.get("questions") or []
+        order = 1
+        for q in qlist:
+            qtype = (q.get("type") or "").lower()
+            qtitle = (q.get("title") or "").strip()
+            qprompt = q.get("prompt")
+            qpoints = int(q.get("points") or (10 if qtype == "code" else 1))
+            if qtype == "mcq":
+                # Simplified MCQ: question text in 'question'
+                prompt_text = (q.get("question") or qprompt or "").strip()
+                options = q.get("options") or []
+                correct = q.get("correct") or []
+                multiple = bool(q.get("multiple"))
+                eq = ExamQuestion(exam_id=exm.id, order=order, q_type="mcq", title=None, prompt=prompt_text, points=qpoints, options_json=options, correct_indices_json=correct, multiple_select=multiple)
+                db.session.add(eq)
+                order += 1
+            elif qtype == "code":
+                # Accept either legacy linking to an exercise or inline fields
+                cxid = q.get("code_exercise_id")
+                if cxid:
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=qtitle or None, prompt=qprompt, points=qpoints, code_exercise_id=int(cxid))
+                else:
+                    title = (q.get("title") or "").strip() or None
+                    desc = (q.get("description") or qprompt or "").strip() or None
+                    starter = q.get("starter_code") or None
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter)
+                db.session.add(eq)
+                order += 1
+        db.session.commit()
+        return redirect(url_for("exams_list"))
+    sets = ExerciseSet.query.order_by(ExerciseSet.created_at.desc()).all()
+    sets_payload = []
+    for st in sets:
+        exs = CodeExercise.query.filter_by(exercise_set_id=st.id).order_by(CodeExercise.order.asc()).all()
+        sets_payload.append({
+            "set": {"id": st.id, "code": st.code, "title": st.title},
+            "exercises": [{"id": e.id, "order": e.order, "title": e.title} for e in exs]
+        })
+    return render_template("exam_new.html", user=current_user(), sets_data=sets_payload, student_name=session.get("student_name"))
+
+@app.route("/exams/<code>/edit", methods=["GET","POST"])
+@require_user(role=["admin", "instructor"])
+def exams_edit(code):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    if request.method == "POST":
+        if not verify_csrf(): abort(400, "bad csrf")
+        title = (request.form.get("title") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        start_at = parse_dt_local(request.form.get("start_at"))
+        end_at = parse_dt_local(request.form.get("end_at"))
+        is_published = bool(request.form.get("published"))
+        if not title or not start_at:
+            # Re-render with error and existing spec
+            spec = {"questions": []}
+            for q in exm.questions:
+                if q.q_type == "mcq":
+                    spec["questions"].append({
+                        "type": "mcq",
+                        "question": q.prompt or "",
+                        "options": q.options_json or [],
+                        "correct": q.correct_indices_json or [],
+                        "multiple": bool(q.multiple_select),
+                        "points": q.points,
+                    })
+                elif q.q_type == "code":
+                    if q.code_exercise_id:
+                        spec["questions"].append({
+                            "type": "code",
+                            "title": q.title or "",
+                            "prompt": q.prompt or "",
+                            "points": q.points,
+                            "code_exercise_id": q.code_exercise_id,
+                        })
+                    else:
+                        spec["questions"].append({
+                            "type": "code",
+                            "title": q.title or "",
+                            "description": q.prompt or "",
+                            "starter_code": q.code_starter_code or "",
+                            "points": q.points,
+                        })
+            return render_template("exam_new.html", error="Title and start time required", exam=exm, spec=spec, user=current_user(), student_name=session.get("student_name"))
+        # Update exam meta
+        exm.title = title
+        exm.description = description
+        exm.start_at = start_at
+        exm.end_at = end_at
+        exm.is_published = is_published
+        # Replace questions
+        spec_raw = request.form.get("spec_json") or "{}"
+        try:
+            spec = json.loads(spec_raw)
+        except Exception:
+            spec = {}
+        # delete existing questions
+        ExamQuestion.query.filter_by(exam_id=exm.id).delete()
+        db.session.flush()
+        order = 1
+        for q in (spec.get("questions") or []):
+            qtype = (q.get("type") or "").lower()
+            qtitle = (q.get("title") or "").strip()
+            qprompt = q.get("prompt")
+            qpoints = int(q.get("points") or (10 if qtype == "code" else 1))
+            if qtype == "mcq":
+                prompt_text = (q.get("question") or qprompt or "").strip()
+                options = q.get("options") or []
+                correct = q.get("correct") or []
+                multiple = bool(q.get("multiple"))
+                eq = ExamQuestion(exam_id=exm.id, order=order, q_type="mcq", title=None, prompt=prompt_text, points=qpoints, options_json=options, correct_indices_json=correct, multiple_select=multiple)
+                db.session.add(eq)
+                order += 1
+            elif qtype == "code":
+                cxid = q.get("code_exercise_id")
+                if cxid:
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=qtitle or None, prompt=qprompt, points=qpoints, code_exercise_id=int(cxid))
+                else:
+                    title2 = (q.get("title") or "").strip() or None
+                    desc = (q.get("description") or qprompt or "").strip() or None
+                    starter = q.get("starter_code") or None
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title2, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter)
+                db.session.add(eq)
+                order += 1
+        db.session.commit()
+        return redirect(url_for("exams_list"))
+    # GET: render edit form with existing spec prefilled
+    spec = {"questions": []}
+    for q in exm.questions:
+        if q.q_type == "mcq":
+            spec["questions"].append({
+                "type": "mcq",
+                "question": q.prompt or "",
+                "options": q.options_json or [],
+                "correct": q.correct_indices_json or [],
+                "multiple": bool(q.multiple_select),
+                "points": q.points,
+            })
+        elif q.q_type == "code":
+            if q.code_exercise_id:
+                spec["questions"].append({
+                    "type": "code",
+                    "title": q.title or "",
+                    "prompt": q.prompt or "",
+                    "points": q.points,
+                    "code_exercise_id": q.code_exercise_id,
+                })
+            else:
+                spec["questions"].append({
+                    "type": "code",
+                    "title": q.title or "",
+                    "description": q.prompt or "",
+                    "starter_code": q.code_starter_code or "",
+                    "points": q.points,
+                })
+    return render_template("exam_new.html", exam=exm, spec=spec, user=current_user(), student_name=session.get("student_name"))
+
+def _exam_accessible(exm):
+    now = datetime.now()
+    if not exm.is_published:
+        return False
+    if not exm.start_at or now < exm.start_at:
+        return False
+    if exm.end_at and now > exm.end_at:
+        return False
+    return True
+
+def _find_exam_submission(exm, stu):
+    return ExamSubmission.query.filter_by(exam_id=exm.id, student_id=stu.id).first()
+
+def _exam_submission(exm, stu):
+    sub = ExamSubmission.query.filter_by(exam_id=exm.id, student_id=stu.id).first()
+    if not sub:
+        sub = ExamSubmission(exam_id=exm.id, student_id=stu.id)
+        db.session.add(sub)
+        db.session.commit()
+    return sub
+
+@app.route("/exam/<code>")
+@require_student()
+def exam_play(code):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        return render_template("exam_locked.html", exam=exm, user=None, student_name=s.name if s else session.get("student_name")), 403
+    # Block reopened exams after submission
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        return render_template("exam_locked.html", exam=exm, user=None, already_submitted=True, student_name=s.name if s else session.get("student_name")), 403
+    _exam_submission(exm, s)
+    return render_template("exam_play.html", exam=exm, user=None, student_name=s.name if s else session.get("student_name"))
+
+@app.get("/api/exam/<code>/meta")
+@require_student()
+def api_exam_meta(code):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        abort(403)
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        abort(403)
+    _exam_submission(exm, s)
+    return jsonify({
+        "code": exm.code,
+        "title": exm.title,
+        "description": exm.description,
+        "start_at": exm.start_at.isoformat() if exm.start_at else None,
+        "end_at": exm.end_at.isoformat() if exm.end_at else None,
+        "questions": [{"order": q.order, "type": q.q_type, "title": q.title or f"Question {q.order}", "points": q.points} for q in exm.questions]
+    })
+
+@app.get("/api/exam/<code>/question/<int:order>")
+@require_student()
+def api_exam_question(code, order):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        abort(403)
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        abort(403)
+    sub = sub or _exam_submission(exm, s)
+    q = ExamQuestion.query.filter_by(exam_id=exm.id, order=order).first_or_404()
+    ans = ExamAnswer.query.filter_by(submission_id=sub.id, question_id=q.id).first()
+    if q.q_type == "mcq":
+        return jsonify({
+            "type": "mcq",
+            "order": q.order,
+            "title": q.title,
+            "prompt": q.prompt,
+            "options": q.options_json or [],
+            "multiple": bool(q.multiple_select),
+            "points": q.points,
+            "answer": (ans.answer_json if ans else None)
+        })
+    exo = q.code_exercise
+    saved = ans.answer_json if ans else None
+    if exo:
+        visible_tests = [t for t in (exo.test_cases_json or []) if not t.get("hidden")]
+        starter = q.code_starter_code or exo.starter_code
+        return jsonify({
+            "type": "code",
+            "order": q.order,
+            "title": q.title or exo.title,
+            "prompt": q.prompt or exo.description,
+            "starter_code": starter,
+            "default_input": exo.default_input or "",
+            "visible_test_cases": visible_tests,
+            "points": q.points,
+            "answer": saved
+        })
+    # Inline code (no linked exercise/tests)
+    return jsonify({
+        "type": "code",
+        "order": q.order,
+        "title": q.title,
+        "prompt": q.prompt,
+        "starter_code": q.code_starter_code or "# Write your code here\n",
+        "default_input": "",
+        "visible_test_cases": [],
+        "points": q.points,
+        "answer": saved
+    })
+
+@app.get("/api/exam/<code>/question/<int:order>/all-tests")
+@require_student()
+def api_exam_question_all_tests(code, order):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        abort(403)
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        abort(403)
+    _exam_submission(exm, s)
+    q = ExamQuestion.query.filter_by(exam_id=exm.id, order=order).first_or_404()
+    if q.q_type != "code":
+        abort(400)
+    if not q.code_exercise:
+        return jsonify({"test_cases": [], "points": q.points})
+    exo = q.code_exercise
+    return jsonify({"test_cases": exo.test_cases_json or [], "points": q.points})
+
+@app.post("/api/exam/<code>/answer/<int:order>")
+@require_student()
+def api_exam_answer(code, order):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        abort(403)
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        abort(403)
+    sub = sub or _exam_submission(exm, s)
+    q = ExamQuestion.query.filter_by(exam_id=exm.id, order=order).first_or_404()
+    data = request.get_json(silent=True) or {}
+    if q.q_type == "mcq":
+        selected = data.get("selected") or []
+        try:
+            selected_set = sorted(set(int(i) for i in selected))
+        except Exception:
+            selected_set = []
+        correct = sorted((q.correct_indices_json or []))
+        ok = (selected_set == correct)
+        award = float(q.points if ok else 0)
+        ans = ExamAnswer.query.filter_by(submission_id=sub.id, question_id=q.id).first()
+        if not ans:
+            ans = ExamAnswer(submission_id=sub.id, question_id=q.id)
+            db.session.add(ans)
+        ans.answer_json = {"selected": selected_set}
+        ans.score_awarded = award
+        db.session.commit()
+        return jsonify({"ok": True, "score": award})
+    exo = q.code_exercise
+    expected_tests = (exo.test_cases_json if exo else []) or []
+    posted = data.get("test_results") or []
+    visible_passed = 0
+    visible_total = 0
+    hidden_passed = 0
+    hidden_total = 0
+    validated_results = []
+    for i, exp in enumerate(expected_tests):
+        res = posted[i] if i < len(posted) else {}
+        actual_output = (res.get("actual") or "")
+        expected_output = exp.get("expected_output")
+        is_correct = compare_outputs(str(actual_output), str(expected_output))
+        item = {
+            "test_num": i + 1,
+            "hidden": bool(exp.get("hidden", False)),
+            "passed": bool(is_correct),
+            "input": res.get("input", ""),
+            "expected": expected_output,
+            "actual": actual_output,
+            "time_ms": res.get("time_ms", 0)
+        }
+        if item["hidden"]:
+            hidden_total += 1
+            if is_correct:
+                hidden_passed += 1
+        else:
+            visible_total += 1
+            if is_correct:
+                visible_passed += 1
+        validated_results.append(item)
+    total_passed = visible_passed + hidden_passed
+    total_tests = max(1, visible_total + hidden_total)
+    award = float(q.points) * (total_passed / total_tests)
+    ans = ExamAnswer.query.filter_by(submission_id=sub.id, question_id=q.id).first()
+    if not ans:
+        ans = ExamAnswer(submission_id=sub.id, question_id=q.id)
+        db.session.add(ans)
+    ans.answer_json = {"code": data.get("code", ""), "test_results": validated_results}
+    ans.score_awarded = award
+    db.session.commit()
+    return jsonify({"ok": True, "score": round(award, 2)})
+
+@app.post("/api/exam/<code>/submit")
+@require_student()
+def api_exam_submit(code):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    s = current_student()
+    if not _exam_accessible(exm):
+        abort(403)
+    sub = _find_exam_submission(exm, s)
+    if sub and sub.submitted_at:
+        abort(400, description="Already submitted")
+    sub = sub or _exam_submission(exm, s)
+    sub.submitted_at = datetime.now()
+    total = db.session.query(db.func.coalesce(db.func.sum(ExamAnswer.score_awarded), 0)).filter_by(submission_id=sub.id).scalar() or 0
+    sub.score = float(total)
+    db.session.commit()
+    return jsonify({"ok": True, "score": round(sub.score, 2)})
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")

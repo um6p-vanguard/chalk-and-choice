@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .exam-wrap { max-width: 1100px; margin: 0 auto; }
+  .exam-header { display:flex; justify-content:space-between; align-items:center; margin: 12px 0; }
+  .q-nav { display:flex; gap:6px; flex-wrap:wrap; }
+  .q-btn { padding:6px 10px; border-radius:999px; border:1px solid #334155; background:#0b2b3a; color:#e5e7eb; text-decoration:none; cursor:pointer; transition: all .15s ease; }
+  .q-btn:hover { filter: brightness(1.1); border-color:#3b5168; }
+  .q-btn.active { background:#1f7bd6; border-color:#1f7bd6; }
+  .q-btn.answered { box-shadow: inset 0 0 0 1px #10b981; border-color:#0f5132; }
+  .exam-grid { display:grid; grid-template-columns: 1.3fr 1fr; gap:14px; }
+  .card { background:#0b1220; border:1px solid #1f2937; border-radius:10px; padding:12px; }
+  .actions { display:flex; gap:8px; }
+  .btn { padding:8px 12px; border:1px solid #334155; border-radius:10px; text-decoration:none; color:#e5e7eb; background:#0b2b3a; cursor:pointer; transition: all .15s ease; }
+  .btn:hover { filter: brightness(1.06); border-color:#3b5168; }
+  .btn:focus { outline: 2px solid #1f7bd6; outline-offset: 2px; }
+  .btn[disabled] { opacity:.6; cursor:not-allowed; box-shadow:none; }
+  .btn-primary { background: linear-gradient(180deg,#3aa0ff,#1f7bd6); border:1px solid #1f7bd6; color:#f9fafb; box-shadow: 0 0 0 1px rgba(15,118,210,0.25), 0 8px 18px rgba(15,118,210,0.35); border-radius:10px; }
+  .btn-primary:hover { border-radius:10px; filter: brightness(1.03); border-color:#38a3ff; box-shadow: 0 0 0 1px rgba(56,163,255,0.3), 0 10px 22px rgba(15,118,210,0.45); }
+  .status { color:#9bb2c4; font-size:14px; }
+  /* Markdown styling for code questions */
+  .markdown-content { line-height:1.6; color:#cfe1ee; }
+  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin:14px 0 8px; }
+  .markdown-content pre { background:#0b1220; border:1px solid #1f2937; border-left:3px solid #1f7bd6; padding:10px; border-radius:6px; overflow:auto; }
+  .markdown-content code { background: rgba(255,255,255,.06); padding:2px 6px; border-radius:4px; }
+  /* Loading overlay */
+  #loading-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(3,10,20,0.65); backdrop-filter: blur(2px); z-index: 1000; }
+  .loading-card { background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:20px 24px; min-width: 320px; display:flex; align-items:center; gap:14px; box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+  .spinner { width:28px; height:28px; border:3px solid #1f2a44; border-top-color:#1f7bd6; border-radius:50%; animation: spin 1s linear infinite; }
+  @keyframes spin { from{ transform: rotate(0deg);} to{ transform: rotate(360deg);} }
+  .loading-text { color:#cfe1ee; font-weight:600; }
+  .mcq-opt { display:flex; gap:8px; align-items:center; padding:8px 10px; border:1px solid #1f2937; border-radius:10px; margin-bottom:8px; background:#0f1720; transition: all .15s ease; }
+  .mcq-opt:hover { border-color:#2a3b52; }
+  .mcq-opt.selected { border-color:#3b5168; background:#10202e; }
+  .mcq-opt input { width:18px; height:18px; accent-color:#1f7bd6; }
+  .mcq-opt input:checked + span { color:#e6f2f8; }
+  /* Test result chips reuse mcq-opt container */
+  .mcq-opt.ok { border-color:#10b981; background:#0f2a24; }
+  #code-editor { height: 380px; background:#111827; border-radius:8px; }
+  #custom-input { width:100%; height: 120px; border-radius:8px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; padding:8px; }
+  pre.output { background:#0b1220; border:1px solid #1f2937; border-radius:8px; padding:10px; min-height:100px; white-space:pre-wrap; }
+</style>
+<div class="exam-wrap">
+  <div class="exam-header">
+    <div>
+      <h1 style="margin:0;">Exercise: {{ exam.title }}</h1>
+      <div class="status">{% if exam.start_at %}Starts: {{ exam.start_at }}{% endif %}{% if exam.end_at %} • Ends: {{ exam.end_at }}{% endif %}</div>
+    </div>
+    <div class="actions">
+      <button id="submit-exam" class="btn-primary">Submit Exam</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="q-nav" id="q-nav"></div>
+  </div>
+  <div class="exam-grid" id="exam-grid" style="margin-top:12px;">
+    <div class="card" id="left-pane">
+      <h3 id="q-title" style="margin-top:0;">Loading...</h3>
+      <div id="q-prompt" class="markdown-content"></div>
+      <div id="mcq-area" style="margin-top:10px; display:none;"></div>
+      <div id="code-area" style="margin-top:10px; display:none;">
+        <div class="actions" style="justify-content:flex-end; margin-bottom:6px;">
+          <button id="reset-code" class="btn">Reset</button>
+        </div>
+        <div id="code-editor"></div>
+        <div class="actions" style="margin-top:8px;">
+          <button id="run-code" class="btn">Run Code</button>
+          <button id="run-tests" class="btn">Run Visible Tests</button>
+          <button id="save-code-answer" class="btn-primary">Save Answer</button>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:10px;">
+        <button id="prev-q" class="btn">Previous</button>
+        <button id="next-q" class="btn">Next</button>
+      </div>
+    </div>
+    <div class="card" id="right-pane" style="display:none;">
+      <div id="points" class="status"></div>
+      <div id="input-wrap" style="margin-top:10px; display:none;">
+        <label>Input (stdin)</label>
+        <textarea id="custom-input" placeholder="Enter test input..."></textarea>
+      </div>
+      <div style="margin-top:10px;">
+        <label>Output</label>
+        <pre class="output" id="output-display">(Run your code to see output)</pre>
+        <div class="status" id="exec-time"></div>
+      </div>
+      <div id="test-results" style="margin-top:10px; display:none;"></div>
+      <div id="score-line" class="status" style="margin-top:10px;"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script src="/static/js/code_executor.js"></script>
+<script>
+  window.__EXAM__ = { code: '{{ exam.code }}', csrf: '{{ csrf_token() }}' };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script src="/static/js/exam.js?v=1"></script>
+<div id="loading-overlay" role="status" aria-live="polite" aria-busy="true">
+  <div class="loading-card">
+    <div class="spinner" aria-hidden="true"></div>
+    <div class="loading-text" id="loading-text">Loading…</div>
+  </div>
+</div>
+{% endblock %}

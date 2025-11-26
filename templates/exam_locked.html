@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="max-width: 800px; margin: 40px auto; background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:20px; text-align:center;">
+  <h2 style="margin:0 0 8px 0;">{{ exam.title }}</h2>
+  {% if already_submitted %}
+    <p style="color:#9bb2c4;">You have already submitted this exam. You cannot re-open it.</p>
+  {% else %}
+    <p style="color:#9bb2c4;">This exam is not currently available.</p>
+  {% endif %}
+  {% if exam.start_at %}
+    <p style="color:#9bb2c4;">Starts at: <strong>{{ exam.start_at }}</strong></p>
+  {% endif %}
+  {% if exam.end_at %}
+    <p style="color:#9bb2c4;">Ends at: <strong>{{ exam.end_at }}</strong></p>
+  {% endif %}
+  <div style="margin-top:16px;">
+    <a class="btn" href="{{ url_for('index') }}" style="padding:8px 12px; border:1px solid #334155; border-radius:8px; text-decoration:none;">← Back to Home</a>
+  </div>
+</div>
+{% endblock %}

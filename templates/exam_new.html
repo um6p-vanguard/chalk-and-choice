@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .builder { max-width: 980px; margin: 0 auto; }
+  .row { display:flex; gap:10px; margin-bottom:10px; align-items: center; }
+  .card { background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:14px; }
+  .q-list .q-item { display:flex; align-items:center; justify-content:space-between; padding:12px; border:1px solid #1f2937; border-radius:10px; margin-bottom:10px; background:#0f1720; }
+  .btn { padding:8px 12px; border:1px solid #334155; border-radius:10px; text-decoration:none; color:#e5e7eb; background:#0b2b3a; cursor:pointer; transition: all .15s ease; }
+  .btn:hover { filter: brightness(1.1); border-color:#3b5168; }
+  .btn:focus { outline: 2px solid #1f7bd6; outline-offset: 2px; }
+  .btn-primary { background: linear-gradient(180deg,#3aa0ff,#1f7bd6); border:1px solid #1f7bd6; color:#fff; border-radius:10px; box-shadow: 0 0 0 1px rgba(15,118,210,0.25), 0 8px 18px rgba(15,118,210,0.35); }
+  .btn-primary:hover { filter: brightness(1.03); border-color:#38a3ff; box-shadow: 0 0 0 1px rgba(56,163,255,0.3), 0 10px 22px rgba(15,118,210,0.45); }
+  /* Update state: same blue family, with pen icon */
+  .btn-primary.update::before { padding:4px 8px; content: '✎'; display:inline-block; margin-right:6px; font-size:14px; line-height:1; border-radius:10px;}
+  .btn-danger { border-color:#7f1d1d; background:#3f1d1d; }
+  label { font-weight:600; display:block; margin-bottom:6px; }
+  input[type="text"], input[type="datetime-local"], textarea, select { width:100%; padding:10px; border-radius:10px; border:1px solid #334155; background:#0b1220; color:#e5e7eb; }
+  input::placeholder, textarea::placeholder { color:#7b8a99; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid #1f7bd6; outline-offset: 2px; }
+</style>
+<div class="builder">
+  <h2 style="margin:12px 0;">{{ 'Edit Exam' if exam else 'New Exam' }}</h2>
+  <form method="post" onsubmit="return ExamBuilder.beforeSubmit()">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="spec_json" id="spec_json">
+
+    <div class="card">
+      <div class="row">
+        <div style="flex:2;">
+          <label>Title</label>
+          <input type="text" name="title" required placeholder="e.g., Midterm Exam" value="{{ exam.title if exam }}">
+        </div>
+        <div style="flex:1;">
+          <label>Start at</label>
+          <input type="datetime-local" name="start_at" required value="{{ exam.start_at.strftime('%Y-%m-%dT%H:%M') if exam and exam.start_at }}">
+        </div>
+        <div style="flex:1;">
+          <label>End at</label>
+          <input type="datetime-local" name="end_at" value="{{ exam.end_at.strftime('%Y-%m-%dT%H:%M') if exam and exam.end_at }}">
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1;">
+          <label>Description</label>
+          <textarea name="description" rows="3" placeholder="Optional short description shown on home">{{ exam.description if exam }}</textarea>
+        </div>
+      </div>
+      <div class="row">
+        <label style="display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" name="published" value="1" {% if exam and exam.is_published %}checked{% endif %}> Publish
+        </label>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="row" style="justify-content:space-between;">
+        <div style="font-weight:700;">Questions</div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" type="button" onclick="ExamBuilder.openMcq()">+ Add MCQ</button>
+          <button class="btn" type="button" onclick="ExamBuilder.openCode()">+ Add Code</button>
+        </div>
+      </div>
+      <div id="q_list" class="q-list"></div>
+    </div>
+
+    <div style="margin-top:14px; display:flex; gap:8px;">
+      <button class="btn-primary" type="submit">{{ 'Save Changes' if exam else 'Save Exam' }}</button>
+      <a class="btn" href="{{ url_for('exams_list') }}">Cancel</a>
+    </div>
+  </form>
+
+  <dialog id="dlg_mcq" class="card" style="width:640px;">
+    <form onsubmit="return ExamBuilder.addMcq(event)">
+      <div class="row"><div style="flex:1;"><label>Question</label><textarea id="mcq_question" rows="3" placeholder="Type the question..."></textarea></div></div>
+      <div class="row"><label style="display:flex; align-items:center; gap:8px;"><input id="mcq_multiple" type="checkbox"> Multiple select</label></div>
+      <div>
+        <label>Options</label>
+        <div id="opts"></div>
+        <div class="row"><button class="btn" type="button" onclick="ExamBuilder.addOption()">+ Add option</button></div>
+      </div>
+      <div class="row" style="justify-content:flex-end; gap:8px;">
+        <button class="btn" type="button" onclick="ExamBuilder.closeMcq()">Close</button>
+        <button id="mcq_submit" class="btn-primary" type="submit">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg_code" class="card" style="width:640px;">
+    <form onsubmit="return ExamBuilder.addCode(event)">
+      <div class="row"><div style="flex:1;"><label>Title</label><input id="code_title" type="text" placeholder="e.g., Two Sum"></div></div>
+      <div class="row"><div style="flex:1;"><label>Description (markdown)</label><textarea id="code_desc" rows="6" placeholder="Write the problem in markdown..."></textarea></div></div>
+      <div class="row"><div style="flex:1;"><label>Starter Code</label><textarea id="code_starter" rows="8" style="font-family: monospace;" placeholder="# Write your code here"></textarea></div></div>
+      <div class="row"><div style="flex:1;"><label>Points</label><input id="code_points" type="text" value="10" placeholder="e.g., 10"></div></div>
+      <div class="row" style="justify-content:flex-end; gap:8px;">
+        <button class="btn" type="button" onclick="ExamBuilder.closeCode()">Close</button>
+        <button id="code_submit" class="btn-primary" type="submit">Add</button>
+      </div>
+    </form>
+  </dialog>
+</div>
+<script id="prefill_spec" type="application/json">{{ spec|tojson if spec }}</script>
+<script>
+const PREFILL_SPEC = (function(){
+  const el = document.getElementById('prefill_spec');
+  if(!el) return null;
+  try { return JSON.parse(el.textContent || 'null'); } catch(e){ return null; }
+})();
+const ExamBuilder = {
+  questions: [],
+  editIndex: null,
+  editType: null,
+  beforeSubmit(){
+    document.getElementById('spec_json').value = JSON.stringify({ questions: this.questions });
+    return true;
+  },
+  render(){
+    const list = document.getElementById('q_list');
+    list.innerHTML = '';
+    this.questions.forEach((q, idx) => {
+      const div = document.createElement('div');
+      div.className = 'q-item';
+      const left = document.createElement('div');
+      const key = q.type === 'mcq' ? (q.question || '') : (q.title || '');
+      left.innerHTML = `<div style="font-weight:600;">${idx+1}. ${q.type === 'mcq' ? 'MCQ' : 'Code'} - ${this.escape(key)}</div>`;
+      const right = document.createElement('div');
+      right.style.display = 'flex'; right.style.gap = '8px';
+      const up = document.createElement('button'); up.type='button'; up.className='btn'; up.textContent='↑'; up.onclick=()=>this.move(idx, -1);
+      const down = document.createElement('button'); down.type='button'; down.className='btn'; down.textContent='↓'; down.onclick=()=>this.move(idx, 1);
+      const edit = document.createElement('button'); edit.type='button'; edit.className='btn'; edit.textContent='Edit'; edit.onclick=()=>this.edit(idx);
+      const del = document.createElement('button'); del.type='button'; del.className='btn btn-danger'; del.textContent='Remove'; del.onclick=()=>this.remove(idx);
+      right.append(up,down,edit,del);
+      div.append(left,right);
+      list.appendChild(div);
+    });
+  },
+  edit(i){
+    const q = this.questions[i];
+    if(!q) return;
+    if(q.type === 'mcq') this.openMcq(q, i);
+    else this.openCode(q, i);
+  },
+  move(i, d){
+    const j = i + d; if (j<0 || j>=this.questions.length) return; 
+    const a = this.questions[i]; this.questions[i] = this.questions[j]; this.questions[j] = a; this.render();
+  },
+  remove(i){ this.questions.splice(i,1); this.render(); },
+  escape(s){ return (s||'').replace(/[&<>"']/g, m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m])); },
+  openMcq(existing=null, idx=null){
+    this.editIndex = (typeof idx === 'number') ? idx : null;
+    this.editType = 'mcq';
+    const qEl = document.getElementById('mcq_question');
+    const multEl = document.getElementById('mcq_multiple');
+    const submitBtn = document.getElementById('mcq_submit');
+    const wrap = document.getElementById('opts');
+    wrap.innerHTML = '';
+    if(existing){
+      qEl.value = existing.question || '';
+      multEl.checked = !!existing.multiple;
+      const corrSet = new Set(existing.correct || []);
+      (existing.options||[]).forEach((opt, i)=>{
+        const row = document.createElement('div'); row.className='row';
+        row.innerHTML = `<input type="checkbox" class="mcq_correct" style="width:auto;"> <input type="text" class="mcq_opt" placeholder="Option text" style="flex:1;"> <button type="button" class="btn opt-remove" title="Remove">×</button>`;
+        wrap.appendChild(row);
+        const [chk, optInput, rm] = [row.querySelector('.mcq_correct'), row.querySelector('.mcq_opt'), row.querySelector('.opt-remove')];
+        if(optInput) optInput.value = opt;
+        if(chk) chk.checked = corrSet.has(i);
+        if(rm){ rm.addEventListener('click', ()=> row.remove()); }
+      });
+      if(submitBtn){ submitBtn.textContent = 'Update'; submitBtn.classList.add('update'); }
+    } else {
+      qEl.value = '';
+      multEl.checked = false;
+      this.addOption(); this.addOption();
+      if(submitBtn){ submitBtn.textContent = 'Add'; submitBtn.classList.remove('update'); }
+    }
+    document.getElementById('dlg_mcq').showModal();
+  },
+  closeMcq(){ document.getElementById('dlg_mcq').close(); },
+  addOption(){
+    const wrap = document.getElementById('opts');
+    const row = document.createElement('div'); row.className='row';
+    row.innerHTML = `<input type="checkbox" class="mcq_correct" style="width:auto;"> <input type="text" class="mcq_opt" placeholder="Option text" style="flex:1;"> <button type="button" class="btn opt-remove" title="Remove">×</button>`;
+    wrap.appendChild(row);
+    const rm = row.querySelector('.opt-remove');
+    if(rm){ rm.addEventListener('click', ()=>{ row.remove(); }); }
+  },
+  addMcq(e){ e.preventDefault();
+    const question = document.getElementById('mcq_question').value.trim();
+    const points = 1;
+    const multiple = document.getElementById('mcq_multiple').checked;
+    const opts = Array.from(document.querySelectorAll('.mcq_opt')).map(x=>x.value.trim()).filter(x=>x);
+    const corr = Array.from(document.querySelectorAll('.mcq_correct')).map((c,i)=>c.checked?i:null).filter(x=>x!==null);
+    if (opts.length<2){ alert('Add at least two options'); return false; }
+    const q = { type:'mcq', question, points, options:opts, correct:corr, multiple };
+    if(this.editIndex !== null){ this.questions[this.editIndex] = q; }
+    else { this.questions.push(q); }
+    this.editIndex = null; this.editType = null;
+    this.closeMcq(); this.render(); return false;
+  },
+  openCode(existing=null, idx=null){
+    this.editIndex = (typeof idx === 'number') ? idx : null;
+    this.editType = 'code';
+    const titleEl = document.getElementById('code_title');
+    const descEl = document.getElementById('code_desc');
+    const startEl = document.getElementById('code_starter');
+    const ptsEl = document.getElementById('code_points');
+    const submitBtn = document.getElementById('code_submit');
+    if(existing){
+      titleEl.value = existing.title || '';
+      descEl.value = existing.description || '';
+      startEl.value = existing.starter_code || '';
+      ptsEl.value = String(existing.points || 10);
+      if(submitBtn) submitBtn.textContent = 'Update';
+    } else {
+      titleEl.value = '';
+      descEl.value = '';
+      startEl.value = '';
+      ptsEl.value = '10';
+      if(submitBtn) submitBtn.textContent = 'Add';
+    }
+    document.getElementById('dlg_code').showModal();
+  },
+  closeCode(){ document.getElementById('dlg_code').close(); },
+  addCode(e){ e.preventDefault();
+    const title = document.getElementById('code_title').value.trim();
+    const description = document.getElementById('code_desc').value.trim();
+    const starter_code = document.getElementById('code_starter').value;
+    const points = parseInt(document.getElementById('code_points').value||'10',10)||10;
+    const q = { type:'code', title, description, starter_code, points };
+    if(this.editIndex !== null){ this.questions[this.editIndex] = q; }
+    else { this.questions.push(q); }
+    this.editIndex = null; this.editType = null;
+    this.closeCode(); this.render(); return false;
+  }
+};
+// Prefill in edit mode
+if (PREFILL_SPEC && Array.isArray(PREFILL_SPEC.questions)){
+  ExamBuilder.questions = PREFILL_SPEC.questions;
+  ExamBuilder.render();
+}
+</script>
+{% endblock %}
