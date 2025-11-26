@@ -53,7 +53,7 @@
     </div>
 
     {% if meta.type == 'mcq' %}
-      <div class="meta" style="margin-bottom:8px;">{{ meta.prompt }}</div>
+      <div class="markdown">{{ meta.prompt }}</div>
       {% set sel = (a.answer_json.selected if a and a.answer_json and a.answer_json.selected is defined else []) %}
       <ul class="list">
         {% for opt in meta.options %}

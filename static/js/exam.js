@@ -78,7 +78,8 @@ class ExamInterface {
     document.getElementById('score-line').textContent = '';
     const promptEl = document.getElementById('q-prompt');
     if(q.type === 'mcq'){
-      promptEl.textContent = q.prompt || '';
+      if (typeof marked !== 'undefined') { promptEl.innerHTML = marked.parse(q.prompt || ''); }
+      else { promptEl.textContent = q.prompt || ''; }
       document.getElementById('q-title').textContent = `Question ${q.order}`;
       if(right) right.style.display = 'none';
       if(pointsEl){ pointsEl.textContent = ''; pointsEl.style.display = 'none'; }
