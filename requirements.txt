@@ -5,3 +5,5 @@ qrcode[pil]==7.4.2
 waitress==3.0.0
 Werkzeug==3.0.3
 python-dotenv==1.0.1
+jupyterlite-core
+jupyterlite-pyodide-kernel

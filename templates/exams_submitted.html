@@ -3,6 +3,9 @@
 <div class="card">
   <h3>{{ exam.title }}</h3>
   <p class="muted">Your submission was received at {{ submission.submitted_at.strftime("%b %d %H:%M:%S UTC") if submission.submitted_at else "now" }}.</p>
+  {% if submission.max_score %}
+    <p class="muted">Score: <strong>{{ "%.1f"|format(submission.score or 0) }} / {{ "%.1f"|format(submission.max_score) }}</strong></p>
+  {% endif %}
   <p class="muted">You may close this tab. If you need to review your answers, contact your instructor.</p>
   <a class="btn" href="{{ url_for('index') }}" style="margin-top:12px;">Back to home</a>
 </div>

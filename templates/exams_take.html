@@ -40,7 +40,7 @@
     {% if question %}
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
-        <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }} • {{ q.type|capitalize }}</div>
+        <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • {{ q.title }}{% endif %}</div>
         <p class="q" style="margin:8px 0 12px 0;">{{ q.prompt }}</p>
         {% if q.code_snippet %}
           <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
@@ -80,19 +80,53 @@
               <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px;">{{ q.function_signature }}</pre>
             </div>
           {% endif %}
+          {% set raw_samples = q.samples or [] %}
+          {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
           <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
-          {% if q.samples %}
+          {% if raw_samples %}
             <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
               <div class="row" style="justify-content:space-between; align-items:center;">
                 <strong>Sample tests</strong>
-                <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ q.samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
+                {% if public_samples %}
+                  <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
+                {% endif %}
               </div>
-              <p class="muted" style="margin:6px 0;">Runs execute in-browser using Pyodide. Outputs appear below.</p>
+              {% if public_samples %}
+                <ul style="list-style:none; padding:0; margin:10px 0;">
+                  {% for sample in public_samples %}
+                    <li style="margin-bottom:8px; border:1px dashed #334155; border-radius:8px; padding:8px;">
+                      <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
+                      {% if q.mode == "function" %}
+                        <div class="muted">Call: <code>{{ sample.call or sample.input }}</code></div>
+                      {% else %}
+                        <div class="muted">Input:</div>
+                        <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.input }}</pre>
+                      {% endif %}
+                      <div class="muted">Expected output:</div>
+                      <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.expected or sample.output }}</pre>
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted" style="margin:10px 0;">No public sample tests are available for this question.</p>
+              {% endif %}
               <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
             </div>
           {% endif %}
+          <div style="margin-top:12px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
+            <strong>Try your own input</strong>
+            {% if q.mode == "function" %}
+              <label style="display:block; margin-top:6px;">Function call</label>
+              <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)">
+            {% else %}
+              <label style="display:block; margin-top:6px;">Standard input</label>
+              <textarea rows="4" style="width:100%;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
+            {% endif %}
+            <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+            <div data-custom-results="{{ q.id }}" style="margin-top:8px; font-size:0.9rem;"></div>
+          </div>
         {% elif q.type == "tokens" %}
           {% set tpl = q.template or "" %}
           {% set segments = tpl.split('[[blank]]') %}

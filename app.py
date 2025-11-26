@@ -1,15 +1,16 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, make_response, jsonify, abort, Response, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention, Exam, ExamSubmission)
+                    StudentStats, Intervention, Exam, ExamSubmission, Notebook)
 import qrcode
 
 # --------------------------------------------------------------------
@@ -894,11 +895,19 @@ def _normalize_exam_questions(payload):
             q_id = f"{q_id}_{idx+1}"
         seen.add(q_id)
         normalized = {"id": q_id, "type": q_type, "prompt": prompt}
+        title = (raw.get("title") or "").strip()
+        if title:
+            normalized["title"] = title
         snippet = raw.get("code_snippet")
         if isinstance(snippet, str):
             snippet = snippet.strip("\n")
             if snippet:
                 normalized["code_snippet"] = snippet
+        try:
+            points = int(raw.get("points") or 1)
+        except Exception:
+            points = 1
+        normalized["points"] = max(0, points)
 
         if q_type in ("mcq", "multi"):
             options_raw = raw.get("options") or []
@@ -910,6 +919,28 @@ def _normalize_exam_questions(payload):
                 raise ValueError("Multiple-choice questions need at least two options.")
             normalized["options"] = options
             normalized["shuffle"] = bool(raw.get("shuffle"))
+            correct_raw = raw.get("correct_indices") or []
+            correct_indices = []
+            if isinstance(correct_raw, str):
+                tokens = [tok.strip() for tok in correct_raw.replace(";", ",").split(",") if tok.strip()]
+                for tok in tokens:
+                    try:
+                        correct_indices.append(int(tok))
+                    except Exception:
+                        continue
+            elif isinstance(correct_raw, list):
+                for tok in correct_raw:
+                    try:
+                        correct_indices.append(int(tok))
+                    except Exception:
+                        continue
+            if q_type == "mcq":
+                if len(correct_indices) != 1:
+                    raise ValueError("Provide exactly one correct option index for MCQ questions.")
+            else:
+                if not correct_indices:
+                    raise ValueError("Provide at least one correct option index for multi-select questions.")
+            normalized["correct_indices"] = correct_indices
         elif q_type == "text":
             normalized["placeholder"] = (raw.get("placeholder") or "").strip()
             lines_raw = raw.get("lines") or raw.get("rows")
@@ -991,6 +1022,7 @@ def _normalize_exam_questions(payload):
                             "call": call_expr,
                             "expected": expected,
                             "input": call_expr,
+                            "hidden": bool(sample.get("hidden")),
                         })
                 if not samples_clean:
                     raise ValueError("Function code questions need at least one sample call.")
@@ -1004,6 +1036,7 @@ def _normalize_exam_questions(payload):
                             "name": name,
                             "input": sample.get("input") or "",
                             "output": sample.get("output") or "",
+                            "hidden": bool(sample.get("hidden")),
                         })
             normalized["samples"] = samples_clean
 
@@ -1054,6 +1087,189 @@ def _clear_exam_draft(exam_id):
     if isinstance(drafts, dict) and drafts.pop(str(exam_id), None) is not None:
         session["exam_drafts"] = drafts
         session.modified = True
+
+def _grade_exam_submission(exam, answers):
+    questions = exam.questions_json if isinstance(exam.questions_json, list) else []
+    answer_map = answers if isinstance(answers, dict) else {}
+    earned = 0.0
+    total = 0.0
+    details = []
+    for q in questions:
+        qid = q.get("id")
+        qtype = q.get("type")
+        points = max(0, int(q.get("points") or 1))
+        total += points
+        res = {"question_id": qid, "type": qtype, "points": points, "earned": 0.0}
+        raw_answer = answer_map.get(qid, "") or ""
+        if qtype == "mcq":
+            correct = q.get("correct_indices") or []
+            if correct:
+                try:
+                    idx = int(raw_answer)
+                except Exception:
+                    idx = None
+                if idx is not None and idx == correct[0]:
+                    res["earned"] = points
+        elif qtype == "multi":
+            correct = sorted(set(int(val) for val in (q.get("correct_indices") or [])))
+            submitted = []
+            for token in raw_answer.split("||"):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    submitted.append(int(token))
+                except Exception:
+                    continue
+            submitted = sorted(set(submitted))
+            if correct and submitted == correct:
+                res["earned"] = points
+        elif qtype == "tokens":
+            expected_tokens = q.get("correct_tokens") or []
+            submitted = [tok.strip() for tok in (raw_answer.split("||") if raw_answer else []) if tok.strip()]
+            if submitted == expected_tokens and expected_tokens:
+                res["earned"] = points
+        elif qtype == "fill":
+            answers_expected = q.get("answers") or []
+            submitted = [tok for tok in (raw_answer.split("||") if raw_answer else []) if tok]
+            case_sensitive = bool(q.get("case_sensitive"))
+            matches = len(submitted) >= len(answers_expected) and bool(answers_expected)
+            if matches:
+                for exp, got in zip(answers_expected, submitted):
+                    left = exp or ""
+                    right = got or ""
+                    if not case_sensitive:
+                        left = left.strip().lower()
+                        right = right.strip().lower()
+                    if left != right:
+                        matches = False
+                        break
+            if matches and answers_expected:
+                res["earned"] = points
+        elif qtype == "code":
+            tests = q.get("samples") or []
+            mode = q.get("mode") or "script"
+            if tests:
+                results = _run_code_tests_backend(raw_answer, tests, mode)
+                res["cases"] = results
+                total_cases = len(results)
+                passed_cases = sum(1 for r in results if r.get("status") == "passed")
+                if total_cases:
+                    res["earned"] = points * (passed_cases / total_cases)
+        details.append(res)
+        earned += res["earned"]
+    return earned, total, details
+
+def _run_code_tests_backend(code_text, tests, mode):
+    results = []
+    if not tests:
+        return results
+    if not code_text:
+        for idx, test in enumerate(tests):
+            hidden = bool(test.get("hidden"))
+            name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            results.append({
+                "name": name,
+                "status": "error",
+                "input": test.get("call") or test.get("input") or "",
+                "output": "",
+                "expected": test.get("expected") or test.get("output") or "",
+                "error": "No code submitted.",
+                "hidden": hidden,
+            })
+        return results
+    mode = (mode or "script").strip().lower()
+    if mode not in ("script", "function"):
+        mode = "script"
+    namespace = {}
+    if mode == "function":
+        try:
+            exec(code_text, namespace, namespace)
+        except Exception:
+            tb = traceback.format_exc()
+            for idx, test in enumerate(tests):
+                hidden = bool(test.get("hidden"))
+                name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                results.append({
+                    "name": name,
+                    "status": "error",
+                    "input": test.get("call") or test.get("input") or "",
+                    "output": "",
+                    "expected": test.get("expected") or test.get("output") or "",
+                    "error": tb,
+                    "hidden": hidden,
+                })
+            return results
+    for idx, test in enumerate(tests):
+        hidden = bool(test.get("hidden"))
+        name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+        if mode == "function":
+            call_expr = (test.get("call") or test.get("input") or "").strip()
+            expected_output = (test.get("expected") or test.get("output") or "")
+            status = "passed"
+            error_text = ""
+            output_value = ""
+            if not call_expr:
+                status = "error"
+                error_text = "Missing call expression."
+            else:
+                stdout = io.StringIO()
+                original_stdout = sys.stdout
+                sys.stdout = stdout
+                try:
+                    result = eval(call_expr, namespace, namespace)
+                    output_value = repr(result)
+                except Exception:
+                    status = "error"
+                    error_text = traceback.format_exc()
+                finally:
+                    sys.stdout = original_stdout
+            if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
+                status = "mismatch"
+            results.append({
+                "name": name,
+                "status": status,
+                "input": call_expr,
+                "output": output_value,
+                "expected": expected_output,
+                "error": error_text,
+                "hidden": hidden,
+            })
+        else:
+            sample_input = test.get("input") or ""
+            expected_output = (test.get("expected") or test.get("output") or "")
+            stdin = io.StringIO(sample_input)
+            stdout = io.StringIO()
+            original_stdout = sys.stdout
+            original_stdin = sys.stdin
+            original_input = builtins.input
+            sys.stdout = stdout
+            sys.stdin = stdin
+            builtins.input = lambda prompt=None: stdin.readline().rstrip("\n")
+            status = "passed"
+            error_text = ""
+            try:
+                exec(code_text, {"__name__": "__main__"})
+            except Exception:
+                status = "error"
+                error_text = traceback.format_exc()
+            finally:
+                sys.stdout = original_stdout
+                sys.stdin = original_stdin
+                builtins.input = original_input
+            output_value = stdout.getvalue()
+            if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
+                status = "mismatch"
+            results.append({
+                "name": name,
+                "status": status,
+                "input": sample_input,
+                "output": output_value,
+                "expected": expected_output,
+                "error": error_text,
+                "hidden": hidden,
+            })
+    return results
 
 @app.route("/exams")
 @require_user()
@@ -1322,10 +1538,14 @@ def exam_take(code):
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
+            grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.answers_json = answers
             submission.status = "submitted"
             submission.submitted_at = datetime.utcnow()
             submission.last_activity_at = submission.submitted_at
+            submission.score = grade_score
+            submission.max_score = grade_total
+            submission.grading_json = grade_details
             db.session.commit()
             _clear_exam_draft(exam.id)
             return render_template(
@@ -1414,6 +1634,120 @@ def exams_log_run(code):
     submission.last_activity_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
+
+# --------------------------------------------------------------------
+# Notebook management (JupyterLite)
+# --------------------------------------------------------------------
+
+def _filename_from_nb(nb_json, fallback: str) -> str:
+    """Return notebook name from metadata (chalk_name) or fallback."""
+    try:
+        meta = (nb_json.get("metadata") or {})
+        name = (meta.get("chalk_name") or "").strip()
+        return name if name else fallback
+    except Exception:
+        return fallback
+
+@app.route("/notebooks")
+@require_student()
+def notebooks_page():
+    return render_template("notebooks.html", user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/my-notebooks")
+@require_student()
+def my_notebooks_page():
+    s = current_student()
+    rows = (Notebook.query
+            .filter_by(student_id=s.id)
+            .order_by(Notebook.updated_at.desc())
+            .all())
+    items = []
+    for nb in rows:
+        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+        items.append({"id": nb.id, "name": fname, "updated_at": nb.updated_at})
+    return render_template("my_notebooks.html", notebooks=items, user=current_user(), student_name=session.get("student_name"))
+
+@app.get("/api/csrf")
+@require_student()
+def api_csrf():
+    return jsonify({"csrf": csrf_token()})
+
+@app.get("/api/notebooks")
+@require_student()
+def notebooks_list():
+    s = current_student()
+    rows = (Notebook.query
+            .filter_by(student_id=s.id)
+            .order_by(Notebook.updated_at.desc())
+            .all())
+    payload = []
+    for nb in rows:
+        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+        payload.append({
+            "id": nb.id,
+            "name": fname,
+            "updated_at": nb.updated_at.isoformat()
+        })
+    return jsonify({"items": payload})
+
+@app.get("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_get(nb_id: int):
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
+    return jsonify({"id": nb.id, "name": name, "content": nb.content_json})
+
+@app.post("/api/notebooks")
+@require_student()
+def notebooks_create():
+    data = request.get_json(silent=True) or {}
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    content = data.get("content")
+    if not isinstance(content, dict):
+        abort(400, description="Missing/invalid content")
+    s = current_student()
+    nb = Notebook(student_id=s.id, content_json=content)
+    db.session.add(nb)
+    db.session.commit()
+    return jsonify({"id": nb.id})
+
+@app.put("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_update(nb_id: int):
+    data = request.get_json(silent=True) or {}
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    content = data.get("content")
+    if not isinstance(content, dict):
+        abort(400, description="Missing/invalid content")
+
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    nb.content_json = content
+    db.session.commit()
+    return jsonify({"ok": True})
+
+@app.delete("/api/notebooks/<int:nb_id>")
+@require_student()
+def notebooks_delete(nb_id: int):
+    hdr = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(hdr, csrf_token()):
+        abort(400, description="Bad CSRF")
+    s = current_student()
+    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
+    if not nb:
+        raise NotFound()
+    db.session.delete(nb)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Lecture interaction dashboard

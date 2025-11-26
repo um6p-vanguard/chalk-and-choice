@@ -159,6 +159,9 @@ class ExamSubmission(db.Model):
     submitted_at = db.Column(db.DateTime, nullable=True)
     last_activity_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     ip_address = db.Column(db.String(64), nullable=True)
+    score = db.Column(db.Float, default=0.0, nullable=False)
+    max_score = db.Column(db.Float, default=0.0, nullable=False)
+    grading_json = db.Column(JSONText, nullable=True)
 
     exam = db.relationship('Exam', backref=db.backref('submissions', cascade="all,delete-orphan"))
     student = db.relationship('Student')
@@ -204,3 +207,11 @@ class Intervention(db.Model):
     poll_id = db.Column(db.Integer, db.ForeignKey('polls.id', ondelete="SET NULL"))
     status = db.Column(db.String(20), default="picked", nullable=False)  # picked|running|completed|skipped
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+class Notebook(db.Model):
+    __tablename__ = "notebooks"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    content_json = db.Column(JSONText, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

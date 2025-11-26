@@ -108,6 +108,16 @@
       <button type="button" class="btn" data-action="remove-question">Remove</button>`;
     card.appendChild(header);
 
+    const titleLabel = document.createElement("label");
+    titleLabel.textContent = "Question title (optional)";
+    card.appendChild(titleLabel);
+    const titleInput = document.createElement("input");
+    titleInput.type = "text";
+    titleInput.dataset.field = "title";
+    titleInput.placeholder = "e.g., Python Lists";
+    titleInput.value = data.title || "";
+    card.appendChild(titleInput);
+
     const promptLabel = document.createElement("label");
     promptLabel.textContent = "Prompt";
     card.appendChild(promptLabel);
@@ -116,6 +126,16 @@
     prompt.rows = 3;
     prompt.value = data.prompt || "";
     card.appendChild(prompt);
+
+    const pointsLabel = document.createElement("label");
+    pointsLabel.textContent = "Points";
+    card.appendChild(pointsLabel);
+    const pointsInput = document.createElement("input");
+    pointsInput.type = "number";
+    pointsInput.min = "0";
+    pointsInput.dataset.field = "points";
+    pointsInput.value = data.points != null ? data.points : 1;
+    card.appendChild(pointsInput);
 
     const codeLabel = document.createElement("label");
     codeLabel.textContent = "Code snippet (optional)";
@@ -128,13 +148,13 @@
     card.appendChild(codeSnippet);
 
     if (type === "mcq") {
-      buildChoiceEditor(card, data);
+      buildChoiceEditor(card, data, "mcq");
     } else if (type === "multi") {
       const hint = document.createElement("p");
       hint.className = "muted";
       hint.textContent = "Students can select multiple answers.";
       card.appendChild(hint);
-      buildChoiceEditor(card, data);
+      buildChoiceEditor(card, data, "multi");
     } else if (type === "text") {
       const placeholderLabel = document.createElement("label");
       placeholderLabel.textContent = "Placeholder";
@@ -347,7 +367,7 @@
     return card;
   }
 
-  function buildChoiceEditor(card, data = {}) {
+  function buildChoiceEditor(card, data = {}, kind = "mcq") {
     const wrapper = document.createElement("div");
     wrapper.style.display = "flex";
     wrapper.style.flexDirection = "column";
@@ -406,6 +426,20 @@
     addBtn.textContent = "Add option";
     addBtn.addEventListener("click", () => addRow(""));
     wrapper.appendChild(addBtn);
+
+    const correctLabel = document.createElement("label");
+    correctLabel.textContent = kind === "multi"
+      ? "Correct option indexes (comma separated, 0-based)"
+      : "Correct option index (0-based)";
+    wrapper.appendChild(correctLabel);
+    const correctInput = document.createElement("input");
+    correctInput.type = "text";
+    correctInput.dataset.field = "choices-correct";
+    const existingCorrect = Array.isArray(data.correct_indices)
+      ? data.correct_indices.join(", ")
+      : (data.correct_indices || "");
+    correctInput.value = existingCorrect;
+    wrapper.appendChild(correctInput);
   }
 
   function buildScriptSampleRow(sample = {}) {
@@ -444,6 +478,18 @@
     outputField.dataset.field = "sample-output";
     outputField.value = sample.output || "";
     wrapper.appendChild(outputField);
+
+    const hiddenLabel = document.createElement("label");
+    hiddenLabel.style.display = "flex";
+    hiddenLabel.style.alignItems = "center";
+    hiddenLabel.style.gap = "6px";
+    const hiddenInput = document.createElement("input");
+    hiddenInput.type = "checkbox";
+    hiddenInput.dataset.field = "sample-hidden";
+    hiddenInput.checked = !!sample.hidden;
+    hiddenLabel.appendChild(hiddenInput);
+    hiddenLabel.append("Hidden?");
+    wrapper.appendChild(hiddenLabel);
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
@@ -495,6 +541,18 @@
     expectedInput.value = sample.expected || sample.output || "";
     wrapper.appendChild(expectedInput);
 
+    const hiddenLabel = document.createElement("label");
+    hiddenLabel.style.display = "flex";
+    hiddenLabel.style.alignItems = "center";
+    hiddenLabel.style.gap = "6px";
+    const hiddenInput = document.createElement("input");
+    hiddenInput.type = "checkbox";
+    hiddenInput.dataset.field = "sample-hidden";
+    hiddenInput.checked = !!sample.hidden;
+    hiddenLabel.appendChild(hiddenInput);
+    hiddenLabel.append("Hidden?");
+    wrapper.appendChild(hiddenLabel);
+
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "btn";
@@ -513,11 +571,23 @@
       const id = card.dataset.questionId || randomId();
       const prompt = getFieldValue(card, "prompt");
       const payload = { id, type, prompt };
+      const title = getFieldValue(card, "title");
+      if (title) payload.title = title;
       const snippet = getFieldValue(card, "code-snippet");
       if (snippet) payload.code_snippet = snippet;
+      const pointsRaw = parseInt(getFieldValue(card, "points"), 10);
+      payload.points = Number.isFinite(pointsRaw) ? Math.max(0, pointsRaw) : 1;
       if (type === "mcq" || type === "multi") {
         const rows = card.querySelectorAll("[data-choice-option]");
         payload.options = Array.from(rows).map((el) => el.value.trim()).filter(Boolean);
+        const correctRaw = getFieldValue(card, "choices-correct");
+        if (correctRaw) {
+          const indices = correctRaw
+            .split(/[,\\s]+/)
+            .map((val) => parseInt(val, 10))
+            .filter((num) => Number.isFinite(num));
+          if (indices.length) payload.correct_indices = indices;
+        }
       } else if (type === "text") {
         payload.placeholder = getFieldValue(card, "placeholder");
         payload.lines = getFieldValue(card, "lines") || 4;
@@ -533,6 +603,7 @@
             name: getFieldValue(row, "sample-name"),
             call: getFieldValue(row, "sample-call"),
             expected: getFieldValue(row, "sample-expected"),
+            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         } else {
           const rows = card.querySelectorAll('[data-sample-list="script"] [data-sample-row]');
@@ -540,6 +611,7 @@
             name: getFieldValue(row, "sample-name"),
             input: getFieldValue(row, "sample-input"),
             output: getFieldValue(row, "sample-output"),
+            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         }
       } else if (type === "tokens") {
@@ -567,7 +639,8 @@
     const root = document.querySelector("[data-exam-take]");
     if (!root) return;
     const buttons = root.querySelectorAll("[data-run-samples]");
-    if (!buttons.length) return;
+    const customButtons = root.querySelectorAll("[data-run-custom]");
+    if (!buttons.length && !customButtons.length) return;
     let pyodidePromise = null;
 
     const ensurePyodide = async () => {
@@ -662,33 +735,14 @@
       });
     };
 
-    buttons.forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const samplesRaw = btn.getAttribute("data-samples") || "[]";
-        let samples = [];
-        try {
-          samples = JSON.parse(samplesRaw);
-        } catch (err) {
-          console.warn("Bad sample payload", err);
-        }
-        const questionId = btn.dataset.question;
-        const codeArea = root.querySelector(`[data-code-input="${questionId}"]`);
-        const resultsContainer = root.querySelector(`[data-results="${questionId}"]`);
-        if (!codeArea || !resultsContainer) return;
-        if (!samples.length) {
-          resultsContainer.textContent = "No samples configured for this question.";
-          return;
-        }
-        const originalText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Running...";
-        resultsContainer.textContent = "Preparing Pyodide...";
-        try {
-          const pyodide = await ensurePyodide();
-          pyodide.globals.set("runner_code", codeArea.value);
-          pyodide.globals.set("runner_samples", samples);
-          pyodide.globals.set("runner_mode", btn.getAttribute("data-mode") || "script");
-          const output = await pyodide.runPythonAsync(`
+    const executeSamples = async (triggerBtn, samples, modeOverride, codeOverride) => {
+      const pyodide = await ensurePyodide();
+      const codeInput = root.querySelector(`[data-code-input="${triggerBtn.dataset.question}"]`);
+      const codeValue = codeOverride !== undefined ? codeOverride : (codeInput ? codeInput.value : "");
+      pyodide.globals.set("runner_code", codeValue);
+      pyodide.globals.set("runner_samples", samples);
+      pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
+      const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins
 code = str(runner_code)
 samples = runner_samples.to_py()
@@ -727,7 +781,7 @@ for sample in samples:
                 error_text = traceback.format_exc()
             finally:
                 sys.stdout = original_stdout
-        if status == "passed" and output_value.strip() != expected_output.strip():
+        if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
             status = "mismatch"
         results.append({
             "name": name,
@@ -739,7 +793,7 @@ for sample in samples:
         })
     else:
         sample_input = sample.get("input") or ""
-        expected_output = sample.get("output") or ""
+        expected_output = sample.get("expected") or sample.get("output") or ""
         stdin = io.StringIO(sample_input)
         stdout = io.StringIO()
         original_stdout = sys.stdout
@@ -760,7 +814,7 @@ for sample in samples:
             sys.stdin = original_stdin
             builtins.input = original_input
         output_value = stdout.getvalue()
-        if status == "passed" and output_value.strip() != expected_output.strip():
+        if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
             status = "mismatch"
         results.append({
             "name": name,
@@ -771,11 +825,36 @@ for sample in samples:
             "error": error_text,
         })
 json.dumps(results)
-          `);
-          pyodide.globals.delete("runner_code");
-          pyodide.globals.delete("runner_samples");
-          pyodide.globals.delete("runner_mode");
-          const parsed = JSON.parse(output);
+      `);
+      pyodide.globals.delete("runner_code");
+      pyodide.globals.delete("runner_samples");
+      pyodide.globals.delete("runner_mode");
+      return JSON.parse(output);
+    };
+
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const samplesRaw = btn.getAttribute("data-samples") || "[]";
+        let samples = [];
+        try {
+          samples = JSON.parse(samplesRaw);
+        } catch (err) {
+          console.warn("Bad sample payload", err);
+        }
+        const questionId = btn.dataset.question;
+        const codeArea = root.querySelector(`[data-code-input="${questionId}"]`);
+        const resultsContainer = root.querySelector(`[data-results="${questionId}"]`);
+        if (!codeArea || !resultsContainer) return;
+        if (!samples.length) {
+          resultsContainer.textContent = "No samples configured for this question.";
+          return;
+        }
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Running...";
+        resultsContainer.textContent = "Preparing Pyodide...";
+        try {
+          const parsed = await executeSamples(btn, samples, btn.getAttribute("data-mode") || "script", codeArea.value);
           renderResults(resultsContainer, parsed);
           postLog(questionId, parsed);
         } catch (err) {
@@ -784,6 +863,37 @@ json.dumps(results)
         } finally {
           btn.disabled = false;
           btn.textContent = originalText;
+        }
+      });
+    });
+
+    customButtons.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const questionId = btn.dataset.question;
+        const mode = btn.dataset.mode || "script";
+        const container = root.querySelector(`[data-custom-results="${questionId}"]`);
+        const codeArea = root.querySelector(`[data-code-input="${questionId}"]`);
+        if (!questionId || !container) return;
+        let samples = [];
+        if (mode === "function") {
+          const callInput = root.querySelector(`[data-custom-call="${questionId}"]`);
+          const callExpr = callInput ? callInput.value.trim() : "";
+          if (!callExpr) {
+            container.textContent = "Enter a function call to run.";
+            return;
+          }
+          samples = [{ name: "Custom run", call: callExpr, input: callExpr, expected: "" }];
+        } else {
+          const stdinField = root.querySelector(`[data-custom-stdin="${questionId}"]`);
+          const stdinValue = stdinField ? stdinField.value : "";
+          samples = [{ name: "Custom run", input: stdinValue, expected: "" }];
+        }
+        container.textContent = "Running custom input...";
+        try {
+          const results = await executeSamples(btn, samples, mode, codeArea ? codeArea.value : undefined);
+          renderResults(container, results);
+        } catch (err) {
+          container.textContent = `Unable to run: ${err.message || err}`;
         }
       });
     });

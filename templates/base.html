@@ -95,6 +95,8 @@
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% elif student_name %}
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
+          <a href="{{ url_for('my_notebooks_page') }}" style="margin-left:10px;">My Notebooks</a>
+          <a href="{{ url_for('notebooks_page') }}" style="margin-left:10px;">Notebooks</a>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% else %}
           <a class="btn" href="{{ url_for('login') }}">Login</a>

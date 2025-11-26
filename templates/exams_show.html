@@ -60,6 +60,7 @@
         <tr>
           <th>Student</th>
           <th>Status</th>
+          <th>Score</th>
           <th>Started</th>
           <th>Last activity</th>
           <th>Code runs</th>
@@ -74,6 +75,13 @@
               <span style="color:#4ade80;">Submitted</span>
             {% else %}
               <span class="muted">In progress</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if sub.max_score %}
+              {{ "%.1f"|format(sub.score or 0) }} / {{ "%.1f"|format(sub.max_score) }}
+            {% else %}
+              <span class="muted">—</span>
             {% endif %}
           </td>
           <td>{{ sub.started_at.strftime("%b %d %H:%M:%S") if sub.started_at else "—" }}</td>

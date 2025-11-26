@@ -1,0 +1,6 @@
+{
+  "LiteBuildConfig": {
+    "contents": ["jlite/contents"],
+    "output_dir": "static/jlite"
+  }
+}
