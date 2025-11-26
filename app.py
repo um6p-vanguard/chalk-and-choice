@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, re
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, re, sys, subprocess, tempfile, resource, signal
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -98,6 +98,66 @@ def compare_outputs(actual, expected):
     
     # Case-insensitive comparison as last resort (for text outputs)
     return actual_normalized.lower() == expected_normalized.lower()
+
+# --------------------------------------------------------------------
+# Server-side code execution helper (minimal sandbox)
+# --------------------------------------------------------------------
+def _run_python_code_isolated(code: str, input_text: str, timeout_sec: float = 3.0):
+    """Run arbitrary Python code with limited resources and capture stdout.
+    This is used for grading code exam questions on the server without
+    exposing hidden tests to clients.
+    """
+    start = time.perf_counter()
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "main.py")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(code or "")
+
+            def _limit_resources():
+                try:
+                    # CPU seconds
+                    resource.setrlimit(resource.RLIMIT_CPU, (2, 2))
+                    # Address space (approx memory) ~256MB
+                    mem = 256 * 1024 * 1024
+                    resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
+                    # File size limits ~1MB
+                    resource.setrlimit(resource.RLIMIT_FSIZE, (1024 * 1024, 1024 * 1024))
+                    # Prevent core dumps
+                    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+                except Exception:
+                    pass
+
+            env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env["PYTHONIOENCODING"] = "utf-8"
+
+            proc = subprocess.run(
+                [sys.executable, "-S", path],
+                input=(input_text or "").encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=tmpdir,
+                timeout=timeout_sec,
+                env=env,
+                preexec_fn=_limit_resources,
+            )
+            elapsed = int((time.perf_counter() - start) * 1000)
+            out = proc.stdout.decode("utf-8", errors="replace")
+            err = proc.stderr.decode("utf-8", errors="replace")
+            return {
+                "success": proc.returncode == 0,
+                "output": out,
+                "error": err,
+                "time_ms": elapsed,
+            }
+    except subprocess.TimeoutExpired as te:
+        elapsed = int((time.perf_counter() - start) * 1000)
+        out = te.stdout.decode("utf-8", errors="replace") if te.stdout else ""
+        return {"success": False, "output": out, "error": "Timeout", "time_ms": elapsed}
+    except Exception as e:
+        elapsed = int((time.perf_counter() - start) * 1000)
+        return {"success": False, "output": "", "error": str(e), "time_ms": elapsed}
 
 # --------------------------------------------------------------------
 # Config
@@ -462,6 +522,9 @@ def index():
         exams_data = []
         now = datetime.now()
         for exm in Exam.query.filter_by(is_published=True).order_by(Exam.start_at.asc()).all():
+            # Hide exams that have already ended
+            if exm.end_at and now > exm.end_at:
+                continue
             is_open = bool(exm.start_at and exm.start_at <= now and (exm.end_at is None or now <= exm.end_at))
             sub = ExamSubmission.query.filter_by(exam_id=exm.id, student_id=s.id).first()
             submitted = bool(sub and sub.submitted_at)
@@ -3852,7 +3915,10 @@ def api_exam_question(code, order):
             "answer": (ans.answer_json if ans else None)
         })
     exo = q.code_exercise
-    saved = ans.answer_json if ans else None
+    # remove test_results from answer_json
+    saved = (dict(ans.answer_json) if ans and ans.answer_json else None)
+    if saved:
+        saved.pop("test_results", None)
     if exo:
         visible_tests = [t for t in (exo.test_cases_json or []) if not t.get("hidden")]
         starter = q.code_starter_code or exo.starter_code
@@ -3861,10 +3927,10 @@ def api_exam_question(code, order):
             "order": q.order,
             "title": q.title or exo.title,
             "prompt": q.prompt or exo.description,
+            "points": q.points,
             "starter_code": starter,
             "default_input": exo.default_input or "",
             "visible_test_cases": visible_tests,
-            "points": q.points,
             "answer": saved
         })
     # Inline code (no linked exercise/tests)
@@ -3895,10 +3961,13 @@ def api_exam_question_all_tests(code, order):
     q = ExamQuestion.query.filter_by(exam_id=exm.id, order=order).first_or_404()
     if q.q_type != "code":
         abort(400)
+    # Return ONLY visible (non-hidden) tests to the client
     if not q.code_exercise:
-        return jsonify({"test_cases": (q.code_test_cases_json or []), "points": q.points})
+        visible = [t for t in (q.code_test_cases_json or []) if not t.get("hidden")]
+        return jsonify({"test_cases": visible})
     exo = q.code_exercise
-    return jsonify({"test_cases": exo.test_cases_json or [], "points": q.points})
+    visible = [t for t in (exo.test_cases_json or []) if not t.get("hidden")]
+    return jsonify({"test_cases": visible})
 
 @app.post("/api/exam/<code>/answer/<int:order>")
 @require_student()
@@ -3932,41 +4001,28 @@ def api_exam_answer(code, order):
         ans.answer_json = {"selected": selected_set}
         ans.score_awarded = award
         db.session.commit()
-        return jsonify({"ok": True, "score": award})
+        return jsonify({"ok": True})
     exo = q.code_exercise
-    expected_tests = (exo.test_cases_json if exo else (q.code_test_cases_json or [])) or []
-    posted = data.get("test_results") or []
-    visible_passed = 0
-    visible_total = 0
-    hidden_passed = 0
-    hidden_total = 0
+    # Grade against ALL tests (visible + hidden) on the server
+    expected_tests_all = (exo.test_cases_json if exo else (q.code_test_cases_json or [])) or []
     validated_results = []
-    for i, exp in enumerate(expected_tests):
-        res = posted[i] if i < len(posted) else {}
-        actual_output = (res.get("actual") or "")
+    for i, exp in enumerate(expected_tests_all):
+        run_res = _run_python_code_isolated(data.get("code", ""), exp.get("input") or "", timeout_sec=3.0)
+        actual_output = run_res.get("output") or ""
         expected_output = exp.get("expected_output")
         is_correct = compare_outputs(str(actual_output), str(expected_output))
         item = {
             "test_num": i + 1,
             "hidden": bool(exp.get("hidden", False)),
             "passed": bool(is_correct),
-            "input": res.get("input", ""),
+            "input": exp.get("input", ""),
             "expected": expected_output,
             "actual": actual_output,
-            "time_ms": res.get("time_ms", 0)
+            "time_ms": int(run_res.get("time_ms") or 0),
         }
-        if item["hidden"]:
-            hidden_total += 1
-            if is_correct:
-                hidden_passed += 1
-        else:
-            visible_total += 1
-            if is_correct:
-                visible_passed += 1
         validated_results.append(item)
-    total_passed = visible_passed + hidden_passed
-    total_tests = visible_total + hidden_total
-    award = float(q.points) if (total_tests > 0 and total_passed == total_tests) else 0.0
+    ok_all = all(t.get("passed") for t in validated_results) if validated_results else False
+    award = float(q.points if ok_all else 0)
     ans = ExamAnswer.query.filter_by(submission_id=sub.id, question_id=q.id).first()
     if not ans:
         ans = ExamAnswer(submission_id=sub.id, question_id=q.id)
@@ -3974,7 +4030,7 @@ def api_exam_answer(code, order):
     ans.answer_json = {"code": data.get("code", ""), "test_results": validated_results}
     ans.score_awarded = award
     db.session.commit()
-    return jsonify({"ok": True, "score": round(award, 2)})
+    return jsonify({"ok": True})
 
 @app.post("/api/exam/<code>/submit")
 @require_student()
@@ -3994,7 +4050,7 @@ def api_exam_submit(code):
     total = db.session.query(db.func.coalesce(db.func.sum(ExamAnswer.score_awarded), 0)).filter_by(submission_id=sub.id).scalar() or 0
     sub.score = float(total)
     db.session.commit()
-    return jsonify({"ok": True, "score": round(sub.score, 2)})
+    return jsonify({"ok": True})
 
 def main():
     parser = argparse.ArgumentParser()
