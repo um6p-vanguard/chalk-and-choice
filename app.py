@@ -894,8 +894,13 @@ def _normalize_exam_questions(payload):
             q_id = f"{q_id}_{idx+1}"
         seen.add(q_id)
         normalized = {"id": q_id, "type": q_type, "prompt": prompt}
+        snippet = raw.get("code_snippet")
+        if isinstance(snippet, str):
+            snippet = snippet.strip("\n")
+            if snippet:
+                normalized["code_snippet"] = snippet
 
-        if q_type == "mcq":
+        if q_type in ("mcq", "multi"):
             options_raw = raw.get("options") or []
             if isinstance(options_raw, str):
                 options = [line.strip() for line in options_raw.splitlines() if line.strip()]
@@ -913,6 +918,47 @@ def _normalize_exam_questions(payload):
             except Exception:
                 line_count = 4
             normalized["lines"] = max(1, min(line_count, 12))
+        elif q_type == "tokens":
+            template = (raw.get("template") or "").strip()
+            if "[[blank]]" not in template:
+                raise ValueError("Token questions require [[blank]] markers.")
+            blank_count = template.count("[[blank]]")
+            correct_raw = raw.get("correct_tokens") or ""
+            if isinstance(correct_raw, str):
+                tokens = [t.strip() for t in correct_raw.replace("\n", ",").split(",") if t.strip()]
+            elif isinstance(correct_raw, list):
+                tokens = [str(t).strip() for t in correct_raw if str(t).strip()]
+            else:
+                tokens = []
+            if len(tokens) != blank_count:
+                raise ValueError("Provide one correct token for each [[blank]].")
+            distractor_raw = raw.get("distractor_tokens") or ""
+            if isinstance(distractor_raw, str):
+                distractors = [t.strip() for t in distractor_raw.replace("\n", ",").split(",") if t.strip()]
+            elif isinstance(distractor_raw, list):
+                distractors = [str(t).strip() for t in distractor_raw if str(t).strip()]
+            else:
+                distractors = []
+            normalized["template"] = template
+            normalized["correct_tokens"] = tokens
+            normalized["distractor_tokens"] = distractors
+        elif q_type == "fill":
+            template = (raw.get("template") or "").strip()
+            if "[[blank]]" not in template:
+                raise ValueError("Fill questions require [[blank]] markers.")
+            blank_count = template.count("[[blank]]")
+            answers_raw = raw.get("answers") or ""
+            if isinstance(answers_raw, str):
+                answers = [a.strip() for a in answers_raw.replace("\n", ",").split(",") if a.strip()]
+            elif isinstance(answers_raw, list):
+                answers = [str(a).strip() for a in answers_raw if str(a).strip()]
+            else:
+                answers = []
+            if len(answers) != blank_count:
+                raise ValueError("Provide one answer per [[blank]].")
+            normalized["template"] = template
+            normalized["answers"] = answers
+            normalized["case_sensitive"] = bool(raw.get("case_sensitive"))
         else:  # code
             statement = (raw.get("statement") or "").strip()
             if not statement:
@@ -1191,6 +1237,17 @@ def exam_take(code):
         submission.last_activity_at = datetime.utcnow()
         db.session.commit()
 
+    already_submitted = bool(submission and submission.status == "submitted")
+    if already_submitted and not preview:
+        _clear_exam_draft(exam.id)
+        return render_template(
+            "exams_submitted.html",
+            exam=exam,
+            submission=submission,
+            user=user,
+            student_name=session.get("student_name"),
+        )
+
     draft_answers = _get_exam_draft(exam.id) if student else {}
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
@@ -1231,7 +1288,12 @@ def exam_take(code):
         if student and current_question:
             qid = current_question.get("id")
             if qid:
-                val = request.form.get(f"answer_{qid}", "")
+                field = f"answer_{qid}"
+                if current_question.get("type") == "multi":
+                    vals = request.form.getlist(field)
+                    val = "||".join(vals)
+                else:
+                    val = request.form.get(field, "")
                 draft_answers[qid] = val
                 previous_answers[qid] = val
                 _save_exam_draft(exam.id, draft_answers)
@@ -1287,7 +1349,16 @@ def exam_take(code):
                 target = min(total_questions - 1, q_index + 1) if total_questions else 0
             return redirect(url_for("exam_take", code=code, q=target))
 
-    current_question = questions[q_index] if total_questions else None
+    current_question = dict(questions[q_index]) if total_questions else None
+    if current_question and current_question.get("type") == "tokens":
+        options = list(current_question.get("correct_tokens") or [])
+        distractors = current_question.get("distractor_tokens") or []
+        if isinstance(distractors, list):
+            options.extend([t for t in distractors if t])
+        random.shuffle(options)
+        current_question["token_options"] = options
+        template = current_question.get("template") or ""
+        current_question["blank_count"] = template.count("[[blank]]")
 
     return render_template(
         "exams_take.html",

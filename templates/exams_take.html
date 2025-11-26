@@ -42,16 +42,29 @@
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
         <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }} • {{ q.type|capitalize }}</div>
         <p class="q" style="margin:8px 0 12px 0;">{{ q.prompt }}</p>
-        {% if q.type == "mcq" %}
-          {% set prev = previous_answers.get(q.id) %}
-          {% set prev_value = '' if prev is none else prev ~ '' %}
-          {% for option in q.options %}
-            {% set opt_value = loop.index0 ~ '' %}
-            <label style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-              <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if prev_value == opt_value %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
-              <span>{{ option }}</span>
-            </label>
-          {% endfor %}
+        {% if q.code_snippet %}
+          <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
+        {% endif %}
+        {% if q.type in ("mcq", "multi") %}
+          {% set prev_raw = previous_answers.get(q.id) or '' %}
+          {% if q.type == "multi" %}
+            {% set selected = prev_raw.split('||') if prev_raw else [] %}
+          {% else %}
+            {% set selected = [prev_raw|string] if prev_raw not in (None, '') else [] %}
+          {% endif %}
+          <div class="choice-list">
+            {% for option in q.options or [] %}
+              {% set opt_value = loop.index0 ~ '' %}
+              <label class="choice-option">
+                {% if q.type == "multi" %}
+                  <input type="checkbox" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                {% else %}
+                  <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                {% endif %}
+                <span>{{ option }}</span>
+              </label>
+            {% endfor %}
+          </div>
         {% elif q.type == "text" %}
           <textarea name="answer_{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
         {% elif q.type == "code" %}
@@ -80,6 +93,50 @@
               <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
             </div>
           {% endif %}
+        {% elif q.type == "tokens" %}
+          {% set tpl = q.template or "" %}
+          {% set segments = tpl.split('[[blank]]') %}
+          {% set existing_value = previous_answers.get(q.id, '') or '' %}
+          {% set filled = existing_value.split('||') if existing_value else [] %}
+          <div data-token-question>
+            <div class="token-expression">
+              {% for segment in segments %}
+                {% if segment %}
+                  <span>{{ segment }}</span>
+                {% endif %}
+                {% if not loop.last %}
+                  {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
+                  <button type="button" class="token-slot" data-token-slot data-placeholder="____">{{ slot_val or '____' }}</button>
+                {% endif %}
+              {% endfor %}
+            </div>
+            <input type="hidden" name="answer_{{ q.id }}" data-token-answer value="{{ existing_value }}">
+            <div class="token-bank">
+              {% set base_tokens = q.correct_tokens or [] %}
+              {% set extra_tokens = q.distractor_tokens or [] %}
+              {% set options = q.token_options if q.token_options else (base_tokens + extra_tokens) %}
+              {% for opt in options %}
+                <button type="button" class="token-option" data-token-option data-token-value="{{ opt }}">{{ opt }}</button>
+              {% endfor %}
+            </div>
+          </div>
+        {% elif q.type == "fill" %}
+          {% set tpl = q.template or "" %}
+          {% set segments = tpl.split('[[blank]]') %}
+          {% set existing_value = previous_answers.get(q.id, '') or '' %}
+          {% set filled = existing_value.split('||') if existing_value else [] %}
+          <div data-fill-question>
+            <div class="fill-expression">
+              {% for segment in segments %}
+                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if not loop.last %}
+                  {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
+                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}">
+                {% endif %}
+              {% endfor %}
+            </div>
+            <input type="hidden" name="answer_{{ q.id }}" data-fill-answer value="{{ existing_value }}">
+          </div>
         {% endif %}
       </div>
     {% else %}

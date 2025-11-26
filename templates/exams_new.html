@@ -50,6 +50,9 @@
         <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'mcq' %}btn-primary{% endif %}" data-type-choice="mcq">Multiple choice</button>
         <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'text' %}btn-primary{% endif %}" data-type-choice="text">Text answer</button>
         <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'code' %}btn-primary{% endif %}" data-type-choice="code">Python code</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'tokens' %}btn-primary{% endif %}" data-type-choice="tokens">Token fill</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'multi' %}btn-primary{% endif %}" data-type-choice="multi">Multi-select</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'fill' %}btn-primary{% endif %}" data-type-choice="fill">Fill-in text</button>
       </div>
       <button type="button" class="btn" data-add-question>Add question</button>
     </div>

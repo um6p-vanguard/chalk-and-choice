@@ -117,16 +117,24 @@
     prompt.value = data.prompt || "";
     card.appendChild(prompt);
 
+    const codeLabel = document.createElement("label");
+    codeLabel.textContent = "Code snippet (optional)";
+    card.appendChild(codeLabel);
+    const codeSnippet = document.createElement("textarea");
+    codeSnippet.dataset.field = "code-snippet";
+    codeSnippet.rows = 4;
+    codeSnippet.placeholder = "e.g., mylist = ['apple', 'banana']";
+    codeSnippet.value = data.code_snippet || "";
+    card.appendChild(codeSnippet);
+
     if (type === "mcq") {
-      const optionsLabel = document.createElement("label");
-      optionsLabel.textContent = "Options (one per line)";
-      card.appendChild(optionsLabel);
-      const options = document.createElement("textarea");
-      options.dataset.field = "options";
-      options.rows = 4;
-      options.placeholder = "Option A\nOption B\nOption C";
-      options.value = Array.isArray(data.options) ? data.options.join("\n") : (data.options || "");
-      card.appendChild(options);
+      buildChoiceEditor(card, data);
+    } else if (type === "multi") {
+      const hint = document.createElement("p");
+      hint.className = "muted";
+      hint.textContent = "Students can select multiple answers.";
+      card.appendChild(hint);
+      buildChoiceEditor(card, data);
     } else if (type === "text") {
       const placeholderLabel = document.createElement("label");
       placeholderLabel.textContent = "Placeholder";
@@ -261,9 +269,143 @@
         });
       });
       updateModeUI();
+    } else if (type === "tokens") {
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = "Use [[blank]] markers in the expression where you want students to drop tokens.";
+      card.appendChild(info);
+
+      const templateLabel = document.createElement("label");
+      templateLabel.textContent = "Expression template";
+      card.appendChild(templateLabel);
+      const templateField = document.createElement("textarea");
+      templateField.rows = 3;
+      templateField.dataset.field = "tokens-template";
+      templateField.placeholder = "[[blank]]([[blank]](myvar))";
+      templateField.value = data.template || "";
+      card.appendChild(templateField);
+
+      const correctLabel = document.createElement("label");
+      correctLabel.textContent = "Correct tokens (comma separated, in order)";
+      card.appendChild(correctLabel);
+      const correctInput = document.createElement("input");
+      correctInput.type = "text";
+      correctInput.dataset.field = "tokens-correct";
+      const correctVal = Array.isArray(data.correct_tokens) ? data.correct_tokens.join(", ") : (data.correct_tokens || "");
+      correctInput.value = correctVal;
+      card.appendChild(correctInput);
+
+      const distractorLabel = document.createElement("label");
+      distractorLabel.textContent = "Distractor tokens (comma separated)";
+      card.appendChild(distractorLabel);
+      const distractorInput = document.createElement("input");
+      distractorInput.type = "text";
+      distractorInput.dataset.field = "tokens-distractors";
+      const distVal = Array.isArray(data.distractor_tokens) ? data.distractor_tokens.join(", ") : (data.distractor_tokens || "");
+      distractorInput.value = distVal;
+      card.appendChild(distractorInput);
+    } else if (type === "fill") {
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = "Use [[blank]] markers where students type their answers. Provide the correct values in order.";
+      card.appendChild(info);
+
+      const templateLabel = document.createElement("label");
+      templateLabel.textContent = "Expression template";
+      card.appendChild(templateLabel);
+      const templateField = document.createElement("textarea");
+      templateField.rows = 3;
+      templateField.dataset.field = "fill-template";
+      templateField.placeholder = 'carname = "[[blank]]"';
+      templateField.value = data.template || "";
+      card.appendChild(templateField);
+
+      const answersLabel = document.createElement("label");
+      answersLabel.textContent = "Correct values (comma separated, in order)";
+      card.appendChild(answersLabel);
+      const answersInput = document.createElement("input");
+      answersInput.type = "text";
+      answersInput.dataset.field = "fill-answers";
+      const answersVal = Array.isArray(data.answers) ? data.answers.join(", ") : (data.answers || "");
+      answersInput.value = answersVal;
+      card.appendChild(answersInput);
+
+      const caseWrap = document.createElement("label");
+      caseWrap.style.display = "flex";
+      caseWrap.style.alignItems = "center";
+      caseWrap.style.gap = "8px";
+      caseWrap.style.marginTop = "8px";
+      const caseInput = document.createElement("input");
+      caseInput.type = "checkbox";
+      caseInput.dataset.field = "fill-case-sensitive";
+      caseInput.checked = !!data.case_sensitive;
+      caseWrap.appendChild(caseInput);
+      caseWrap.append("Case sensitive?");
+      card.appendChild(caseWrap);
     }
 
     return card;
+  }
+
+  function buildChoiceEditor(card, data = {}) {
+    const wrapper = document.createElement("div");
+    wrapper.style.display = "flex";
+    wrapper.style.flexDirection = "column";
+    wrapper.style.gap = "10px";
+    card.appendChild(wrapper);
+
+    const list = document.createElement("div");
+    list.dataset.choiceList = "1";
+    list.style.display = "flex";
+    list.style.flexDirection = "column";
+    list.style.gap = "10px";
+    wrapper.appendChild(list);
+
+    const existing = Array.isArray(data.options)
+      ? data.options
+      : typeof data.options === "string"
+        ? data.options.split("\n")
+        : [];
+
+    const addRow = (value = "") => {
+      const row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.gap = "8px";
+      row.style.alignItems = "stretch";
+
+      const textarea = document.createElement("textarea");
+      textarea.dataset.choiceOption = "1";
+      textarea.rows = 2;
+      textarea.placeholder = "Option text";
+      textarea.value = value;
+      textarea.style.flex = "1";
+      row.appendChild(textarea);
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "btn";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        row.remove();
+      });
+      row.appendChild(remove);
+
+      list.appendChild(row);
+    };
+
+    if (existing.length) {
+      existing.forEach((val) => addRow(val));
+    } else {
+      addRow("Option 1");
+      addRow("Option 2");
+    }
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "btn";
+    addBtn.textContent = "Add option";
+    addBtn.addEventListener("click", () => addRow(""));
+    wrapper.appendChild(addBtn);
   }
 
   function buildScriptSampleRow(sample = {}) {
@@ -371,9 +513,11 @@
       const id = card.dataset.questionId || randomId();
       const prompt = getFieldValue(card, "prompt");
       const payload = { id, type, prompt };
-      if (type === "mcq") {
-        const optionsText = getFieldValue(card, "options");
-        payload.options = optionsText.split("\n").map((v) => v.trim()).filter(Boolean);
+      const snippet = getFieldValue(card, "code-snippet");
+      if (snippet) payload.code_snippet = snippet;
+      if (type === "mcq" || type === "multi") {
+        const rows = card.querySelectorAll("[data-choice-option]");
+        payload.options = Array.from(rows).map((el) => el.value.trim()).filter(Boolean);
       } else if (type === "text") {
         payload.placeholder = getFieldValue(card, "placeholder");
         payload.lines = getFieldValue(card, "lines") || 4;
@@ -398,6 +542,14 @@
             output: getFieldValue(row, "sample-output"),
           }));
         }
+      } else if (type === "tokens") {
+        payload.template = getFieldValue(card, "tokens-template");
+        payload.correct_tokens = getFieldValue(card, "tokens-correct");
+        payload.distractor_tokens = getFieldValue(card, "tokens-distractors");
+      } else if (type === "fill") {
+        payload.template = getFieldValue(card, "fill-template");
+        payload.answers = getFieldValue(card, "fill-answers");
+        payload.case_sensitive = !!card.querySelector('[data-field="fill-case-sensitive"]')?.checked;
       }
       return payload;
     });
@@ -637,6 +789,131 @@ json.dumps(results)
     });
   }
 
+  function setupTokenQuestions() {
+    document.querySelectorAll("[data-token-question]").forEach((container) => {
+      const slots = Array.from(container.querySelectorAll("[data-token-slot]"));
+      if (!slots.length) return;
+      const tokens = Array.from(container.querySelectorAll("[data-token-option]"));
+      const hidden = container.querySelector("[data-token-answer]");
+      const assignments = Array(slots.length).fill(null);
+      let values = Array(slots.length).fill("");
+      if (hidden && hidden.value) {
+        const parts = hidden.value.split("||");
+        parts.forEach((val, idx) => {
+          if (idx < values.length) values[idx] = val;
+        });
+      }
+
+      let activeIndex = values.findIndex((v) => !v);
+      const setActive = (idx) => {
+        activeIndex = typeof idx === "number" ? idx : -1;
+        slots.forEach((slot, i) => {
+          slot.classList.toggle("active", activeIndex === i && !values[i]);
+        });
+      };
+
+      const updateHidden = () => {
+        if (hidden) hidden.value = values.join("||");
+      };
+
+      const refreshSlots = () => {
+        slots.forEach((slot, idx) => {
+          slot.textContent = values[idx] || slot.dataset.placeholder || "_____";
+        });
+        updateHidden();
+      };
+
+      const claimButton = (val) => {
+        const btn = tokens.find((b) => !b.disabled && (b.dataset.tokenValue || b.textContent.trim()) === val);
+        if (btn) {
+          btn.disabled = true;
+          btn.classList.add("disabled");
+          return btn;
+        }
+        return null;
+      };
+
+      values.forEach((val, idx) => {
+        if (!val) return;
+        assignments[idx] = claimButton(val);
+      });
+      refreshSlots();
+      if (activeIndex === -1) {
+        const next = values.findIndex((v) => !v);
+        setActive(next);
+      } else {
+        setActive(activeIndex);
+      }
+
+      const clearSlot = (idx) => {
+        if (!values[idx]) {
+          setActive(idx);
+          return;
+        }
+        const btn = assignments[idx];
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove("disabled");
+        }
+        assignments[idx] = null;
+        values[idx] = "";
+        refreshSlots();
+        setActive(idx);
+      };
+
+      const assignValue = (btn) => {
+        const value = btn.dataset.tokenValue || btn.textContent.trim();
+        let target = activeIndex;
+        if (target === -1) target = values.findIndex((v) => !v);
+        if (target === -1) return;
+        if (assignments[target]) {
+          const prev = assignments[target];
+          prev.disabled = false;
+          prev.classList.remove("disabled");
+        }
+        values[target] = value;
+        assignments[target] = btn;
+        btn.disabled = true;
+        btn.classList.add("disabled");
+        refreshSlots();
+        const next = values.findIndex((v) => !v);
+        setActive(next);
+      };
+
+      slots.forEach((slot, idx) => {
+        slot.addEventListener("click", () => {
+          if (values[idx]) {
+            clearSlot(idx);
+          } else {
+            setActive(idx);
+          }
+        });
+      });
+
+      tokens.forEach((btn) => {
+        btn.addEventListener("click", () => assignValue(btn));
+      });
+    });
+  }
+
+  function setupFillQuestions() {
+    document.querySelectorAll("[data-fill-question]").forEach((container) => {
+      const inputs = Array.from(container.querySelectorAll("[data-fill-input]"));
+      if (!inputs.length) return;
+      const hidden = container.querySelector("[data-fill-answer]");
+      const update = () => {
+        const parts = inputs.map((el) => el.value || "");
+        if (hidden) hidden.value = parts.join("||");
+      };
+      inputs.forEach((input) => {
+        input.addEventListener("input", update);
+        input.addEventListener("change", update);
+      });
+    });
+  }
+
   setupExamBuilder();
   setupExamRunner();
+  setupTokenQuestions();
+  setupFillQuestions();
 })();

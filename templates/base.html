@@ -64,6 +64,19 @@
     .bar-fill { background: var(--brand); height:20px; border-radius:8px; transition: width .3s; }
     .bar-fill.correct { background: var(--heat); } /* optional: highlight correct bar */
     .text-danger { color: var(--danger); }
+    .token-expression { display:flex; flex-wrap:wrap; gap:6px; background:#1f2937; padding:10px; border-radius:8px; }
+    .token-slot { background:transparent; border:1px dashed var(--border); border-radius:6px; padding:6px 12px; min-width:60px; color:var(--text); cursor:pointer; }
+    .token-slot.active { border-color: var(--brand); }
+    .token-bank { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .token-option { background:#0b1220; border:1px solid var(--border); border-radius:6px; padding:6px 12px; color:var(--text); cursor:pointer; }
+    .token-option.disabled { opacity:0.4; cursor:not-allowed; }
+    .fill-expression { display:flex; flex-wrap:wrap; gap:6px; background:#1f2937; padding:10px; border-radius:8px; }
+    .fill-input { background:#0b1220; border:1px solid var(--border); border-radius:6px; color:var(--text); padding:6px 10px; min-width:80px; }
+    .code-block { background:#1e293b; padding:12px; border-radius:8px; font-family:ui-monospace, SFMono-Regular, Menlo; margin-bottom:12px; overflow-x:auto; }
+    .choice-list { display:flex; flex-direction:column; gap:8px; }
+    .choice-option { display:flex; align-items:center; gap:10px; background:#1f2937; border:1px solid transparent; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    .choice-option input { transform:scale(1.2); }
+    .choice-option:hover { border-color:var(--brand-2); }
   </style>
 </head>
 <body>
