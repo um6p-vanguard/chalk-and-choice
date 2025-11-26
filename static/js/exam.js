@@ -90,7 +90,7 @@ class ExamInterface {
       this.updateLoading('Preparing code environment…');
       if (typeof marked !== 'undefined') { promptEl.innerHTML = marked.parse(q.prompt || ''); }
       else { promptEl.textContent = q.prompt || ''; }
-      document.getElementById('q-title').textContent = q.title || 'Code Problem';
+      document.getElementById('q-title').textContent = "Exercise: " + q.title || 'Code Problem';
       if(right) right.style.display = 'block';
       if(pointsEl){ pointsEl.textContent = `${q.points} points`; pointsEl.style.display = 'block'; }
       this.updateLoading('Initializing Python runtime…');

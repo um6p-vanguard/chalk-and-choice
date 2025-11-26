@@ -90,6 +90,11 @@
       <div class="row"><div style="flex:1;"><label>Title</label><input id="code_title" type="text" placeholder="e.g., Two Sum"></div></div>
       <div class="row"><div style="flex:1;"><label>Description (markdown)</label><textarea id="code_desc" rows="6" placeholder="Write the problem in markdown..."></textarea></div></div>
       <div class="row"><div style="flex:1;"><label>Starter Code</label><textarea id="code_starter" rows="8" style="font-family: monospace;" placeholder="# Write your code here"></textarea></div></div>
+      <div class="row"><div style="flex:1;">
+        <label>Test Cases</label>
+        <div id="code_tests"></div>
+        <div class="row"><button class="btn" type="button" onclick="ExamBuilder.addTestRow()">+ Add test case</button></div>
+      </div></div>
       <div class="row"><div style="flex:1;"><label>Points</label><input id="code_points" type="text" value="10" placeholder="e.g., 10"></div></div>
       <div class="row" style="justify-content:flex-end; gap:8px;">
         <button class="btn" type="button" onclick="ExamBuilder.closeCode()">Close</button>
@@ -205,17 +210,22 @@ const ExamBuilder = {
     const startEl = document.getElementById('code_starter');
     const ptsEl = document.getElementById('code_points');
     const submitBtn = document.getElementById('code_submit');
+    const testsWrap = document.getElementById('code_tests');
+    testsWrap.innerHTML = '';
     if(existing){
       titleEl.value = existing.title || '';
       descEl.value = existing.description || '';
       startEl.value = existing.starter_code || '';
       ptsEl.value = String(existing.points || 10);
+      (existing.test_cases||[]).forEach(tc=> this.addTestRow(tc));
+      if((existing.test_cases||[]).length === 0){ this.addTestRow(); }
       if(submitBtn) submitBtn.textContent = 'Update';
     } else {
       titleEl.value = '';
       descEl.value = '';
       startEl.value = '';
       ptsEl.value = '10';
+      this.addTestRow();
       if(submitBtn) submitBtn.textContent = 'Add';
     }
     document.getElementById('dlg_code').showModal();
@@ -226,13 +236,44 @@ const ExamBuilder = {
     const description = document.getElementById('code_desc').value.trim();
     const starter_code = document.getElementById('code_starter').value;
     const points = parseInt(document.getElementById('code_points').value||'10',10)||10;
-    const q = { type:'code', title, description, starter_code, points };
+    const tests = Array.from(document.querySelectorAll('#code_tests .tc-row')).map(row=>{
+      const input = (row.querySelector('.tc_input')?.value||'');
+      const expected_output = (row.querySelector('.tc_expected')?.value||'');
+      const hidden = !!(row.querySelector('.tc_hidden')?.checked);
+      return { input, expected_output, hidden };
+    }).filter(tc=> (tc.expected_output||'').trim().length>0);
+    const q = { type:'code', title, description, starter_code, points, test_cases: tests };
     if(this.editIndex !== null){ this.questions[this.editIndex] = q; }
     else { this.questions.push(q); }
     this.editIndex = null; this.editType = null;
     this.closeCode(); this.render(); return false;
   }
 };
+// Build a single test case row
+ExamBuilder.addTestRow = function(tc){
+  const wrap = document.getElementById('code_tests');
+  const row = document.createElement('div'); row.className='row tc-row';
+  row.innerHTML = `
+    <div style="flex:1;">
+      <label>Input</label>
+      <textarea class="tc_input" rows="3" placeholder="stdin input..."></textarea>
+    </div>
+    <div style="flex:1;">
+      <label>Expected Output</label>
+      <textarea class="tc_expected" rows="3" placeholder="expected stdout..."></textarea>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;white-space:nowrap;"><input type="checkbox" class="tc_hidden"> Hidden</label>
+    <button type="button" class="btn opt-remove" title="Remove">×</button>
+  `;
+  wrap.appendChild(row);
+  const rm = row.querySelector('.opt-remove'); if(rm){ rm.addEventListener('click', ()=> row.remove()); }
+  if(tc){
+    const i = row.querySelector('.tc_input'); const e = row.querySelector('.tc_expected'); const h = row.querySelector('.tc_hidden');
+    if(i) i.value = tc.input || '';
+    if(e) e.value = tc.expected_output || '';
+    if(h) h.checked = !!tc.hidden;
+  }
+}
 // Prefill in edit mode
 if (PREFILL_SPEC && Array.isArray(PREFILL_SPEC.questions)){
   ExamBuilder.questions = PREFILL_SPEC.questions;

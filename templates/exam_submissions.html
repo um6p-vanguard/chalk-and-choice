@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .container { max-width: 1000px; margin: 0 auto; }
+  .sec-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin: 12px 0; }
+  .meta { color:#9bb2c4; font-size:14px; }
+  .list-card { background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:12px; }
+  .row-item { display:grid; grid-template-columns: 1fr 160px auto; align-items:center; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0f1720; margin-bottom:8px; gap:10px; }
+  .row-left { display:flex; flex-direction:column; gap:4px; }
+  .row-status { display:flex; align-items:center; justify-content:center; }
+  .row-title { font-weight:600; }
+  .row-sub { color:#9bb2c4; font-size:13px; }
+  .actions { display:flex; gap:8px; }
+  .btn { padding:8px 12px; border:1px solid #334155; border-radius:10px; text-decoration:none; color:#e5e7eb; background:#0b2b3a; cursor:pointer; transition: all .15s ease; }
+  .btn:hover { filter: brightness(1.06); border-color:#3b5168; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+  .badge-green { background: rgba(16,185,129,.15); color:#86efac; }
+  .badge-amber { background: rgba(245,158,11,.16); color:#fcd34d; }
+</style>
+<div class="container">
+  <div class="sec-head">
+    <div>
+      <h2 style="margin:0;">Submissions — {{ exam.title }}</h2>
+      <div class="meta">Exam code: {{ exam.code }} • Starts: {{ exam.start_at }}{% if exam.end_at %} • Ends: {{ exam.end_at }}{% endif %}</div>
+    </div>
+    <div class="actions">
+      <a class="btn" href="{{ url_for('exams_list') }}">Back to Exams</a>
+    </div>
+  </div>
+
+  <div class="list-card">
+    {% if subs %}
+      {% for s in subs %}
+      <div class="row-item">
+        <div class="row-left">
+          <div class="row-title">{{ s.student.name }}</div>
+          <div class="row-sub">
+            Started: {{ s.started_at }}
+            {% if s.submitted_at %} • Submitted: {{ s.submitted_at }}{% else %} • <span style="color:#fcd34d;">In progress</span>{% endif %}
+            • Score: {{ '%.2f' % (s.score or 0) }}
+          </div>
+        </div>
+        <div class="row-status">
+          {% if s.submitted_at %}<span class="badge badge-green">Submitted</span>{% else %}<span class="badge badge-amber">Not submitted</span>{% endif %}
+        </div>
+        <div class="actions">
+          <a class="btn" href="{{ url_for('exams_submission_detail', code=exam.code, sub_id=s.id) }}">View</a>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="row-sub" style="padding:8px;">No submissions yet.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

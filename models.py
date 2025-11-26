@@ -497,6 +497,8 @@ class ExamQuestion(db.Model):
     code_exercise = db.relationship('CodeExercise')
     # Optional: allow inline code starter for code questions not tied to CodeExercise
     code_starter_code = db.Column(db.Text, nullable=True)
+    # Optional: inline test cases for code questions (array of {input, expected_output, hidden})
+    code_test_cases_json = db.Column(JSONText, nullable=True)
 
     exam = db.relationship('Exam', backref=db.backref('questions', cascade='all,delete-orphan', order_by='ExamQuestion.order'))
 

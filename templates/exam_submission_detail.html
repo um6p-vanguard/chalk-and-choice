@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .container { max-width: 1000px; margin: 0 auto; }
+  .sec-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin: 12px 0; }
+  .meta { color:#9bb2c4; font-size:14px; }
+  .card { background:#0b1220; border:1px solid #1f2937; border-radius:12px; padding:14px; margin-bottom:12px; }
+  .q-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }
+  .q-title { font-weight:700; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }
+  .badge-green { background: rgba(16,185,129,.15); color:#86efac; }
+  .badge-amber { background: rgba(245,158,11,.16); color:#fcd34d; }
+  .badge-blue { background: rgba(59,130,246,.16); color:#93c5fd; }
+  .list { list-style:none; padding:0; margin:0; }
+  .opt { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid #1f2937; border-radius:10px; margin-bottom:8px; background:#0f1720; }
+  .opt.ok { border-color:#10b981; background:#0f2a24; }
+  .opt.wrong { border-color:#b91c1c; background:#2a0f12; }
+  .opt.missed { border-color:#b45309; background:#2a1a0f; }
+  .code { background:#111827; color:#e5e7eb; border-radius:8px; border:1px solid #1f2937; padding:10px; overflow:auto; white-space:pre; }
+  table.tests { width:100%; border-collapse: collapse; font-size:14px; }
+  table.tests th, table.tests td { border:1px solid #1f2937; padding:6px 8px; }
+  table.tests th { background:#0f1720; text-align:left; }
+  .markdown { line-height:1.6; color:#cfe1ee; background: linear-gradient(180deg,#0e1624,#0a1120); border:1px solid #1f2937; border-left:3px solid #1f7bd6; padding:12px 14px; border-radius:12px; box-shadow: 0 6px 16px rgba(0,0,0,0.25); margin:8px 0 10px; white-space:normal; }
+  .markdown h1, .markdown h2, .markdown h3 { margin: 10px 0 6px; font-size:1rem; }
+  .markdown pre { background:#0b1220; border:1px solid #1f2937; border-left:3px solid #1f7bd6; padding:10px; border-radius:6px; overflow:auto; }
+  .markdown code { background: rgba(255,255,255,.06); padding:2px 6px; border-radius:4px; }
+  .btn { padding:8px 12px; border:1px solid #334155; border-radius:10px; text-decoration:none; color:#e5e7eb; background:#0b2b3a; cursor:pointer; transition: all .15s ease; }
+  .btn:hover { filter: brightness(1.06); border-color:#3b5168; }
+</style>
+<div class="container">
+  <div class="sec-head">
+    <div>
+      <h2 style="margin:0;">Submission — {{ exam.title }}</h2>
+      <div class="meta">Student: {{ sub.student.name }} • Started: {{ sub.started_at }}{% if sub.submitted_at %} • Submitted: {{ sub.submitted_at }}{% endif %}</div>
+      <div class="meta">Score: {{ '%.2f' % (sub.score or 0) }}</div>
+    </div>
+    <div>
+      <a class="btn" href="{{ url_for('exams_submissions', code=exam.code) }}">Back to Submissions</a>
+    </div>
+  </div>
+
+  {% for item in qitems %}
+  {% set q = item.q %}
+  {% set a = item.a %}
+  {% set meta = item.meta %}
+  <div class="card">
+    <div class="q-head">
+      <div class="q-title">Q{{ q.order }} — {{ 'MCQ' if meta.type == 'mcq' else 'Code' }} {% if meta.type == 'code' and meta.title %}— {{ meta.title }}{% endif %}</div>
+      <div>
+        <span class="badge badge-blue">Points: {{ meta.points }}</span>
+        <span class="badge {{ 'badge-green' if (a and a.score_awarded and a.score_awarded > 0) else 'badge-amber' }}">Awarded: {{ '%.2f' % ((a.score_awarded if a else 0) or 0) }}</span>
+      </div>
+    </div>
+
+    {% if meta.type == 'mcq' %}
+      <div class="meta" style="margin-bottom:8px;">{{ meta.prompt }}</div>
+      {% set sel = (a.answer_json.selected if a and a.answer_json and a.answer_json.selected is defined else []) %}
+      <ul class="list">
+        {% for opt in meta.options %}
+          {% set idx = loop.index0 %}
+          {% set is_sel = idx in sel %}
+          {% set is_ok = idx in (meta.correct or []) %}
+          {% set cls = 'opt' %}
+          {% if is_sel and is_ok %}{% set cls = cls + ' ok' %}{% elif is_sel and not is_ok %}{% set cls = cls + ' wrong' %}{% elif (not is_sel) and is_ok %}{% set cls = cls + ' missed' %}{% endif %}
+          <li class="{{ cls }}">
+            <div style="width:20px; text-align:center;">{% if is_ok %}✓{% elif is_sel %}•{% else %}{% endif %}</div>
+            <div>{{ opt }}</div>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if not a %}<div class="meta" style="margin-top:6px;">No answer.</div>{% endif %}
+    {% else %}
+      {% if meta.prompt %}
+        <div class="markdown">{{ meta.prompt }}</div>
+      {% endif %}
+      <div style="margin-top:8px;">
+        <div class="meta" style="margin-bottom:6px;">Submitted Code:</div>
+        <pre class="code">{{ (a.answer_json.code if a and a.answer_json and a.answer_json.code is defined else '') }}</pre>
+      </div>
+      <div style="margin-top:8px;">
+        <div class="meta" style="margin-bottom:6px;">Test Results:</div>
+        {% set tests = (a.answer_json.test_results if a and a.answer_json and a.answer_json.test_results is defined else []) %}
+        {% if tests %}
+          <table class="tests">
+            <thead><tr><th>#</th><th>Hidden</th><th>Passed</th><th>Expected</th><th>Actual</th><th>Time (ms)</th></tr></thead>
+            <tbody>
+              {% for t in tests %}
+                <tr>
+                  <td>{{ t.test_num }}</td>
+                  <td>{{ 'Yes' if t.hidden else 'No' }}</td>
+                  <td style="color: {{ '#86efac' if t.passed else '#ff9f97' }};">{{ '✓' if t.passed else '✗' }}</td>
+                  <td><pre class="code" style="margin:0; white-space:pre-wrap;">{{ t.expected }}</pre></td>
+                  <td><pre class="code" style="margin:0; white-space:pre-wrap;">{{ t.actual }}</pre></td>
+                  <td>{{ t.time_ms }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="meta">No test results.</div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script>
+  (function(){
+    if (typeof marked === 'undefined') return;
+    document.querySelectorAll('.markdown').forEach(function(el){
+      const raw = el.textContent || '';
+      el.innerHTML = marked.parse(raw);
+    });
+  })();
+  </script>
+{% endblock %}

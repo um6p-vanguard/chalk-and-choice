@@ -19,8 +19,13 @@
   .btn-primary:hover { border-radius:10px; filter: brightness(1.03); border-color:#38a3ff; box-shadow: 0 0 0 1px rgba(56,163,255,0.3), 0 10px 22px rgba(15,118,210,0.45); }
   .status { color:#9bb2c4; font-size:14px; }
   /* Markdown styling for code questions */
-  .markdown-content { line-height:1.6; color:#cfe1ee; }
-  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin:14px 0 8px; }
+  .markdown-content { line-height:1.6; color:#cfe1ee; background: linear-gradient(180deg,#0e1624,#0a1120); border:1px solid #1f2937; border-left:3px solid #1f7bd6; padding:12px 14px; border-radius:12px; box-shadow: 0 6px 16px rgba(0,0,0,0.25); margin:8px 0 10px; }
+  /* Ensure description headings never overshadow the exercise/question title */
+  .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin:14px 0 8px; line-height:1.4; }
+  .markdown-content h1 { font-size: 1.05rem; }
+  .markdown-content h2 { font-size: 1.02rem; }
+  .markdown-content h3 { font-size: 1rem; }
+  .markdown-content p, .markdown-content ul, .markdown-content ol { font-size: 1rem; }
   .markdown-content pre { background:#0b1220; border:1px solid #1f2937; border-left:3px solid #1f7bd6; padding:10px; border-radius:6px; overflow:auto; }
   .markdown-content code { background: rgba(255,255,255,.06); padding:2px 6px; border-radius:4px; }
   /* Loading overlay */
@@ -43,7 +48,7 @@
 <div class="exam-wrap">
   <div class="exam-header">
     <div>
-      <h1 style="margin:0;">Exercise: {{ exam.title }}</h1>
+      <h1 style="margin:0;">{{ exam.title }}</h1>
       <div class="status">{% if exam.start_at %}Starts: {{ exam.start_at }}{% endif %}{% if exam.end_at %} • Ends: {{ exam.end_at }}{% endif %}</div>
     </div>
     <div class="actions">

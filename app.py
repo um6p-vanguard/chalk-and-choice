@@ -3604,7 +3604,8 @@ def exams_new():
                     title = (q.get("title") or "").strip() or None
                     desc = (q.get("description") or qprompt or "").strip() or None
                     starter = q.get("starter_code") or None
-                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter)
+                    tests = q.get("test_cases") or []
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter, code_test_cases_json=tests)
                 db.session.add(eq)
                 order += 1
         db.session.commit()
@@ -3698,7 +3699,8 @@ def exams_edit(code):
                     title2 = (q.get("title") or "").strip() or None
                     desc = (q.get("description") or qprompt or "").strip() or None
                     starter = q.get("starter_code") or None
-                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title2, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter)
+                    tests = q.get("test_cases") or []
+                    eq = ExamQuestion(exam_id=exm.id, order=order, q_type="code", title=title2, prompt=desc, points=qpoints, code_exercise_id=None, code_starter_code=starter, code_test_cases_json=tests)
                 db.session.add(eq)
                 order += 1
         db.session.commit()
@@ -3730,9 +3732,45 @@ def exams_edit(code):
                     "title": q.title or "",
                     "description": q.prompt or "",
                     "starter_code": q.code_starter_code or "",
+                    "test_cases": q.code_test_cases_json or [],
                     "points": q.points,
                 })
     return render_template("exam_new.html", exam=exm, spec=spec, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/exams/<code>/submissions")
+@require_user(role=["admin", "instructor"])
+def exams_submissions(code):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    subs = ExamSubmission.query.filter_by(exam_id=exm.id).order_by(ExamSubmission.started_at.desc()).all()
+    return render_template("exam_submissions.html", exam=exm, subs=subs, user=current_user(), student_name=session.get("student_name"))
+
+@app.route("/exams/<code>/submission/<int:sub_id>")
+@require_user(role=["admin", "instructor"])
+def exams_submission_detail(code, sub_id):
+    exm = Exam.query.filter_by(code=code).first_or_404()
+    sub = ExamSubmission.query.filter_by(id=sub_id, exam_id=exm.id).first_or_404()
+    # Build mapping from question id to answer for convenience
+    ans_by_qid = {a.question_id: a for a in sub.answers}
+    # Keep questions ordered
+    qitems = []
+    for q in exm.questions:
+        a = ans_by_qid.get(q.id)
+        # Extract shallow fields for template convenience
+        meta = {"type": q.q_type, "points": q.points}
+        if q.q_type == "mcq":
+            meta.update({
+                "prompt": q.prompt or "",
+                "options": q.options_json or [],
+                "correct": q.correct_indices_json or [],
+                "multiple": bool(q.multiple_select),
+            })
+        else:
+            meta.update({
+                "title": q.title or "",
+                "prompt": q.prompt or "",
+            })
+        qitems.append({"q": q, "a": a, "meta": meta})
+    return render_template("exam_submission_detail.html", exam=exm, sub=sub, qitems=qitems, user=current_user(), student_name=session.get("student_name"))
 
 def _exam_accessible(exm):
     now = datetime.now()
@@ -3830,6 +3868,7 @@ def api_exam_question(code, order):
             "answer": saved
         })
     # Inline code (no linked exercise/tests)
+    vis = [t for t in (q.code_test_cases_json or []) if not t.get("hidden")]
     return jsonify({
         "type": "code",
         "order": q.order,
@@ -3837,7 +3876,7 @@ def api_exam_question(code, order):
         "prompt": q.prompt,
         "starter_code": q.code_starter_code or "# Write your code here\n",
         "default_input": "",
-        "visible_test_cases": [],
+        "visible_test_cases": vis,
         "points": q.points,
         "answer": saved
     })
@@ -3857,7 +3896,7 @@ def api_exam_question_all_tests(code, order):
     if q.q_type != "code":
         abort(400)
     if not q.code_exercise:
-        return jsonify({"test_cases": [], "points": q.points})
+        return jsonify({"test_cases": (q.code_test_cases_json or []), "points": q.points})
     exo = q.code_exercise
     return jsonify({"test_cases": exo.test_cases_json or [], "points": q.points})
 
@@ -3895,7 +3934,7 @@ def api_exam_answer(code, order):
         db.session.commit()
         return jsonify({"ok": True, "score": award})
     exo = q.code_exercise
-    expected_tests = (exo.test_cases_json if exo else []) or []
+    expected_tests = (exo.test_cases_json if exo else (q.code_test_cases_json or [])) or []
     posted = data.get("test_results") or []
     visible_passed = 0
     visible_total = 0
@@ -3926,8 +3965,8 @@ def api_exam_answer(code, order):
                 visible_passed += 1
         validated_results.append(item)
     total_passed = visible_passed + hidden_passed
-    total_tests = max(1, visible_total + hidden_total)
-    award = float(q.points) * (total_passed / total_tests)
+    total_tests = visible_total + hidden_total
+    award = float(q.points) if (total_tests > 0 and total_passed == total_tests) else 0.0
     ans = ExamAnswer.query.filter_by(submission_id=sub.id, question_id=q.id).first()
     if not ans:
         ans = ExamAnswer(submission_id=sub.id, question_id=q.id)
