@@ -884,7 +884,7 @@ def _normalize_exam_questions(payload):
         if not isinstance(raw, dict):
             raise ValueError("Question payload must be objects.")
         q_type = (raw.get("type") or "").strip().lower()
-        if q_type not in ("mcq", "text", "code"):
+        if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill"):
             raise ValueError(f"Unsupported question type '{q_type}'.")
         prompt = (raw.get("prompt") or "").strip()
         if not prompt:
