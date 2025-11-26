@@ -87,6 +87,7 @@ def logout_everyone():
     session.pop("student_name", None)
     session.pop("must_change_pw", None)
     session.pop("exam_access", None)
+    session.pop("exam_drafts", None)
 
 def require_user(role=None):
     def deco(fn):
@@ -986,6 +987,28 @@ def _grant_exam_access(exam_id):
     session["exam_access"] = data
     session.modified = True
 
+def _get_exam_draft(exam_id):
+    drafts = session.get("exam_drafts")
+    if isinstance(drafts, dict):
+        payload = drafts.get(str(exam_id))
+        if isinstance(payload, dict):
+            return dict(payload)
+    return {}
+
+def _save_exam_draft(exam_id, answers):
+    drafts = session.get("exam_drafts")
+    if not isinstance(drafts, dict):
+        drafts = {}
+    drafts[str(exam_id)] = answers
+    session["exam_drafts"] = drafts
+    session.modified = True
+
+def _clear_exam_draft(exam_id):
+    drafts = session.get("exam_drafts")
+    if isinstance(drafts, dict) and drafts.pop(str(exam_id), None) is not None:
+        session["exam_drafts"] = drafts
+        session.modified = True
+
 @app.route("/exams")
 @require_user()
 def exams_list():
@@ -1135,8 +1158,22 @@ def exam_take(code):
         )
 
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
+    total_questions = len(questions)
+
+    def clamp_q(idx):
+        if total_questions <= 0:
+            return 0
+        try:
+            val = int(idx)
+        except Exception:
+            val = 0
+        return max(0, min(val, total_questions - 1))
+
+    requested_q = request.args.get("q", "0")
+    q_index = clamp_q(requested_q)
+
     submission = None
-    previous_answers = {}
+    base_answers = {}
     if student:
         submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
         if not submission:
@@ -1150,56 +1187,121 @@ def exam_take(code):
             )
             db.session.add(submission)
             db.session.commit()
-        previous_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+        base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
         submission.last_activity_at = datetime.utcnow()
         db.session.commit()
-    can_submit = bool(student and exam.is_available and (not submission or submission.status != "submitted"))
 
-    if request.method == "POST":
-        if preview:
-            abort(403)
-        if not verify_csrf(): abort(400, "bad csrf")
-        if not can_submit:
+    draft_answers = _get_exam_draft(exam.id) if student else {}
+    previous_answers = dict(base_answers)
+    previous_answers.update(draft_answers)
+
+    duration_seconds = exam.duration_minutes * 60 if exam.duration_minutes else None
+    time_remaining = None
+    if duration_seconds and submission:
+        deadline = submission.started_at + timedelta(seconds=duration_seconds)
+        time_remaining = int((deadline - datetime.utcnow()).total_seconds())
+        if time_remaining <= 0 and submission.status != "submitted":
+            answers = dict(base_answers)
+            answers.update(draft_answers)
+            submission.answers_json = answers
+            submission.status = "submitted"
+            submission.submitted_at = datetime.utcnow()
+            submission.last_activity_at = submission.submitted_at
+            db.session.commit()
+            _clear_exam_draft(exam.id)
             return render_template(
-                "exams_take.html",
+                "exams_submitted.html",
                 exam=exam,
-                questions=questions,
-                can_submit=False,
-                preview=preview,
-                already_submitted=True,
-                previous_answers=previous_answers,
+                submission=submission,
                 user=user,
                 student_name=session.get("student_name"),
-            ), 403
-        answers = {}
-        for q in questions:
-            qid = q.get("id")
-            if not qid:
-                continue
-            field = f"answer_{qid}"
-            val = request.form.get(field, "")
-            answers[qid] = val
-        submission.answers_json = answers
-        submission.status = "submitted"
-        submission.submitted_at = datetime.utcnow()
-        submission.last_activity_at = submission.submitted_at
-        db.session.commit()
-        return render_template(
-            "exams_submitted.html",
-            exam=exam,
-            submission=submission,
-            user=user,
-            student_name=session.get("student_name"),
-        )
+            )
+
+    can_submit = bool(student and exam.is_available and (not submission or submission.status != "submitted"))
+    if can_submit and time_remaining is not None:
+        can_submit = time_remaining > 0
+
+    if request.method == "POST" and not locked:
+        if preview:
+            return redirect(url_for("exam_take", code=code, q=q_index))
+        if not verify_csrf(): abort(400, "bad csrf")
+        post_q_index = clamp_q(request.form.get("q_index", q_index))
+        q_index = post_q_index
+        current_question = questions[q_index] if total_questions else None
+        if student and current_question:
+            qid = current_question.get("id")
+            if qid:
+                val = request.form.get(f"answer_{qid}", "")
+                draft_answers[qid] = val
+                previous_answers[qid] = val
+                _save_exam_draft(exam.id, draft_answers)
+        action = request.form.get("nav_action") or request.form.get("nav_action_auto")
+        if not action:
+            if total_questions and q_index >= total_questions - 1:
+                action = "submit"
+            else:
+                action = "next"
+        if action == "submit":
+            if not can_submit:
+                return render_template(
+                    "exams_take.html",
+                    exam=exam,
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=False,
+                    preview=preview,
+                    already_submitted=True,
+                    previous_answers=previous_answers,
+                    user=user,
+                    student_name=session.get("student_name"),
+                ), 403
+            answers = dict(base_answers)
+            answers.update(draft_answers)
+            submission.answers_json = answers
+            submission.status = "submitted"
+            submission.submitted_at = datetime.utcnow()
+            submission.last_activity_at = submission.submitted_at
+            db.session.commit()
+            _clear_exam_draft(exam.id)
+            return render_template(
+                "exams_submitted.html",
+                exam=exam,
+                submission=submission,
+                user=user,
+                student_name=session.get("student_name"),
+            )
+        else:
+            if submission and student:
+                answers = dict(base_answers)
+                answers.update(draft_answers)
+                submission.answers_json = answers
+                submission.last_activity_at = datetime.utcnow()
+                db.session.commit()
+            target = q_index
+            if action == "prev":
+                target = max(0, q_index - 1)
+            elif action == "next":
+                target = min(total_questions - 1, q_index + 1) if total_questions else 0
+            return redirect(url_for("exam_take", code=code, q=target))
+
+    current_question = questions[q_index] if total_questions else None
 
     return render_template(
         "exams_take.html",
         exam=exam,
-        questions=questions,
+        question=current_question,
+        total_questions=total_questions,
+        current_index=q_index,
+        has_prev=(q_index > 0),
+        has_next=(q_index + 1 < total_questions),
         can_submit=can_submit,
         preview=preview,
         already_submitted=(submission and submission.status == "submitted"),
         previous_answers=previous_answers,
+        time_remaining_seconds=time_remaining if time_remaining is not None else None,
         user=user,
         student_name=session.get("student_name"),
     )
