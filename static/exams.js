@@ -703,8 +703,14 @@
         const rightCol = document.createElement("div");
         rightCol.style.flex = "1 1 240px";
         rightCol.innerHTML = `
-          <div class="muted">Your output</div>
-          <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
+          <div style="margin-bottom:6px;">
+            <div class="muted">Your output</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
+          </div>
+          <div>
+            <div class="muted">Expected output</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.expected || "")}</pre>
+          </div>
         `;
 
         splitRow.appendChild(leftCol);

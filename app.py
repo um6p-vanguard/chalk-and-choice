@@ -1433,14 +1433,19 @@ def exam_take(code):
     user = current_user()
     student = current_student()
     preview = bool(user and not student)
+
     if not (student or preview):
         return redirect(url_for("login", next=url_for("exam_take", code=code)))
 
+    # ------------------------------------------------------------------
+    # Access password gate
+    # ------------------------------------------------------------------
     locked = bool(exam.access_password_hash) and student and not _exam_has_access(exam.id)
     if locked:
         error = None
         if request.method == "POST":
-            if not verify_csrf(): abort(400, "bad csrf")
+            if not verify_csrf():
+                abort(400, "bad csrf")
             attempt = request.form.get("unlock_password") or ""
             if exam.check_access_password(attempt):
                 _grant_exam_access(exam.id)
@@ -1455,6 +1460,9 @@ def exam_take(code):
             student_name=session.get("student_name"),
         )
 
+    # ------------------------------------------------------------------
+    # Questions + index handling
+    # ------------------------------------------------------------------
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
     total_questions = len(questions)
 
@@ -1470,16 +1478,18 @@ def exam_take(code):
     requested_q = request.args.get("q", "0")
     q_index = clamp_q(requested_q)
 
+    # ------------------------------------------------------------------
+    # Submission: single row per (exam, student) + optional multi attempts
+    # ------------------------------------------------------------------
     submission = None
     base_answers = {}
+
     if student:
-        # Always keep a single row per (exam_id, student_id) to satisfy the UNIQUE constraint.
         submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
 
         if submission and ALLOW_MULTI_ATTEMPTS and submission.status == "submitted":
             # Start a fresh attempt by resetting the existing row.
             _clear_exam_draft(exam.id)
-
             submission.status = "in_progress"
             submission.started_at = datetime.utcnow()
             submission.submitted_at = None
@@ -1489,6 +1499,8 @@ def exam_take(code):
             submission.score = 0.0
             submission.max_score = 0.0
             submission.grading_json = None
+            # NOTE: no commit here; we only care about in-memory values
+            # for timer and grading. Commit happens on submit/timeout.
 
         if not submission:
             submission = ExamSubmission(
@@ -1500,13 +1512,13 @@ def exam_take(code):
                 ip_address=(request.remote_addr or "")[:64],
             )
             db.session.add(submission)
-            db.session.commit()
+            db.session.commit()  # one-time insert to get started_at, id, etc.
 
         base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
-        submission.last_activity_at = datetime.utcnow()
-        db.session.commit()
 
-    
+    # ------------------------------------------------------------------
+    # If already submitted and multi-attempts disabled: lock them out
+    # ------------------------------------------------------------------
     already_submitted = bool(submission and submission.status == "submitted")
     if already_submitted and not preview and not ALLOW_MULTI_ATTEMPTS:
         _clear_exam_draft(exam.id)
@@ -1518,15 +1530,21 @@ def exam_take(code):
             student_name=session.get("student_name"),
         )
 
-
-
+    # ------------------------------------------------------------------
+    # Draft answers (session-based autosave)
+    # ------------------------------------------------------------------
     draft_answers = _get_exam_draft(exam.id) if student else {}
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
 
+    # ------------------------------------------------------------------
+    # Timer + automatic submission on timeout
+    # ------------------------------------------------------------------
     duration_seconds = exam.duration_minutes * 60 if exam.duration_minutes else None
     time_remaining = None
+
     if duration_seconds and submission:
+        # started_at is assumed to be set by DB default or earlier commit
         deadline = submission.started_at + timedelta(seconds=duration_seconds)
         time_remaining = int((deadline - datetime.utcnow()).total_seconds())
         if time_remaining <= 0 and submission.status != "submitted":
@@ -1536,6 +1554,10 @@ def exam_take(code):
             submission.status = "submitted"
             submission.submitted_at = datetime.utcnow()
             submission.last_activity_at = submission.submitted_at
+            grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
+            submission.score = grade_score
+            submission.max_score = grade_total
+            submission.grading_json = grade_details
             db.session.commit()
             _clear_exam_draft(exam.id)
             return render_template(
@@ -1546,23 +1568,32 @@ def exam_take(code):
                 student_name=session.get("student_name"),
             )
 
+    # ------------------------------------------------------------------
+    # Can submit?
+    # ------------------------------------------------------------------
     can_submit = bool(student and exam.is_available)
-    
+
     if not ALLOW_MULTI_ATTEMPTS:
         # In single-attempt mode, block further submissions after one is submitted.
         can_submit = can_submit and (not submission or submission.status != "submitted")
-    
+
     if can_submit and time_remaining is not None:
         can_submit = can_submit and (time_remaining > 0)
-    
 
+    # ------------------------------------------------------------------
+    # POST: save to draft (session) + optional final submit
+    # ------------------------------------------------------------------
     if request.method == "POST" and not locked:
         if preview:
             return redirect(url_for("exam_take", code=code, q=q_index))
-        if not verify_csrf(): abort(400, "bad csrf")
+        if not verify_csrf():
+            abort(400, "bad csrf")
+
         post_q_index = clamp_q(request.form.get("q_index", q_index))
         q_index = post_q_index
         current_question = questions[q_index] if total_questions else None
+
+        # Save current question answer into session draft only
         if student and current_question:
             qid = current_question.get("id")
             if qid:
@@ -1575,12 +1606,14 @@ def exam_take(code):
                 draft_answers[qid] = val
                 previous_answers[qid] = val
                 _save_exam_draft(exam.id, draft_answers)
+
         action = request.form.get("nav_action") or request.form.get("nav_action_auto")
         if not action:
             if total_questions and q_index >= total_questions - 1:
                 action = "submit"
             else:
                 action = "next"
+
         if action == "submit":
             if not can_submit:
                 return render_template(
@@ -1598,6 +1631,7 @@ def exam_take(code):
                     user=user,
                     student_name=session.get("student_name"),
                 ), 403
+
             answers = dict(base_answers)
             answers.update(draft_answers)
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
@@ -1618,12 +1652,7 @@ def exam_take(code):
                 student_name=session.get("student_name"),
             )
         else:
-            if submission and student:
-                answers = dict(base_answers)
-                answers.update(draft_answers)
-                submission.answers_json = answers
-                submission.last_activity_at = datetime.utcnow()
-                db.session.commit()
+            # Navigation only: DO NOT hit the DB, drafts are in the session.
             target = q_index
             if action == "prev":
                 target = max(0, q_index - 1)
@@ -1631,6 +1660,9 @@ def exam_take(code):
                 target = min(total_questions - 1, q_index + 1) if total_questions else 0
             return redirect(url_for("exam_take", code=code, q=target))
 
+    # ------------------------------------------------------------------
+    # GET (or POST fall-through): render current question
+    # ------------------------------------------------------------------
     current_question = dict(questions[q_index]) if total_questions else None
     if current_question and current_question.get("type") == "tokens":
         options = list(current_question.get("correct_tokens") or [])
@@ -1658,6 +1690,8 @@ def exam_take(code):
         user=user,
         student_name=session.get("student_name"),
     )
+
+
 
 @app.route("/api/exams/<code>/log-run", methods=["POST"])
 def exams_log_run(code):
