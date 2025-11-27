@@ -1,5 +1,7 @@
 (function () {
   const randomId = () => "q" + Math.random().toString(36).slice(2, 9);
+  let monacoLoaderPromise = null;
+  let monacoReadyPromise = null;
 
   function setupExamBuilder() {
     const root = document.querySelector("[data-exam-builder]");
@@ -701,14 +703,9 @@
         const rightCol = document.createElement("div");
         rightCol.style.flex = "1 1 240px";
         rightCol.innerHTML = `
-          <div style="margin-bottom:6px;">
-            <div class="muted">Your output</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
-          </div>
-          <div>
-            <div class="muted">Expected output</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.expected || "")}</pre>
-          </div>
+          <div class="muted">Your output</div>
+          <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
+          <div class="muted" style="margin-top:6px;">Compared against a hidden expected result.</div>
         `;
 
         splitRow.appendChild(leftCol);
@@ -899,6 +896,95 @@ json.dumps(results)
     });
   }
 
+  function setupCodeEditors() {
+    const codeAreas = Array.from(document.querySelectorAll("textarea[data-code-input]"));
+    if (!codeAreas.length) return;
+    const MONACO_BASE = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs";
+    const MONACO_LOADER = `${MONACO_BASE}/loader.min.js`;
+
+    const ensureLoader = () => {
+      if (window.require && window.require.config) {
+        return Promise.resolve();
+      }
+      if (!monacoLoaderPromise) {
+        monacoLoaderPromise = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = MONACO_LOADER;
+          script.async = true;
+          script.crossOrigin = "anonymous";
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error("Unable to load Monaco loader"));
+          document.head.appendChild(script);
+        });
+      }
+      return monacoLoaderPromise;
+    };
+
+    const ensureMonaco = () => {
+      if (window.monaco) {
+        return Promise.resolve(window.monaco);
+      }
+      if (!monacoReadyPromise) {
+        monacoReadyPromise = ensureLoader().then(() => new Promise((resolve, reject) => {
+          if (!window.require || !window.require.config) {
+            reject(new Error("Monaco loader unavailable"));
+            return;
+          }
+          const workerSrc = `${MONACO_BASE}/base/worker/workerMain.js`;
+          window.MonacoEnvironment = window.MonacoEnvironment || {};
+          window.MonacoEnvironment.getWorkerUrl = () => {
+            const workerScript = [
+              `self.MonacoEnvironment = { baseUrl: '${MONACO_BASE}/' };`,
+              `importScripts('${workerSrc}');`,
+            ].join("\n");
+            return `data:text/javascript;charset=utf-8,${encodeURIComponent(workerScript)}`;
+          };
+          window.require.config({ paths: { vs: MONACO_BASE } });
+          window.require(["vs/editor/editor.main"], () => resolve(window.monaco), (error) => reject(error));
+        }));
+      }
+      return monacoReadyPromise;
+    };
+
+    ensureMonaco()
+      .then((monaco) => {
+        codeAreas.forEach((area) => {
+          if (area.dataset.monacoAttached === "1") return;
+          area.dataset.monacoAttached = "1";
+          const wrapper = document.createElement("div");
+          wrapper.className = "code-editor-shell";
+          wrapper.style.width = "100%";
+          const host = document.createElement("div");
+          host.className = "code-editor-host";
+          const rowsAttr = parseInt(area.getAttribute("rows") || "12", 10);
+          const hostHeight = Math.max(200, rowsAttr * 20);
+          host.style.height = `${hostHeight}px`;
+          wrapper.appendChild(host);
+          area.parentNode.insertBefore(wrapper, area.nextSibling);
+          const language = (area.dataset.codeLanguage || "python").toLowerCase();
+          const readOnly = area.disabled || area.hasAttribute("readonly");
+          const editor = monaco.editor.create(host, {
+            value: area.value || "",
+            language,
+            theme: "vs-dark",
+            readOnly,
+            automaticLayout: true,
+            minimap: { enabled: false },
+            scrollBeyondLastLine: false,
+          });
+          const syncValue = () => {
+            area.value = editor.getValue();
+          };
+          editor.onDidChangeModelContent(syncValue);
+          syncValue();
+          area.style.display = "none";
+        });
+      })
+      .catch((err) => {
+        console.warn("Unable to initialize Monaco editor", err);
+      });
+  }
+
   function setupTokenQuestions() {
     document.querySelectorAll("[data-token-question]").forEach((container) => {
       const slots = Array.from(container.querySelectorAll("[data-token-slot]"));
@@ -1023,6 +1109,7 @@ json.dumps(results)
   }
 
   setupExamBuilder();
+  setupCodeEditors();
   setupExamRunner();
   setupTokenQuestions();
   setupFillQuestions();

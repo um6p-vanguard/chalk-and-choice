@@ -1373,6 +1373,38 @@ def exams_show(code):
         student_name=session.get("student_name"),
     )
 
+@app.route("/exams/<code>/submissions/<int:submission_id>/download")
+@require_user()
+def exams_download_submission(code, submission_id):
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    submission = ExamSubmission.query.filter_by(id=submission_id, exam_id=exam.id).first_or_404()
+    payload = {
+        "exam": {
+            "code": exam.code,
+            "title": exam.title,
+            "description": exam.description,
+        },
+        "student": {
+            "id": submission.student_id,
+            "name": submission.student_name,
+        },
+        "status": submission.status,
+        "score": submission.score,
+        "max_score": submission.max_score,
+        "started_at": submission.started_at.isoformat() if submission.started_at else None,
+        "submitted_at": submission.submitted_at.isoformat() if submission.submitted_at else None,
+        "last_activity_at": submission.last_activity_at.isoformat() if submission.last_activity_at else None,
+        "answers": submission.answers_json,
+        "grading": submission.grading_json,
+        "run_logs": submission.run_logs,
+    }
+    filename = f"{exam.code}_submission_{submission.id}.json"
+    body = json.dumps(payload, indent=2, sort_keys=True)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+    return Response(body, mimetype="application/json", headers=headers)
+
 @app.post("/exams/<code>/open")
 @require_user()
 def exams_open(code):
@@ -1388,6 +1420,16 @@ def exams_close(code):
     if not verify_csrf(): abort(400, "bad csrf")
     exam = Exam.query.filter_by(code=code).first_or_404()
     exam.is_open = False
+    db.session.commit()
+    return redirect(url_for("exams_show", code=exam.code))
+
+@app.post("/exams/<code>/password")
+@require_user()
+def exams_update_password(code):
+    if not verify_csrf(): abort(400, "bad csrf")
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    password = (request.form.get("access_password") or "").strip()
+    exam.set_access_password(password)
     db.session.commit()
     return redirect(url_for("exams_show", code=exam.code))
 

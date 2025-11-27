@@ -84,7 +84,7 @@
           {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
-          <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+          <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
           {% if raw_samples %}
             <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
               <div class="row" style="justify-content:space-between; align-items:center;">
@@ -94,6 +94,7 @@
                 {% endif %}
               </div>
               {% if public_samples %}
+                <p class="muted" style="margin:10px 0;">Sample runs compare your output against hidden expected results.</p>
                 <ul style="list-style:none; padding:0; margin:10px 0;">
                   {% for sample in public_samples %}
                     <li style="margin-bottom:8px; border:1px dashed #334155; border-radius:8px; padding:8px;">
@@ -104,8 +105,7 @@
                         <div class="muted">Input:</div>
                         <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.input }}</pre>
                       {% endif %}
-                      <div class="muted">Expected output:</div>
-                      <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.expected or sample.output }}</pre>
+                      <div class="muted" style="margin-top:6px;">Output is validated against a hidden expected result.</div>
                     </li>
                   {% endfor %}
                 </ul>
