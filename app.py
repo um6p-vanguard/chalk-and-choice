@@ -1473,15 +1473,22 @@ def exam_take(code):
     submission = None
     base_answers = {}
     if student:
-        q = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id)
+        # Always keep a single row per (exam_id, student_id) to satisfy the UNIQUE constraint.
+        submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
 
-        if ALLOW_MULTI_ATTEMPTS:
-            # Try to reuse an active (not yet submitted) attempt
-            submission = q.filter(ExamSubmission.status != "submitted") \
-                          .order_by(ExamSubmission.started_at.asc()).first()
-        else:
-            # Original behavior: single attempt
-            submission = q.order_by(ExamSubmission.started_at.asc()).first()
+        if submission and ALLOW_MULTI_ATTEMPTS and submission.status == "submitted":
+            # Start a fresh attempt by resetting the existing row.
+            _clear_exam_draft(exam.id)
+
+            submission.status = "in_progress"
+            submission.started_at = datetime.utcnow()
+            submission.submitted_at = None
+            submission.last_activity_at = submission.started_at
+            submission.answers_json = {}
+            submission.run_logs = []
+            submission.score = 0.0
+            submission.max_score = 0.0
+            submission.grading_json = None
 
         if not submission:
             submission = ExamSubmission(
@@ -1498,9 +1505,10 @@ def exam_take(code):
         base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
         submission.last_activity_at = datetime.utcnow()
         db.session.commit()
+
     
-    already_submitted = bool(submission and submission.status == "submitted" and not ALLOW_MULTI_ATTEMPTS)
-    if already_submitted and not preview:
+    already_submitted = bool(submission and submission.status == "submitted")
+    if already_submitted and not preview and not ALLOW_MULTI_ATTEMPTS:
         _clear_exam_draft(exam.id)
         return render_template(
             "exams_submitted.html",
@@ -1509,7 +1517,7 @@ def exam_take(code):
             user=user,
             student_name=session.get("student_name"),
         )
-    
+
 
 
     draft_answers = _get_exam_draft(exam.id) if student else {}
@@ -1541,12 +1549,12 @@ def exam_take(code):
     can_submit = bool(student and exam.is_available)
     
     if not ALLOW_MULTI_ATTEMPTS:
+        # In single-attempt mode, block further submissions after one is submitted.
         can_submit = can_submit and (not submission or submission.status != "submitted")
     
     if can_submit and time_remaining is not None:
         can_submit = can_submit and (time_remaining > 0)
     
-
 
     if request.method == "POST" and not locked:
         if preview:
