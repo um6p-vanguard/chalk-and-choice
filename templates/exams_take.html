@@ -94,7 +94,6 @@
                 {% endif %}
               </div>
               {% if public_samples %}
-                <p class="muted" style="margin:10px 0;">Sample runs compare your output against hidden expected results.</p>
                 <ul style="list-style:none; padding:0; margin:10px 0;">
                   {% for sample in public_samples %}
                     <li style="margin-bottom:8px; border:1px dashed #334155; border-radius:8px; padding:8px;">
@@ -105,7 +104,6 @@
                         <div class="muted">Input:</div>
                         <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.input }}</pre>
                       {% endif %}
-                      <div class="muted" style="margin-top:6px;">Output is validated against a hidden expected result.</div>
                     </li>
                   {% endfor %}
                 </ul>
