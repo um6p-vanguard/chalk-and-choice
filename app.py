@@ -33,6 +33,7 @@ APP_SECRET = os.environ.get("APP_SECRET") or secrets.token_hex(32)
 DB_PATH = os.path.abspath(os.environ.get("CLASSVOTE_DB", "classvote.db"))
 DB_URI  = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR links
+ALLOW_MULTI_ATTEMPTS = os.environ.get("ALLOW_MULTI_ATTEMPTS", "0") == "1"
 
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
@@ -1147,15 +1148,8 @@ def _grade_exam_submission(exam, answers):
             if matches and answers_expected:
                 res["earned"] = points
         elif qtype == "code":
-            tests = q.get("samples") or []
-            mode = q.get("mode") or "script"
-            if tests:
-                results = _run_code_tests_backend(raw_answer, tests, mode)
-                res["cases"] = results
-                total_cases = len(results)
-                passed_cases = sum(1 for r in results if r.get("status") == "passed")
-                if total_cases:
-                    res["earned"] = points * (passed_cases / total_cases)
+            res["manual_review"] = True
+            res["cases"] = []    
         details.append(res)
         earned += res["earned"]
     return earned, total, details
@@ -1479,7 +1473,16 @@ def exam_take(code):
     submission = None
     base_answers = {}
     if student:
-        submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
+        q = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id)
+
+        if ALLOW_MULTI_ATTEMPTS:
+            # Try to reuse an active (not yet submitted) attempt
+            submission = q.filter(ExamSubmission.status != "submitted") \
+                          .order_by(ExamSubmission.started_at.asc()).first()
+        else:
+            # Original behavior: single attempt
+            submission = q.order_by(ExamSubmission.started_at.asc()).first()
+
         if not submission:
             submission = ExamSubmission(
                 exam_id=exam.id,
@@ -1491,11 +1494,12 @@ def exam_take(code):
             )
             db.session.add(submission)
             db.session.commit()
+
         base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
         submission.last_activity_at = datetime.utcnow()
         db.session.commit()
-
-    already_submitted = bool(submission and submission.status == "submitted")
+    
+    already_submitted = bool(submission and submission.status == "submitted" and not ALLOW_MULTI_ATTEMPTS)
     if already_submitted and not preview:
         _clear_exam_draft(exam.id)
         return render_template(
@@ -1505,6 +1509,8 @@ def exam_take(code):
             user=user,
             student_name=session.get("student_name"),
         )
+    
+
 
     draft_answers = _get_exam_draft(exam.id) if student else {}
     previous_answers = dict(base_answers)
@@ -1532,9 +1538,15 @@ def exam_take(code):
                 student_name=session.get("student_name"),
             )
 
-    can_submit = bool(student and exam.is_available and (not submission or submission.status != "submitted"))
+    can_submit = bool(student and exam.is_available)
+    
+    if not ALLOW_MULTI_ATTEMPTS:
+        can_submit = can_submit and (not submission or submission.status != "submitted")
+    
     if can_submit and time_remaining is not None:
-        can_submit = time_remaining > 0
+        can_submit = can_submit and (time_remaining > 0)
+    
+
 
     if request.method == "POST" and not locked:
         if preview:
