@@ -705,7 +705,6 @@
         rightCol.innerHTML = `
           <div class="muted">Your output</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
-          <div class="muted" style="margin-top:6px;">Compared against a hidden expected result.</div>
         `;
 
         splitRow.appendChild(leftCol);
