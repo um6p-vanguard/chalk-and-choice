@@ -41,7 +41,7 @@
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
         <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • {{ q.title }}{% endif %}</div>
-        <p class="q" style="margin:8px 0 12px 0;">{{ q.prompt }}</p>
+        <p class="q" style="margin:8px 0 12px 0; white-space: pre-line;">{{ q.prompt }}</p>
         {% if q.code_snippet %}
           <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
         {% endif %}
@@ -71,7 +71,7 @@
           {% if q.statement %}
             <div style="padding:10px; border-radius:8px; background:#0b1220; margin-bottom:10px;">
               <strong>Problem statement</strong>
-              <p class="muted" style="margin:6px 0 0 0;">{{ q.statement }}</p>
+              <p class="muted" style="margin:6px 0 0 0; white-space: pre-line;">{{ q.statement }}</p>
             </div>
           {% endif %}
           {% if q.mode == "function" and q.function_signature %}
