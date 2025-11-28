@@ -746,25 +746,69 @@
       pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
       const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins
+
 code = str(runner_code)
 samples = runner_samples.to_py()
 mode = str(runner_mode)
+
+# ---- Hard limits (tune as you like) ----
+MAX_SETUP_OPS = 50_000    # for exec(code) in function mode
+MAX_RUN_OPS   = 200_000   # for each sample run
+
+class TimeLimitExceeded(Exception):
+    pass
+
+def _make_tracer(limit):
+    counter = {"n": 0}
+    def tracefunc(frame, event, arg):
+        if event == "line":
+            counter["n"] += 1
+            if counter["n"] > limit:
+                raise TimeLimitExceeded("Execution time limit exceeded.")
+        return tracefunc
+    return tracefunc
+
+def _safe_exec(src, glb, lcl, limit):
+    tracer = _make_tracer(limit)
+    sys.settrace(tracer)
+    try:
+        exec(src, glb, lcl)
+    finally:
+        sys.settrace(None)
+
+def _safe_eval(expr, glb, lcl, limit):
+    tracer = _make_tracer(limit)
+    sys.settrace(tracer)
+    try:
+        return eval(expr, glb, lcl)
+    finally:
+        sys.settrace(None)
+
 results = []
 namespace = {}
 setup_error = None
+
+# ---------- Setup for function mode ----------
 if mode == "function":
     try:
-        exec(code, namespace, namespace)
+        _safe_exec(code, namespace, namespace, MAX_SETUP_OPS)
+    except TimeLimitExceeded:
+        setup_error = "Setup time limit exceeded."
     except Exception:
         setup_error = traceback.format_exc()
+
+# ---------- Run samples ----------
 for sample in samples:
     name = sample.get("name") or "Sample"
+
     if mode == "function":
         call_expr = (sample.get("call") or sample.get("input") or "").strip()
         expected_output = (sample.get("expected") or sample.get("output") or "").strip()
+
         status = "passed"
         error_text = ""
         output_value = ""
+
         if not call_expr:
             status = "error"
             error_text = "Missing call expression."
@@ -776,15 +820,21 @@ for sample in samples:
             original_stdout = sys.stdout
             sys.stdout = stdout
             try:
-                result = eval(call_expr, namespace, namespace)
-                output_value = repr(result)
-            except Exception:
-                status = "error"
-                error_text = traceback.format_exc()
+                try:
+                    result = _safe_eval(call_expr, namespace, namespace, MAX_RUN_OPS)
+                    output_value = repr(result)
+                except TimeLimitExceeded:
+                    status = "timeout"
+                    error_text = "Execution time limit exceeded."
+                except Exception:
+                    status = "error"
+                    error_text = traceback.format_exc()
             finally:
                 sys.stdout = original_stdout
+
         if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
             status = "mismatch"
+
         results.append({
             "name": name,
             "status": status,
@@ -793,31 +843,44 @@ for sample in samples:
             "expected": expected_output,
             "error": error_text,
         })
+
     else:
+        # script / stdin mode
         sample_input = sample.get("input") or ""
         expected_output = sample.get("expected") or sample.get("output") or ""
+
         stdin = io.StringIO(sample_input)
         stdout = io.StringIO()
         original_stdout = sys.stdout
         original_stdin = sys.stdin
         original_input = builtins.input
+
         sys.stdout = stdout
         sys.stdin = stdin
         builtins.input = lambda prompt=None: stdin.readline().rstrip("\\n")
+
         status = "passed"
         error_text = ""
+
         try:
-            exec(code, {"__name__": "__main__"})
-        except Exception:
-            status = "error"
-            error_text = traceback.format_exc()
+            try:
+                _safe_exec(code, {"__name__": "__main__"}, {}, MAX_RUN_OPS)
+            except TimeLimitExceeded:
+                status = "timeout"
+                error_text = "Execution time limit exceeded."
+            except Exception:
+                status = "error"
+                error_text = traceback.format_exc()
         finally:
             sys.stdout = original_stdout
             sys.stdin = original_stdin
             builtins.input = original_input
+
         output_value = stdout.getvalue()
+
         if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
             status = "mismatch"
+
         results.append({
             "name": name,
             "status": status,
@@ -826,6 +889,7 @@ for sample in samples:
             "expected": expected_output,
             "error": error_text,
         })
+
 json.dumps(results)
       `);
       pyodide.globals.delete("runner_code");
