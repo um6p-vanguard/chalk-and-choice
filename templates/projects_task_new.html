@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" data-exam-builder>
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Add task to {{ project.title }}</h3>
+      <p class="muted" style="margin-top:4px;">Tasks behave like mini exams. Configure prompts and whether grading is automatic or requires mentor review.</p>
+    </div>
+    <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
+  </div>
+  {% if error %}<p class="text-danger" style="margin-top:10px;">{{ error }}</p>{% endif %}
+  <form method="post" autocomplete="off" id="exam-builder-form">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Task title</label>
+    <input type="text" name="title" required placeholder="e.g., Lists warmup" value="{{ form_data.title }}">
+
+    <label>Short description (optional)</label>
+    <textarea name="description" rows="2" placeholder="Shown above the questions.">{{ form_data.description }}</textarea>
+
+    <label>Task instructions</label>
+    <textarea name="instructions" rows="3" placeholder="Specific guidance for this task.">{{ form_data.instructions }}</textarea>
+
+    <div class="row" style="gap:12px; flex-wrap:wrap;">
+      <label style="display:flex; align-items:center; gap:6px; margin-top:12px;">
+        <input type="checkbox" name="required" value="1" {% if form_data.required %}checked{% endif %}>
+        Required task
+      </label>
+      <label style="display:flex; align-items:center; gap:6px; margin-top:12px;">
+        <input type="hidden" name="auto_grade" value="0">
+        <input type="checkbox" name="auto_grade" value="1" {% if form_data.auto_grade %}checked{% endif %}>
+        Auto-grade responses
+      </label>
+      <label style="display:flex; align-items:center; gap:6px; margin-top:12px;">
+        <input type="checkbox" name="requires_review" value="1" {% if form_data.requires_review %}checked{% endif %}>
+        Mentor review required
+      </label>
+    </div>
+
+    <div class="sp"></div>
+    <h4>Questions</h4>
+    <p class="muted" style="margin-top:-4px;">Use the builder to add multiple-choice, free text, or Python coding prompts.</p>
+
+    <div data-question-list style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
+
+    <div class="row" style="gap:12px; margin-top:8px; flex-wrap:wrap; align-items:flex-start;">
+      <input type="hidden" name="question_type" data-question-type value="{{ form_data.question_type or 'mcq' }}">
+      <div data-question-type-picker style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'mcq' %}btn-primary{% endif %}" data-type-choice="mcq">Multiple choice</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'multi' %}btn-primary{% endif %}" data-type-choice="multi">Multi-select</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'text' %}btn-primary{% endif %}" data-type-choice="text">Text</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'code' %}btn-primary{% endif %}" data-type-choice="code">Python code</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'tokens' %}btn-primary{% endif %}" data-type-choice="tokens">Token fill</button>
+        <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'fill' %}btn-primary{% endif %}" data-type-choice="fill">Fill-in text</button>
+      </div>
+      <button type="button" class="btn" data-add-question>Add question</button>
+    </div>
+
+    <input type="hidden" name="questions_payload" id="questions_payload" value="{{ form_data.questions_payload|e }}">
+
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Save task</button>
+    <a class="btn" href="{{ url_for('projects_show', code=project.code) }}" style="margin-left:8px;">Cancel</a>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+{% endblock %}

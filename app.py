@@ -10,8 +10,10 @@ from itsdangerous import URLSafeSerializer
 
 from models import (db, Poll, Vote, Student, User, Form, 
                     FormResponse, LectureQuestion, LectureSignal,
-                    StudentStats, Intervention, Exam, ExamSubmission, Notebook)
+                    StudentStats, Intervention, Exam, ExamSubmission, Grade,
+                    Project, ProjectTask, ProjectTaskSubmission, ProjectDependency)
 import qrcode
+from sqlalchemy import func
 
 # --------------------------------------------------------------------
 # Utils
@@ -1089,6 +1091,89 @@ def _clear_exam_draft(exam_id):
         session["exam_drafts"] = drafts
         session.modified = True
 
+def _get_task_draft(task_id):
+    drafts = session.get("task_drafts")
+    if isinstance(drafts, dict):
+        payload = drafts.get(str(task_id))
+        if isinstance(payload, dict):
+            return dict(payload)
+    return {}
+
+def _save_task_draft(task_id, answers):
+    drafts = session.get("task_drafts")
+    if not isinstance(drafts, dict):
+        drafts = {}
+    drafts[str(task_id)] = answers
+    session["task_drafts"] = drafts
+    session.modified = True
+
+def _clear_task_draft(task_id):
+    drafts = session.get("task_drafts")
+    if isinstance(drafts, dict) and drafts.pop(str(task_id), None) is not None:
+        session["task_drafts"] = drafts
+        session.modified = True
+
+def _find_student_by_email(email: str):
+    if not email:
+        return None
+    normalized = email.strip().lower()
+    if not normalized:
+        return None
+    return Student.query.filter(func.lower(Student.email) == normalized).first()
+
+def _create_grade_entry(student, assignment, score, max_score, remarks=None):
+    if not student or not assignment:
+        return None
+    entry = Grade(
+        student_id=student.id,
+        student_name=student.name,
+        assignment=assignment,
+        score=score,
+        max_score=max_score,
+        remarks=(remarks or "").strip() or None,
+    )
+    db.session.add(entry)
+    return entry
+
+def _project_task_submission(task, student):
+    if not student:
+        return None
+    return ProjectTaskSubmission.query.filter_by(task_id=task.id, student_id=student.id).first()
+
+def _project_required_count(project):
+    required_tasks = [t for t in project.tasks if t.required]
+    if project.required_task_count and project.required_task_count > 0:
+        return min(project.required_task_count, len(required_tasks) or len(project.tasks))
+    return len(required_tasks) if required_tasks else len(project.tasks)
+
+def _project_completed(project, student):
+    required_count = _project_required_count(project)
+    if required_count <= 0:
+        return True
+    required_tasks = [t for t in project.tasks if t.required]
+    tasks_to_check = required_tasks if required_tasks else list(project.tasks)
+    completed = 0
+    for task in tasks_to_check:
+        sub = _project_task_submission(task, student)
+        if not sub:
+            continue
+        if task.requires_review:
+            if sub.status == "accepted":
+                completed += 1
+        else:
+            if sub.status in ("submitted", "accepted"):
+                completed += 1
+        if completed >= required_count:
+            return True
+    return False
+
+def _project_dependencies_met(project, student):
+    deps = project.dependencies or []
+    for dep in deps:
+        if not _project_completed(dep.prerequisite, student):
+            return False
+    return True
+
 def _grade_exam_submission(exam, answers):
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
     answer_map = answers if isinstance(answers, dict) else {}
@@ -1652,7 +1737,12 @@ def exam_take(code):
                 student_name=session.get("student_name"),
             )
         else:
-            # Navigation only: DO NOT hit the DB, drafts are in the session.
+            if submission and student:
+                answers = dict(base_answers)
+                answers.update(draft_answers)
+                submission.answers_json = answers
+                submission.last_activity_at = datetime.utcnow()
+                db.session.commit()
             target = q_index
             if action == "prev":
                 target = max(0, q_index - 1)
@@ -1732,118 +1822,553 @@ def exams_log_run(code):
     return jsonify({"ok": True, "log_count": len(logs)})
 
 # --------------------------------------------------------------------
-# Notebook management (JupyterLite)
+# Projects & Tasks
 # --------------------------------------------------------------------
 
-def _filename_from_nb(nb_json, fallback: str) -> str:
-    """Return notebook name from metadata (chalk_name) or fallback."""
-    try:
-        meta = (nb_json.get("metadata") or {})
-        name = (meta.get("chalk_name") or "").strip()
-        return name if name else fallback
-    except Exception:
-        return fallback
+@app.route("/projects")
+@require_user()
+def projects_list():
+    projects = Project.query.order_by(Project.created_at.desc()).all()
+    return render_template(
+        "projects_list.html",
+        projects=projects,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
 
-@app.route("/notebooks")
-@require_student()
-def notebooks_page():
-    return render_template("notebooks.html", user=current_user(), student_name=session.get("student_name"))
+@app.route("/projects/new", methods=["GET", "POST"])
+@require_user()
+def projects_new():
+    form_data = {
+        "title": request.form.get("title") or "",
+        "description": request.form.get("description") or "",
+        "instructions": request.form.get("instructions") or "",
+        "required_task_count": request.form.get("required_task_count") or "",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        if not title:
+            error = "Project title is required."
+        required_count = None
+        rtc_raw = form_data["required_task_count"].strip()
+        if rtc_raw:
+            try:
+                required_count = max(0, int(rtc_raw))
+            except Exception:
+                error = "Required task count must be a number."
+        if not error:
+            code = gen_code(8)
+            while Project.query.filter_by(code=code).first() is not None:
+                code = gen_code(8)
+            project = Project(
+                code=code,
+                title=title,
+                description=form_data["description"].strip() or None,
+                instructions=form_data["instructions"].strip() or None,
+                required_task_count=required_count,
+                is_active=True,
+            )
+            db.session.add(project)
+            db.session.commit()
+            return redirect(url_for("projects_show", code=project.code))
+    return render_template(
+        "projects_new.html",
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
 
-@app.route("/my-notebooks")
-@require_student()
-def my_notebooks_page():
-    s = current_student()
-    rows = (Notebook.query
-            .filter_by(student_id=s.id)
-            .order_by(Notebook.updated_at.desc())
-            .all())
-    items = []
-    for nb in rows:
-        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
-        items.append({"id": nb.id, "name": fname, "updated_at": nb.updated_at})
-    return render_template("my_notebooks.html", notebooks=items, user=current_user(), student_name=session.get("student_name"))
+@app.route("/projects/<code>")
+@require_user()
+def projects_show(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    tasks = ProjectTask.query.filter_by(project_id=project.id).order_by(ProjectTask.order_index.asc(), ProjectTask.id.asc()).all()
+    deps = ProjectDependency.query.filter_by(project_id=project.id).all()
+    other_projects = Project.query.filter(Project.id != project.id).order_by(Project.title.asc()).all()
+    return render_template(
+        "projects_show.html",
+        project=project,
+        tasks=tasks,
+        dependencies=deps,
+        other_projects=other_projects,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
 
-@app.get("/api/csrf")
-@require_student()
-def api_csrf():
-    return jsonify({"csrf": csrf_token()})
+@app.post("/projects/<code>/dependencies")
+@require_user()
+def projects_add_dependency(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    dep_code = (request.form.get("dependency_code") or "").strip()
+    prerequisite = Project.query.filter_by(code=dep_code).first()
+    if prerequisite and prerequisite.id != project.id:
+        exists = ProjectDependency.query.filter_by(project_id=project.id, prerequisite_id=prerequisite.id).first()
+        if not exists:
+            dep = ProjectDependency(project_id=project.id, prerequisite_id=prerequisite.id)
+            db.session.add(dep)
+            db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
 
-@app.get("/api/notebooks")
+@app.route("/projects/<code>/tasks/new", methods=["GET", "POST"])
+@require_user()
+def projects_task_new(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    req_flag = request.form.get("required")
+    auto_flag = request.form.get("auto_grade")
+    review_flag = request.form.get("requires_review")
+    form_data = {
+        "title": request.form.get("title") or "",
+        "description": request.form.get("description") or "",
+        "instructions": request.form.get("instructions") or "",
+        "questions_payload": request.form.get("questions_payload") or "[]",
+        "required": True if request.method != "POST" and req_flag is None else bool(req_flag),
+        "auto_grade": True if request.method != "POST" and auto_flag is None else (auto_flag == "1"),
+        "requires_review": bool(review_flag),
+        "question_type": request.form.get("question_type") or "mcq",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        if not title:
+            error = "Task title is required."
+        questions = []
+        if not error:
+            try:
+                payload = json.loads(form_data["questions_payload"] or "[]")
+                questions = _normalize_exam_questions(payload)
+            except ValueError as exc:
+                error = str(exc)
+            except Exception:
+                error = "Unable to parse task questions."
+        if not questions and not error:
+            error = "Add at least one question for the task."
+        if not error:
+            order_index = (ProjectTask.query.filter_by(project_id=project.id).count() or 0) + 1
+            task = ProjectTask(
+                project_id=project.id,
+                title=title,
+                description=form_data["description"].strip() or None,
+                instructions=form_data["instructions"].strip() or None,
+                questions_json=questions,
+                required=form_data["required"],
+                auto_grade=form_data["auto_grade"],
+                requires_review=form_data["requires_review"],
+                order_index=order_index,
+            )
+            db.session.add(task)
+            db.session.commit()
+            return redirect(url_for("projects_show", code=project.code))
+    return render_template(
+        "projects_task_new.html",
+        project=project,
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/student/projects")
 @require_student()
-def notebooks_list():
-    s = current_student()
-    rows = (Notebook.query
-            .filter_by(student_id=s.id)
-            .order_by(Notebook.updated_at.desc())
-            .all())
-    payload = []
-    for nb in rows:
-        fname = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
-        payload.append({
-            "id": nb.id,
-            "name": fname,
-            "updated_at": nb.updated_at.isoformat()
+def student_projects():
+    student = current_student()
+    projects = Project.query.filter_by(is_active=True).order_by(Project.created_at.asc()).all()
+    rows = []
+    for project in projects:
+        unlocked = _project_dependencies_met(project, student)
+        completed = _project_completed(project, student) if unlocked else False
+        tasks = []
+        completed_count = 0
+        for task in project.tasks:
+            submission = _project_task_submission(task, student)
+            status = submission.status if submission and submission.status else "not_started"
+            if status in ("submitted", "accepted", "pending_review"):
+                completed_count += 1
+            tasks.append({
+                "task": task,
+                "status": status,
+                "submission": submission,
+            })
+        rows.append({
+            "project": project,
+            "unlocked": unlocked,
+            "completed": completed,
+            "tasks": tasks,
+            "completed_count": completed_count,
+            "total_tasks": len(tasks),
         })
-    return jsonify({"items": payload})
+    return render_template(
+        "projects_student.html",
+        projects=rows,
+        user=current_user(),
+        student_name=student.name,
+    )
 
-@app.get("/api/notebooks/<int:nb_id>")
-@require_student()
-def notebooks_get(nb_id: int):
-    s = current_student()
-    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
-    if not nb:
-        raise NotFound()
-    name = _filename_from_nb(nb.content_json, f"Notebook-{nb.id}.ipynb")
-    return jsonify({"id": nb.id, "name": name, "content": nb.content_json})
+def _task_exam_view(project, task):
+    return type("TaskExamView", (), {
+        "title": f"{project.title} — {task.title}",
+        "description": task.description,
+        "instructions": task.instructions,
+        "starts_at": None,
+        "ends_at": None,
+        "duration_minutes": None,
+        "code": f"{project.code}-{task.id}",
+    })()
 
-@app.post("/api/notebooks")
+@app.route("/projects/<code>/task/<int:task_id>", methods=["GET", "POST"])
 @require_student()
-def notebooks_create():
+def project_task_take(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    student = current_student()
+    if not _project_dependencies_met(project, student):
+        abort(403)
+    submission = _project_task_submission(task, student)
+    if not submission:
+        submission = ProjectTaskSubmission(
+            task_id=task.id,
+            project_id=project.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+        )
+        db.session.add(submission)
+        db.session.commit()
+    questions = task.questions_json if isinstance(task.questions_json, list) else []
+    total_questions = len(questions)
+
+    def clamp_q(idx):
+        if total_questions <= 0:
+            return 0
+        try:
+            val = int(idx)
+        except Exception:
+            val = 0
+        return max(0, min(val, total_questions - 1))
+
+    requested_q = request.args.get("q", "0")
+    q_index = clamp_q(requested_q)
+    draft_answers = _get_task_draft(task.id)
+    base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    previous_answers = dict(base_answers)
+    previous_answers.update(draft_answers)
+
+    can_submit = submission.status not in ("submitted", "pending_review", "accepted")
+    preview = False
+
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        post_q_index = clamp_q(request.form.get("q_index", q_index))
+        q_index = post_q_index
+        current_question = questions[q_index] if total_questions else None
+        if current_question:
+            qid = current_question.get("id")
+            if qid:
+                field = f"answer_{qid}"
+                if current_question.get("type") == "multi":
+                    vals = request.form.getlist(field)
+                    val = "||".join(vals)
+                else:
+                    val = request.form.get(field, "")
+                draft_answers[qid] = val
+                previous_answers[qid] = val
+                _save_task_draft(task.id, draft_answers)
+        action = request.form.get("nav_action") or request.form.get("nav_action_auto")
+        if not action:
+            if total_questions and q_index >= total_questions - 1:
+                action = "submit"
+            else:
+                action = "next"
+        if action == "submit":
+            if not can_submit:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=False,
+                    preview=preview,
+                    already_submitted=True,
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                ), 403
+            answers = dict(base_answers)
+            answers.update(draft_answers)
+            grade_score = 0
+            grade_total = 0
+            grade_details = []
+            if task.auto_grade:
+                grade_score, grade_total, grade_details = _grade_exam_submission(task, answers)
+            submission.answers_json = answers
+            submission.score = grade_score
+            submission.max_score = grade_total
+            submission.last_activity_at = datetime.utcnow()
+            submission.submitted_at = datetime.utcnow()
+            if task.requires_review:
+                submission.status = "pending_review"
+            else:
+                submission.status = "submitted"
+            db.session.commit()
+            _clear_task_draft(task.id)
+            return render_template(
+                "exams_submitted.html",
+                exam=_task_exam_view(project, task),
+                submission=submission,
+                user=current_user(),
+                student_name=student.name,
+            )
+        else:
+            answers = dict(base_answers)
+            answers.update(draft_answers)
+            submission.answers_json = answers
+            submission.last_activity_at = datetime.utcnow()
+            db.session.commit()
+            target = q_index
+            if action == "prev":
+                target = max(0, q_index - 1)
+            elif action == "next":
+                target = min(total_questions - 1, q_index + 1) if total_questions else 0
+            return redirect(url_for("project_task_take", code=project.code, task_id=task.id, q=target))
+
+    current_question = dict(questions[q_index]) if total_questions else None
+    exam_view = _task_exam_view(project, task)
+    return render_template(
+        "exams_take.html",
+        exam=exam_view,
+        question=current_question,
+        total_questions=total_questions,
+        current_index=q_index,
+        has_prev=(q_index > 0),
+        has_next=(q_index + 1 < total_questions),
+        can_submit=can_submit,
+        preview=preview,
+        already_submitted=(submission.status in ("submitted", "pending_review", "accepted")),
+        previous_answers=previous_answers,
+        time_remaining_seconds=None,
+        user=current_user(),
+        student_name=student.name,
+        run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+    )
+
+@app.route("/api/projects/<code>/tasks/<int:task_id>/log-run", methods=["POST"])
+def projects_task_log_run(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    student = current_student()
+    if not student:
+        abort(401)
+    submission = _project_task_submission(task, student)
+    if not submission:
+        submission = ProjectTaskSubmission(
+            task_id=task.id,
+            project_id=project.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+        )
+        db.session.add(submission)
+        db.session.commit()
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
     data = request.get_json(silent=True) or {}
-    hdr = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(hdr, csrf_token()):
-        abort(400, description="Bad CSRF")
-    content = data.get("content")
-    if not isinstance(content, dict):
-        abort(400, description="Missing/invalid content")
-    s = current_student()
-    nb = Notebook(student_id=s.id, content_json=content)
-    db.session.add(nb)
+    summary = {
+        "question_id": data.get("question_id"),
+        "samples": data.get("samples") or [],
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }
+    logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+    logs.append(summary)
+    submission.run_logs = logs
+    submission.last_activity_at = datetime.utcnow()
     db.session.commit()
-    return jsonify({"id": nb.id})
+    return jsonify({"ok": True, "log_count": len(logs)})
 
-@app.put("/api/notebooks/<int:nb_id>")
+@app.route("/projects/reviews")
+@require_user()
+def projects_reviews():
+    submissions = ProjectTaskSubmission.query.filter_by(status="pending_review").order_by(ProjectTaskSubmission.submitted_at.desc()).all()
+    return render_template(
+        "projects_reviews.html",
+        submissions=submissions,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/projects/reviews/<int:submission_id>")
+@require_user()
+def projects_review_detail(submission_id):
+    submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    task = submission.task
+    project = submission.project
+    questions = task.questions_json if task and isinstance(task.questions_json, list) else []
+    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    return render_template(
+        "projects_review_detail.html",
+        submission=submission,
+        project=project,
+        task=task,
+        questions=questions,
+        answers=answers,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/projects/reviews/<int:submission_id>")
+@require_user()
+def projects_review_decision(submission_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    action = request.form.get("action")
+    notes = (request.form.get("review_notes") or "").strip()
+    if action == "accept":
+        submission.status = "accepted"
+    elif action == "reject":
+        submission.status = "rejected"
+    if notes:
+        submission.review_notes = notes
+    submission.last_activity_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("projects_reviews"))
+
+# --------------------------------------------------------------------
+# Gradebook
+# --------------------------------------------------------------------
+
+@app.route("/grades", methods=["GET", "POST"])
+@require_user()
+def grades_admin():
+    message = session.pop("grades_status", None)
+    error = session.pop("grades_error", None)
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        student_email = (request.form.get("student_email") or "").strip()
+        assignment = (request.form.get("assignment") or "").strip()
+        score_raw = request.form.get("score") or "0"
+        max_raw = request.form.get("max_score") or "0"
+        remarks = request.form.get("remarks") or ""
+        student = _find_student_by_email(student_email)
+        if not student:
+            session["grades_error"] = "Student not found for email provided."
+            return redirect(url_for("grades_admin"))
+        if not assignment:
+            session["grades_error"] = "Assignment/test name is required."
+            return redirect(url_for("grades_admin"))
+        try:
+            score = float(score_raw)
+            max_score = float(max_raw)
+        except Exception:
+            session["grades_error"] = "Score and maximum score must be numbers."
+            return redirect(url_for("grades_admin"))
+        _create_grade_entry(student, assignment, score, max_score, remarks)
+        db.session.commit()
+        session["grades_status"] = f"Recorded grade for {student.name}."
+        return redirect(url_for("grades_admin"))
+
+    grades = Grade.query.order_by(Grade.created_at.desc()).limit(200).all()
+    return render_template(
+        "grades_admin.html",
+        grades=grades,
+        message=message,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/grades/import")
+@require_user()
+def grades_import():
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    payload = request.form.get("payload") or ""
+    fmt = (request.form.get("payload_format") or "json").lower()
+    records = []
+    errors = []
+    created = 0
+    if fmt == "csv":
+        try:
+            reader = csv.DictReader(io.StringIO(payload))
+            for row in reader:
+                records.append(row)
+        except Exception as exc:
+            session["grades_error"] = f"Unable to parse CSV: {exc}"
+            return redirect(url_for("grades_admin"))
+    else:
+        try:
+            data = json.loads(payload or "[]")
+            if isinstance(data, dict):
+                data = [data]
+            if not isinstance(data, list):
+                raise ValueError("JSON payload must be a list of objects.")
+            for row in data:
+                if isinstance(row, dict):
+                    records.append(row)
+        except Exception as exc:
+            session["grades_error"] = f"Invalid JSON payload: {exc}"
+            return redirect(url_for("grades_admin"))
+
+    for idx, row in enumerate(records, start=1):
+        email = str(row.get("student_email") or row.get("email") or "").strip()
+        assignment = str(row.get("assignment") or row.get("name") or "").strip()
+        remarks = str(row.get("remarks") or row.get("comment") or "").strip()
+        score_raw = row.get("score")
+        max_raw = row.get("max_score") or row.get("max") or row.get("total")
+        student = _find_student_by_email(email)
+        if not student:
+            errors.append(f"Row {idx}: unknown student '{email}'.")
+            continue
+        if not assignment:
+            errors.append(f"Row {idx}: missing assignment/test name.")
+            continue
+        try:
+            score = float(score_raw)
+            max_score = float(max_raw)
+        except Exception:
+            errors.append(f"Row {idx}: invalid score/max values.")
+            continue
+        _create_grade_entry(student, assignment, score, max_score, remarks)
+        created += 1
+
+    if created:
+        db.session.commit()
+        msg = f"Imported {created} grade(s)."
+        if errors:
+            msg += f" Skipped {len(errors)} row(s)."
+        session["grades_status"] = msg
+    else:
+        db.session.rollback()
+        session["grades_error"] = errors[0] if errors else "No grades imported."
+    return redirect(url_for("grades_admin"))
+
+@app.route("/my-grades")
 @require_student()
-def notebooks_update(nb_id: int):
-    data = request.get_json(silent=True) or {}
-    hdr = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(hdr, csrf_token()):
-        abort(400, description="Bad CSRF")
-    content = data.get("content")
-    if not isinstance(content, dict):
-        abort(400, description="Missing/invalid content")
-
-    s = current_student()
-    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
-    if not nb:
-        raise NotFound()
-    nb.content_json = content
-    db.session.commit()
-    return jsonify({"ok": True})
-
-@app.delete("/api/notebooks/<int:nb_id>")
-@require_student()
-def notebooks_delete(nb_id: int):
-    hdr = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(hdr, csrf_token()):
-        abort(400, description="Bad CSRF")
-    s = current_student()
-    nb = Notebook.query.filter_by(id=nb_id, student_id=s.id).first()
-    if not nb:
-        raise NotFound()
-    db.session.delete(nb)
-    db.session.commit()
-    return jsonify({"ok": True})
+def student_grades():
+    student = current_student()
+    grades = Grade.query.filter_by(student_id=student.id).order_by(Grade.created_at.desc()).all()
+    return render_template(
+        "grades_student.html",
+        grades=grades,
+        user=current_user(),
+        student_name=student.name,
+    )
 
 # --------------------------------------------------------------------
 # Lecture interaction dashboard

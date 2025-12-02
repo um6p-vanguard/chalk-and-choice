@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0;">Gradebook — Add single entry</h3>
+  {% if message %}
+    <div style="margin:10px 0; padding:10px; border:1px solid #059669; border-radius:8px; background:#064e3b;">{{ message }}</div>
+  {% endif %}
+  {% if error %}
+    <div style="margin:10px 0; padding:10px; border:1px solid #b91c1c; border-radius:8px; background:#450a0a;">{{ error }}</div>
+  {% endif %}
+  <form method="post" style="margin-top:12px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Student email</label>
+    <input type="email" name="student_email" placeholder="student@example.com" required>
+    <label>Assignment/Test name</label>
+    <input type="text" name="assignment" placeholder="Quiz 1" required>
+    <div class="row" style="gap:10px;">
+      <div style="flex:1;">
+        <label>Score</label>
+        <input type="number" name="score" step="0.01" min="0" required>
+      </div>
+      <div style="flex:1;">
+        <label>Maximum score</label>
+        <input type="number" name="max_score" step="0.01" min="0" required>
+      </div>
+    </div>
+    <label>Remarks (optional)</label>
+    <textarea name="remarks" rows="2" placeholder="Optional comments"></textarea>
+    <button class="btn btn-primary" type="submit" style="margin-top:12px;">Save grade</button>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Bulk import</h3>
+  <p class="muted" style="margin:6px 0;">Paste JSON or CSV with columns: <code>student_email</code>, <code>assignment</code>, <code>score</code>, <code>max_score</code>, <code>remarks</code>.</p>
+  <form method="post" action="{{ url_for('grades_import') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="row" style="align-items:center; gap:12px;">
+      <label style="margin:0;">Format</label>
+      <select name="payload_format" style="flex:0 0 160px;">
+        <option value="json">JSON</option>
+        <option value="csv">CSV</option>
+      </select>
+      <button class="btn btn-primary" type="submit">Import grades</button>
+    </div>
+    <textarea name="payload" rows="8" placeholder='[{"student_email":"student@example.com","assignment":"Quiz 1","score":8,"max_score":10,"remarks":"Great work"}]'></textarea>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Recent grades</h3>
+    <span class="muted">Showing latest {{ grades|length }} entries</span>
+  </div>
+  {% if grades %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>Assignment</th>
+          <th>Score</th>
+          <th>Remarks</th>
+          <th>Recorded</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for grade in grades %}
+        <tr>
+          <td>{{ grade.student_name }}</td>
+          <td>{{ grade.assignment }}</td>
+          <td>{{ "%.2f"|format(grade.score) }} / {{ "%.2f"|format(grade.max_score) }}</td>
+          <td>{{ grade.remarks or "—" }}</td>
+          <td>{{ grade.created_at.strftime("%b %d %H:%M") if grade.created_at else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:12px;">No grades recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

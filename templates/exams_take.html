@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% set log_url = run_log_url if run_log_url is defined and run_log_url else url_for('exams_log_run', code=exam.code) %}
 <div class="card">
   <h3 style="margin:0;">{{ exam.title }}</h3>
   {% if exam.description %}<p class="muted" style="margin:6px 0;">{{ exam.description }}</p>{% endif %}
@@ -16,7 +17,7 @@
   {% endif %}
 </div>
 <div class="sp"></div>
-<div class="card" data-exam-take data-run-log-url="{{ url_for('exams_log_run', code=exam.code) }}" data-csrf="{{ csrf_token() }}">
+<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}">
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}

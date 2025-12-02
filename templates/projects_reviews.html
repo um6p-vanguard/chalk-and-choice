@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin:0;">Pending task reviews</h3>
+  <p class="muted" style="margin-top:6px;">Approve or reject submissions for tasks that require mentor feedback.</p>
+</div>
+<div class="sp"></div>
+<div class="card">
+  {% if submissions %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Student</th>
+          <th>Project</th>
+          <th>Task</th>
+          <th>Submitted</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sub in submissions %}
+        <tr>
+          <td>{{ sub.student_name or "Unknown" }}</td>
+          <td>{{ sub.project.title if sub.project else "—" }}</td>
+          <td>{{ sub.task.title if sub.task else "—" }}</td>
+          <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>
+          <td>
+            <div class="row" style="gap:6px; flex-wrap:wrap;">
+              <a class="btn" href="{{ url_for('projects_review_detail', submission_id=sub.id) }}" target="_blank">View</a>
+            </div>
+            <form method="post" action="{{ url_for('projects_review_decision', submission_id=sub.id) }}" style="display:flex; gap:6px; flex-wrap:wrap;">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="text" name="review_notes" placeholder="Notes" style="flex:1; min-width:140px;">
+              <button class="btn btn-primary" name="action" value="accept">Accept</button>
+              <button class="btn btn-danger" name="action" value="reject">Reject</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:12px;">No submissions need review.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin-top:0;">My grades</h3>
+  {% if grades %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Assignment</th>
+          <th>Score</th>
+          <th>Remarks</th>
+          <th>Updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for grade in grades %}
+        <tr>
+          <td>{{ grade.assignment }}</td>
+          <td>{{ "%.2f"|format(grade.score) }} / {{ "%.2f"|format(grade.max_score) }}</td>
+          <td>{{ grade.remarks or "—" }}</td>
+          <td>{{ grade.updated_at.strftime("%b %d %H:%M") if grade.updated_at else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:12px;">No grades posted yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

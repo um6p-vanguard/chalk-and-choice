@@ -1,6 +1,0 @@
-{
-  "jupyter-config-data": {
-    "disabledExtensions": ["@jupyterlite/pwa"],
-    "exposeAppInBrowser": true
-  }
-}

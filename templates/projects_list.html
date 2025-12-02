@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Projects</h3>
+    <a class="btn btn-primary" href="{{ url_for('projects_new') }}">New project</a>
+  </div>
+  {% if projects %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Code</th>
+          <th>Title</th>
+          <th>Tasks</th>
+          <th>Required</th>
+          <th>Active</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for project in projects %}
+        <tr>
+          <td><code>{{ project.code }}</code></td>
+          <td>{{ project.title }}</td>
+          <td>{{ project.tasks|length }}</td>
+          <td>
+            {% if project.required_task_count %}
+              {{ project.required_task_count }}
+            {% else %}
+              All
+            {% endif %}
+          </td>
+          <td>{{ "Yes" if project.is_active else "No" }}</td>
+          <td><a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Manage</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:12px;">No projects yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

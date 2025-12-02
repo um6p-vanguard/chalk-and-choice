@@ -208,10 +208,76 @@ class Intervention(db.Model):
     status = db.Column(db.String(20), default="picked", nullable=False)  # picked|running|completed|skipped
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-class Notebook(db.Model):
-    __tablename__ = "notebooks"
+class Grade(db.Model):
+    __tablename__ = "grades"
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
-    content_json = db.Column(JSONText, nullable=False)
+    student_name = db.Column(db.String(120), nullable=False)
+    assignment = db.Column(db.String(255), nullable=False)
+    score = db.Column(db.Float, nullable=False, default=0.0)
+    max_score = db.Column(db.Float, nullable=False, default=0.0)
+    remarks = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    student = db.relationship('Student')
+
+class Project(db.Model):
+    __tablename__ = "projects"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    instructions = db.Column(db.Text, nullable=True)
+    required_task_count = db.Column(db.Integer, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+class ProjectDependency(db.Model):
+    __tablename__ = "project_dependencies"
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    prerequisite_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+
+    project = db.relationship('Project', foreign_keys=[project_id], backref=db.backref('dependencies', cascade="all,delete-orphan"))
+    prerequisite = db.relationship('Project', foreign_keys=[prerequisite_id])
+
+class ProjectTask(db.Model):
+    __tablename__ = "project_tasks"
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    instructions = db.Column(db.Text, nullable=True)
+    questions_json = db.Column(JSONText, nullable=False)
+    required = db.Column(db.Boolean, nullable=False, default=True)
+    auto_grade = db.Column(db.Boolean, nullable=False, default=True)
+    requires_review = db.Column(db.Boolean, nullable=False, default=False)
+    order_index = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    project = db.relationship('Project', backref=db.backref('tasks', cascade="all,delete-orphan", order_by="ProjectTask.order_index"))
+
+class ProjectTaskSubmission(db.Model):
+    __tablename__ = "project_task_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('project_tasks.id', ondelete="CASCADE"), index=True, nullable=False)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), index=True, nullable=True)
+    student_name = db.Column(db.String(120), nullable=True)
+    answers_json = db.Column(JSONText, nullable=False, default=dict)
+    run_logs = db.Column(JSONText, nullable=False, default=list)
+    status = db.Column(db.String(32), nullable=False, default="in_progress")  # in_progress|submitted|pending_review|accepted|rejected
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    last_activity_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    score = db.Column(db.Float, default=0.0, nullable=False)
+    max_score = db.Column(db.Float, default=0.0, nullable=False)
+    review_notes = db.Column(db.Text, nullable=True)
+
+    task = db.relationship('ProjectTask', backref=db.backref('submissions', cascade="all,delete-orphan"))
+    project = db.relationship('Project')
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        UniqueConstraint('task_id', 'student_id', name='uq_project_task_student'),
+    )
