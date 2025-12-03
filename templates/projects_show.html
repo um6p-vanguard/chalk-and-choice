@@ -59,6 +59,69 @@
 
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Group assignments</h3>
+  </div>
+  {% if group_assignments %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Audience</th>
+          <th>Requirement</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for assignment in group_assignments %}
+        <tr>
+          <td>
+            {% if assignment.applies_to_all %}
+              All students (cohort)
+            {% elif assignment.group %}
+              {{ assignment.group.name }}
+            {% else %}
+              (deleted group)
+            {% endif %}
+          </td>
+          <td>{{ "Required" if assignment.is_required else "Optional" }}</td>
+          <td>{{ assignment.created_at.strftime("%b %d %H:%M") if assignment.created_at else "—" }}</td>
+          <td style="text-align:right;">
+            <form method="post" action="{{ url_for('projects_remove_group_assignment', code=project.code, assignment_id=assignment.id) }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <button class="btn" type="submit">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin-top:6px;">No group targeting configured. Project is visible to everyone.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('projects_assign_group', code=project.code) }}" style="margin-top:12px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Assign to group or cohort</label>
+    <div class="row" style="gap:10px;">
+      <select name="group_scope" style="flex:1;">
+        <option value="all">All students (cohort)</option>
+        {% for g in student_groups %}
+          <option value="{{ g.id }}">{{ g.name }}</option>
+        {% endfor %}
+      </select>
+      <select name="is_required">
+        <option value="1">Required</option>
+        <option value="0">Optional</option>
+      </select>
+      <button class="btn" type="submit">Assign</button>
+    </div>
+  </form>
+  <p class="muted" style="margin-top:8px; font-size:0.9rem;">If no assignments exist, the project stays visible to every student.</p>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
     <h3 style="margin:0;">Tasks</h3>
     <a class="btn btn-primary" href="{{ url_for('projects_task_new', code=project.code) }}">Add task</a>
   </div>
@@ -71,6 +134,7 @@
           <th>Auto grade</th>
           <th>Mentor review</th>
           <th>Created</th>
+          <th style="width:160px;">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -81,6 +145,15 @@
           <td>{{ "Yes" if task.auto_grade else "No" }}</td>
           <td>{{ "Yes" if task.requires_review else "No" }}</td>
           <td>{{ task.created_at.strftime("%b %d %H:%M") if task.created_at else "—" }}</td>
+          <td>
+            <div class="row" style="gap:6px;">
+              <a class="btn" href="{{ url_for('projects_task_edit', code=project.code, task_id=task.id) }}">Edit</a>
+              <form method="post" action="{{ url_for('projects_task_delete', code=project.code, task_id=task.id) }}" onsubmit="return confirm('Delete this task?');">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <button class="btn btn-danger" type="submit">Delete</button>
+              </form>
+            </div>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin:0;">Student groups</h3>
+  <p class="muted" style="margin-top:6px;">Create cohorts, add students, and use them to target projects.</p>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin:0;">Create group</h3>
+  {% if error %}
+    <p class="text-danger" style="margin-top:6px;">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('groups_list') }}" style="margin-top:10px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="create_group">
+    <label>Name</label>
+    <input type="text" name="name" value="{{ form_data.name }}" required>
+    <label>Description (optional)</label>
+    <textarea name="description" rows="2">{{ form_data.description }}</textarea>
+    <div class="row" style="justify-content:flex-end; margin-top:12px;">
+      <button class="btn btn-primary" type="submit">Create group</button>
+    </div>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+{% if groups %}
+  {% for row in groups %}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="row" style="justify-content:space-between; align-items:center;">
+        <div>
+          <h3 style="margin:0;">{{ row.group.name }}</h3>
+          {% if row.group.description %}<p class="muted" style="margin:4px 0;">{{ row.group.description }}</p>{% endif %}
+          <p class="muted" style="margin:4px 0;">{{ row.memberships|length }} student{{ '' if row.memberships|length == 1 else 's' }}</p>
+        </div>
+        <form method="post" action="{{ url_for('groups_list') }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="delete_group">
+          <input type="hidden" name="group_id" value="{{ row.group.id }}">
+          <button class="btn btn-danger" type="submit">Delete group</button>
+        </form>
+      </div>
+      {% if row.memberships %}
+        <table style="margin-top:12px;">
+          <thead>
+            <tr>
+              <th>Student</th>
+              <th style="width:140px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for membership in row.memberships %}
+            <tr>
+              <td>{{ membership.student.name if membership.student else "(removed)" }}</td>
+              <td style="text-align:right;">
+                <form method="post" action="{{ url_for('groups_list') }}">
+                  <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                  <input type="hidden" name="action" value="remove_member">
+                  <input type="hidden" name="membership_id" value="{{ membership.id }}">
+                  <button class="btn" type="submit">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted" style="margin-top:10px;">No students in this group yet.</p>
+      {% endif %}
+      {% if students %}
+        <form method="post" action="{{ url_for('groups_list') }}" style="margin-top:12px;">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="add_member">
+          <input type="hidden" name="group_id" value="{{ row.group.id }}">
+          <label>Add student</label>
+          <div class="row" style="gap:10px;">
+            <select name="student_id" style="flex:1;">
+              {% for student in students %}
+                <option value="{{ student.id }}">{{ student.name }} ({{ student.email }})</option>
+              {% endfor %}
+            </select>
+            <button class="btn" type="submit">Add</button>
+          </div>
+        </form>
+      {% else %}
+        <p class="muted" style="margin-top:10px;">No students found to add.</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <p class="muted" style="margin:0;">No groups created yet.</p>
+  </div>
+{% endif %}
+{% endblock %}

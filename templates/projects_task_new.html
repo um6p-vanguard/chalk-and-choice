@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
+{% set editing = task is not none %}
 <div class="card" data-exam-builder>
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
-      <h3 style="margin:0;">Add task to {{ project.title }}</h3>
+      <h3 style="margin:0;">{{ "Edit task" if editing else ("Add task to " ~ project.title) }}</h3>
       <p class="muted" style="margin-top:4px;">Tasks behave like mini exams. Configure prompts and whether grading is automatic or requires mentor review.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
@@ -58,7 +59,7 @@
     <input type="hidden" name="questions_payload" id="questions_payload" value="{{ form_data.questions_payload|e }}">
 
     <div class="sp"></div>
-    <button class="btn btn-primary" type="submit">Save task</button>
+    <button class="btn btn-primary" type="submit">{{ "Save changes" if editing else "Save task" }}</button>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}" style="margin-left:8px;">Cancel</a>
   </form>
 </div>

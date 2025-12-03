@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% set is_task = exam.kind == 'project_task' %}
+{% set submit_label = "Submit task" if is_task else "Submit exam" %}
 {% set log_url = run_log_url if run_log_url is defined and run_log_url else url_for('exams_log_run', code=exam.code) %}
 <div class="card">
   <h3 style="margin:0;">{{ exam.title }}</h3>
@@ -198,7 +200,7 @@
             <button class="btn btn-primary" type="submit" name="nav_action" value="next">Save &amp; Next</button>
           {% else %}
             {% if can_submit %}
-              <button class="btn btn-primary" type="submit" name="nav_action" value="submit">Submit exam</button>
+              <button class="btn btn-primary" type="submit" name="nav_action" value="submit">{{ submit_label }}</button>
             {% elif already_submitted %}
               <span class="muted">Submission already received.</span>
             {% else %}

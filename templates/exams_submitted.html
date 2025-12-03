@@ -1,9 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
+{% set is_task = exam.kind == 'project_task' %}
 <div class="card">
   <h3>{{ exam.title }}</h3>
   <p class="muted">Your submission was received at {{ submission.submitted_at.strftime("%b %d %H:%M:%S UTC") if submission.submitted_at else "now" }}.</p>
   <p class="muted">You may close this tab.</p>
-  <a class="btn" href="{{ url_for('index') }}" style="margin-top:12px;">Back to home</a>
+  <div class="row" style="gap:10px; margin-top:12px; flex-wrap:wrap;">
+    <a class="btn" href="{{ url_for('index') }}">Back to home</a>
+    {% if is_task %}
+      <a class="btn" href="{{ url_for('projects_show', code=exam.project_code) }}">Back to project</a>
+      <a class="btn" href="{{ url_for('student_projects') }}">Back to projects</a>
+    {% endif %}
+  </div>
 </div>
 {% endblock %}

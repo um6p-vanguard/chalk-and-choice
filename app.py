@@ -8,10 +8,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 
-from models import (db, Poll, Vote, Student, User, Form, 
-                    FormResponse, LectureQuestion, LectureSignal,
+from models import (db, Student, User, Form, 
+                    FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
-                    Project, ProjectTask, ProjectTaskSubmission, ProjectDependency)
+                    Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
+                    StudentGroup, StudentGroupMembership, ProjectGroupAssignment)
 import qrcode
 from sqlalchemy import func
 
@@ -260,278 +261,22 @@ def password_new():
 @app.route("/")
 def index():
     u = current_user()
-    polls = Poll.query.order_by(Poll.created_at.desc()).all() if u else []
     student = current_student()
     exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
     available_exams = [ex for ex in exams if ex.is_available] if student else []
     return render_template(
         "index.html",
         user=u,
-        polls=polls,
         student_name=session.get("student_name"),
         exams=exams,
         available_exams=available_exams,
         now_utc=datetime.utcnow(),
     )
 
-# --------------------------------------------------------------------
-# Polls
-# --------------------------------------------------------------------
-def ensure_voter_cookie(resp=None):
-    token = request.cookies.get("voter_id")
-    if not token:
-        token = secrets.token_hex(16)
-        if resp is None:
-            resp = make_response()
-        resp.set_cookie("voter_id", token, max_age=60*60*24*365, httponly=False, samesite="Lax")
-    return token, resp
-
-def token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
-
 def gen_code(n=6):
     import string, random
     alphabet = string.ascii_lowercase + string.digits
     return ''.join(random.choice(alphabet) for _ in range(n))
-
-@app.route("/poll/new", methods=["GET","POST"])
-@require_user()
-def poll_new():
-    if request.method == "POST":
-        if not verify_csrf(): abort(400, "bad csrf")
-        question = (request.form.get("question") or "").strip()
-        options = [((request.form.get(f"opt{i}") or "").strip()) for i in range(1,9)]
-        options = [o for o in options if o]
-        correct_raw = request.form.get("correct")
-        correct_index = int(correct_raw) if (correct_raw not in (None,"") and correct_raw.isdigit()) else None
-        if not question or len(options) < 2:
-            return render_template("poll_new.html", error="Enter a question and at least 2 options.", question=question, options=options, user=current_user())
-        if correct_index is not None and (correct_index < 0 or correct_index >= len(options)):
-            return render_template("poll_new.html", error="Correct answer index out of range.", question=question, options=options, user=current_user())
-        code = gen_code()
-        while Poll.query.filter_by(code=code).first() is not None:
-            code = gen_code()
-        p = Poll(code=code, question=question, options=options, correct_index=correct_index, creator_user_id=current_user().id if current_user() else None)
-        db.session.add(p); db.session.commit()
-        return redirect(url_for("share", code=p.code))
-    return render_template("poll_new.html", user=current_user())
-
-@app.route("/polls")
-@require_user()
-def poll_list():
-    u = current_user()
-    polls = Poll.query.order_by(Poll.created_at.desc()).all()
-    return render_template("poll_list.html", polls=polls, user=u)
-
-@app.route("/poll/<code>/edit", methods=["GET","POST"])
-@require_user()
-def poll_edit(code):
-    p = Poll.query.filter_by(code=code).first_or_404()
-    if request.method == "POST":
-        if not verify_csrf(): abort(400, "bad csrf")
-        question = (request.form.get("question") or "").strip()
-        options = [((request.form.get(f"opt{i}") or "").strip()) for i in range(1,9)]
-        options = [o for o in options if o]
-        correct_raw = request.form.get("correct")
-        correct_index = int(correct_raw) if (correct_raw not in (None,"") and correct_raw.isdigit()) else None
-        if not question or len(options) < 2:
-            return render_template("poll_edit.html", poll=p, error="Enter a question and at least 2 options.", user=current_user())
-        # IMPORTANT: validate against the *new* options length
-        if correct_index is not None and (correct_index < 0 or correct_index >= len(options)):
-            return render_template("poll_edit.html", poll=p, error="Correct answer index out of range.", user=current_user())
-        p.question, p.options, p.correct_index = question, options, correct_index
-        db.session.commit()
-        return redirect(url_for("poll_results", code=p.code))
-    return render_template("poll_edit.html", poll=p, user=current_user())
-
-
-@app.route("/poll/<code>/delete", methods=["POST"])
-@require_user()
-def poll_delete(code):
-    if not verify_csrf(): abort(400, "bad csrf")
-    p = Poll.query.filter_by(code=code).first_or_404()
-    db.session.delete(p); db.session.commit()
-    return redirect(url_for("poll_list"))
-
-@app.route("/share/<code>")
-@require_user()
-def share(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    scheme = "https" if request.is_secure or request.headers.get("X-Forwarded-Proto","").lower()=="https" else "http"
-    host = SHARE_HOST or request.host
-    link = f"{scheme}://{host}{url_for('poll_view', code=poll.code)}"
-    img = qrcode.make(link)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
-    data_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
-    return render_template("share.html", poll=poll, link=link, data_url=data_url, user=current_user(), student_name=session.get("student_name"))
-
-@app.route("/poll/<code>", methods=["GET", "POST"])
-def poll_view(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-
-    if request.method == "POST" and not poll.is_open:
-        return render_template("poll_view.html", poll=poll, error="Voting is closed.", already=False, user=current_user(), student_name=session.get("student_name"))
-
-    if not session.get("student_id"):
-        return redirect(url_for("login", next=url_for("poll_view", code=code)))
-
-    if request.method == "POST" and not verify_csrf():
-        abort(400, "bad csrf")
-
-    token, _ = ensure_voter_cookie(None)
-
-    if request.method == "POST":
-        stu = current_student()
-
-        # cookie- and account-level duplicate protection
-        existing_cookie = Vote.query.filter_by(poll_id=poll.id, voter_token_hash=token_hash(token)).first()
-        existing_student = Vote.query.filter_by(poll_id=poll.id, student_id=stu.id).first() if stu else None
-        if existing_cookie or existing_student:
-            return render_template("poll_view.html", poll=poll, already=True, user=current_user(), student_name=session.get("student_name"))
-
-        try:
-            choice = int(request.form.get("choice", "-1"))
-        except Exception:
-            choice = -1
-        if choice < 0 or choice >= len(poll.options):
-            return render_template("poll_view.html", poll=poll, error="Pick an option", user=current_user(), student_name=session.get("student_name"))
-
-        v = Vote(
-            poll_id=poll.id,
-            choice=choice,
-            voter_token_hash=token_hash(token),
-            student_id=stu.id if stu else None,
-            student_name=stu.name if stu else None,
-        )
-        db.session.add(v); db.session.commit()
-
-        r = make_response(redirect(url_for("thanks")))
-        _, r = ensure_voter_cookie(r)
-        return r
-
-    r = make_response(render_template("poll_view.html", poll=poll, already=False, user=current_user(), student_name=session.get("student_name")))
-    _, r = ensure_voter_cookie(r)
-    return r
-
-@app.route("/poll/<code>/results")
-@require_user()
-def poll_results(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    counts = [0]*len(poll.options)
-    correct = poll.correct_index
-    rows = []
-    for v in poll.votes:
-        counts[v.choice] += 1
-        is_correct = (correct is not None and v.choice == correct)
-        rows.append(dict(name=v.student_name or "(anonymous)", choice=v.choice, when=v.created_at, correct=is_correct))
-    total = sum(counts)
-    accuracy = None
-    if correct is not None and total:
-        accuracy = sum(1 for r in rows if r["correct"]) / total
-    return render_template("poll_results.html", poll=poll, counts=counts, rows=rows, total=total, accuracy=accuracy, user=current_user())
-
-@app.route("/poll/<code>/set-correct", methods=["POST"])
-@require_user()
-def poll_set_correct(code):
-    if not verify_csrf(): abort(400, "bad csrf")
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    val = request.form.get("correct")
-    idx = int(val) if val not in (None,"") and val.isdigit() else None
-    if idx is not None and (idx < 0 or idx >= len(poll.options)):
-        abort(400, "index out of range")
-    poll.correct_index = idx
-    db.session.commit()
-    return redirect(url_for("poll_results", code=code))
-
-@app.route("/api/poll/<code>/stats")
-def poll_stats(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    counts = [0]*len(poll.options)
-    for v in poll.votes:
-        counts[v.choice] += 1
-    return jsonify(dict(counts=counts, total=sum(counts), options=poll.options, question=poll.question, correct_index=poll.correct_index))
-
-@app.route("/poll/<code>/open", methods=["POST"])
-@require_user()
-def poll_open(code):
-    if not verify_csrf(): abort(400, "bad csrf")
-    p = Poll.query.filter_by(code=code).first_or_404()
-    p.is_open = True
-    db.session.commit()
-    return redirect(url_for("poll_results", code=code))
-
-@app.route("/poll/<code>/close", methods=["POST"])
-@require_user()
-def poll_close(code):
-    if not verify_csrf(): abort(400, "bad csrf")
-    p = Poll.query.filter_by(code=code).first_or_404()
-    p.is_open = False
-    db.session.commit()
-    return redirect(url_for("poll_results", code=code))
-
-from flask import stream_with_context
-
-@app.route("/poll/<code>/stream")
-@require_user()
-def poll_stream(code):
-    @stream_with_context
-    def generate():
-        # Tell EventSource to retry after 3s if the connection drops
-        yield "retry: 3000\n\n"
-        last_blob = None
-        try:
-            while True:
-                # Re-fetch each tick; never keep ORM instances across yields
-                p = Poll.query.filter_by(code=code).first()
-                if not p:
-                    yield "event: end\ndata: {}\n\n"
-                    return
-
-                # Tally without touching lazy relationships
-                counts = [0] * len(p.options)
-                for v in Vote.query.filter_by(poll_id=p.id).all():
-                    if 0 <= v.choice < len(counts):
-                        counts[v.choice] += 1
-
-                payload = {
-                    "counts": counts,
-                    "total": sum(counts),
-                    "correct_index": p.correct_index,
-                    "options": p.options,
-                }
-                blob = json.dumps(payload, separators=(",", ":"))
-
-                if blob != last_blob:
-                    yield f"data: {blob}\n\n"
-                    last_blob = blob
-                else:
-                    # heartbeat so proxies don’t kill the stream
-                    yield ": keep-alive\n\n"
-
-                time.sleep(2.5)
-        except GeneratorExit:
-            # client disconnected; exit quietly
-            return
-
-    resp = Response(generate(), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return resp
-
-@app.route("/poll/<code>/qr.png")
-@require_user()
-def poll_qr_png(code):
-    # If the QR must be viewable by students without logging in, keep this route public.
-    # If you want it gated, add @require_user() above.
-    poll_url = url_for("poll_view", code=code, _external=True)
-    img = qrcode.make(poll_url, box_size=10, border=2)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return send_file(buf, mimetype="image/png",
-                     as_attachment=False,
-                     download_name=f"{code}.png")
-
 # --------------------------------------------------------------------
 # Spotlight
 # --------------------------------------------------------------------
@@ -659,28 +404,9 @@ def spotlight_complete():
     ss.last_spoken_at = datetime.utcnow()
     ss.current_round_done = True
 
-    # Create peer-feedback poll (no correct answer)
-    question = f"How did {iv.student_name} do?"
-    options = ["Excellent", "Good", "Okay", "Needs improvement"]
-
-    # Use your existing code generator, ensure uniqueness
-    code = gen_code()
-    while Poll.query.filter_by(code=code).first() is not None:
-        code = gen_code()
-
-    p = Poll(code=code, question=question, options=options, correct_index=None, is_open=True)
-    db.session.add(p)
     db.session.commit()
 
-    iv.poll_id = p.id
-    db.session.commit()
-
-    return jsonify({
-        "ok": True,
-        "poll_code": p.code,
-        "poll_url": url_for("poll_view", code=p.code),
-        "qr_url": url_for("share", code=p.code)  # or your QR page if different
-    })
+    return jsonify({"ok": True})
 
 # ---------- Skip (no stats) ----------
 @app.route("/api/spotlight/skip", methods=["POST"])
@@ -1173,6 +899,40 @@ def _project_dependencies_met(project, student):
         if not _project_completed(dep.prerequisite, student):
             return False
     return True
+
+def _student_group_ids(student):
+    if not student:
+        return set()
+    memberships = getattr(student, "group_memberships", [])
+    return {m.group_id for m in memberships if m.group_id}
+
+def _project_visible_to_student(project, student):
+    assignments = project.group_assignments or []
+    if not assignments:
+        return True
+    group_ids = _student_group_ids(student)
+    for assignment in assignments:
+        if assignment.applies_to_all:
+            return True
+        if assignment.group_id in group_ids:
+            return True
+    return False
+
+def _project_required_for_student(project, student):
+    assignments = project.group_assignments or []
+    if not assignments:
+        return True
+    group_ids = _student_group_ids(student)
+    matched = False
+    required = False
+    for assignment in assignments:
+        applies = assignment.applies_to_all or assignment.group_id in group_ids
+        if not applies:
+            continue
+        matched = True
+        if assignment.is_required:
+            required = True
+    return required if matched else False
 
 def _grade_exam_submission(exam, answers):
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
@@ -1822,8 +1582,94 @@ def exams_log_run(code):
     return jsonify({"ok": True, "log_count": len(logs)})
 
 # --------------------------------------------------------------------
-# Projects & Tasks
+# Student Groups (admin)
 # --------------------------------------------------------------------
+
+@app.route("/groups", methods=["GET", "POST"])
+@require_user()
+def groups_list():
+    form_data = {
+        "name": (request.form.get("name") or "").strip(),
+        "description": request.form.get("description") or "",
+    }
+    error = None
+    action = request.form.get("action") or ""
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        if action == "create_group":
+            name = form_data["name"]
+            if not name:
+                error = "Group name is required."
+            else:
+                exists = StudentGroup.query.filter(func.lower(StudentGroup.name) == name.lower()).first()
+                if exists:
+                    error = "Group name already exists."
+            if not error:
+                group = StudentGroup(name=name, description=form_data["description"].strip() or None)
+                db.session.add(group)
+                db.session.commit()
+                return redirect(url_for("groups_list"))
+        elif action == "add_member":
+            try:
+                group_id = int(request.form.get("group_id") or 0)
+                student_id = int(request.form.get("student_id") or 0)
+            except ValueError:
+                group_id = 0
+                student_id = 0
+            if group_id and student_id:
+                group = StudentGroup.query.get(group_id)
+                student = Student.query.get(student_id)
+                if group and student:
+                    exists = StudentGroupMembership.query.filter_by(group_id=group.id, student_id=student.id).first()
+                    if not exists:
+                        membership = StudentGroupMembership(group_id=group.id, student_id=student.id)
+                        db.session.add(membership)
+                        db.session.commit()
+            return redirect(url_for("groups_list"))
+        elif action == "remove_member":
+            try:
+                membership_id = int(request.form.get("membership_id") or 0)
+            except ValueError:
+                membership_id = 0
+            if membership_id:
+                membership = StudentGroupMembership.query.get(membership_id)
+                if membership:
+                    db.session.delete(membership)
+                    db.session.commit()
+            return redirect(url_for("groups_list"))
+        elif action == "delete_group":
+            try:
+                group_id = int(request.form.get("group_id") or 0)
+            except ValueError:
+                group_id = 0
+            if group_id:
+                group = StudentGroup.query.get(group_id)
+                if group:
+                    db.session.delete(group)
+                    db.session.commit()
+            return redirect(url_for("groups_list"))
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc(), StudentGroup.id.asc()).all()
+    group_rows = []
+    for group in groups:
+        memberships = sorted(
+            group.memberships,
+            key=lambda m: (m.student.name.lower() if m.student and m.student.name else ""),
+        )
+        group_rows.append({
+            "group": group,
+            "memberships": memberships,
+        })
+    students = Student.query.order_by(Student.name.asc()).all()
+    return render_template(
+        "groups_list.html",
+        groups=group_rows,
+        students=students,
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
 
 @app.route("/projects")
 @require_user()
@@ -1889,12 +1735,16 @@ def projects_show(code):
     tasks = ProjectTask.query.filter_by(project_id=project.id).order_by(ProjectTask.order_index.asc(), ProjectTask.id.asc()).all()
     deps = ProjectDependency.query.filter_by(project_id=project.id).all()
     other_projects = Project.query.filter(Project.id != project.id).order_by(Project.title.asc()).all()
+    assignments = ProjectGroupAssignment.query.filter_by(project_id=project.id).order_by(ProjectGroupAssignment.applies_to_all.desc(), ProjectGroupAssignment.created_at.asc()).all()
+    student_groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
     return render_template(
         "projects_show.html",
         project=project,
         tasks=tasks,
         dependencies=deps,
         other_projects=other_projects,
+        group_assignments=assignments,
+        student_groups=student_groups,
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -1913,6 +1763,60 @@ def projects_add_dependency(code):
             dep = ProjectDependency(project_id=project.id, prerequisite_id=prerequisite.id)
             db.session.add(dep)
             db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
+
+@app.post("/projects/<code>/groups")
+@require_user()
+def projects_assign_group(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    scope = (request.form.get("group_scope") or "").strip()
+    required_flag = request.form.get("is_required") == "1"
+    assignment = None
+    if scope == "all":
+        assignment = ProjectGroupAssignment.query.filter_by(project_id=project.id, applies_to_all=True).first()
+        if assignment:
+            assignment.is_required = required_flag
+        else:
+            assignment = ProjectGroupAssignment(
+                project_id=project.id,
+                applies_to_all=True,
+                is_required=required_flag,
+            )
+            db.session.add(assignment)
+    else:
+        try:
+            group_id = int(scope)
+        except ValueError:
+            group_id = None
+        if group_id:
+            group = StudentGroup.query.get(group_id)
+            if group:
+                assignment = ProjectGroupAssignment.query.filter_by(project_id=project.id, group_id=group.id).first()
+                if assignment:
+                    assignment.is_required = required_flag
+                else:
+                    assignment = ProjectGroupAssignment(
+                        project_id=project.id,
+                        group_id=group.id,
+                        is_required=required_flag,
+                    )
+                    db.session.add(assignment)
+    if assignment:
+        db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
+
+@app.post("/projects/<code>/groups/<int:assignment_id>/remove")
+@require_user()
+def projects_remove_group_assignment(code, assignment_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    assignment = ProjectGroupAssignment.query.filter_by(id=assignment_id, project_id=project.id).first()
+    if assignment:
+        db.session.delete(assignment)
+        db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
 
 @app.route("/projects/<code>/tasks/new", methods=["GET", "POST"])
@@ -1969,19 +1873,108 @@ def projects_task_new(code):
     return render_template(
         "projects_task_new.html",
         project=project,
+        task=None,
         form_data=form_data,
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),
     )
 
+@app.route("/projects/<code>/tasks/<int:task_id>/edit", methods=["GET", "POST"])
+@require_user()
+def projects_task_edit(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    req_flag = request.form.get("required")
+    auto_flag = request.form.get("auto_grade")
+    review_flag = request.form.get("requires_review")
+    if request.method == "POST":
+        form_data = {
+            "title": request.form.get("title") or "",
+            "description": request.form.get("description") or "",
+            "instructions": request.form.get("instructions") or "",
+            "questions_payload": request.form.get("questions_payload") or "[]",
+            "required": bool(req_flag),
+            "auto_grade": (auto_flag == "1"),
+            "requires_review": bool(review_flag),
+            "question_type": request.form.get("question_type") or "mcq",
+        }
+    else:
+        payload = json.dumps(task.questions_json or [], ensure_ascii=False)
+        first_type = None
+        if isinstance(task.questions_json, list) and task.questions_json:
+            first_type = task.questions_json[0].get("type")
+        form_data = {
+            "title": task.title or "",
+            "description": task.description or "",
+            "instructions": task.instructions or "",
+            "questions_payload": payload,
+            "required": bool(task.required),
+            "auto_grade": bool(task.auto_grade),
+            "requires_review": bool(task.requires_review),
+            "question_type": first_type or "mcq",
+        }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        if not title:
+            error = "Task title is required."
+        questions = []
+        if not error:
+            try:
+                payload = json.loads(form_data["questions_payload"] or "[]")
+                questions = _normalize_exam_questions(payload)
+            except ValueError as exc:
+                error = str(exc)
+            except Exception:
+                error = "Unable to parse task questions."
+        if not questions and not error:
+            error = "Add at least one question for the task."
+        if not error:
+            task.title = title
+            task.description = form_data["description"].strip() or None
+            task.instructions = form_data["instructions"].strip() or None
+            task.questions_json = questions
+            task.required = form_data["required"]
+            task.auto_grade = form_data["auto_grade"]
+            task.requires_review = form_data["requires_review"]
+            db.session.commit()
+            return redirect(url_for("projects_show", code=project.code))
+    return render_template(
+        "projects_task_new.html",
+        project=project,
+        task=task,
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/projects/<code>/tasks/<int:task_id>/delete")
+@require_user()
+def projects_task_delete(code, task_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first()
+    if task:
+        db.session.delete(task)
+        db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
+
 @app.route("/student/projects")
 @require_student()
 def student_projects():
     student = current_student()
     projects = Project.query.filter_by(is_active=True).order_by(Project.created_at.asc()).all()
-    rows = []
+    available_rows = []
+    locked_rows = []
+    completed_rows = []
     for project in projects:
+        if not _project_visible_to_student(project, student):
+            continue
         unlocked = _project_dependencies_met(project, student)
         completed = _project_completed(project, student) if unlocked else False
         tasks = []
@@ -1996,23 +1989,37 @@ def student_projects():
                 "status": status,
                 "submission": submission,
             })
-        rows.append({
+        row = {
             "project": project,
             "unlocked": unlocked,
             "completed": completed,
             "tasks": tasks,
             "completed_count": completed_count,
             "total_tasks": len(tasks),
-        })
+            "required": _project_required_for_student(project, student),
+            "dependencies": [dep.prerequisite.title for dep in (project.dependencies or []) if dep.prerequisite],
+        }
+        if completed:
+            completed_rows.append(row)
+        elif unlocked:
+            available_rows.append(row)
+        else:
+            locked_rows.append(row)
+    tab = request.args.get("tab", "active").lower()
+    if tab not in ("active", "completed"):
+        tab = "active"
     return render_template(
         "projects_student.html",
-        projects=rows,
+        available_projects=available_rows,
+        locked_projects=locked_rows,
+        completed_projects=completed_rows,
+        selected_tab=tab,
         user=current_user(),
         student_name=student.name,
     )
 
 def _task_exam_view(project, task):
-    return type("TaskExamView", (), {
+    data = {
         "title": f"{project.title} — {task.title}",
         "description": task.description,
         "instructions": task.instructions,
@@ -2020,7 +2027,10 @@ def _task_exam_view(project, task):
         "ends_at": None,
         "duration_minutes": None,
         "code": f"{project.code}-{task.id}",
-    })()
+        "kind": "project_task",
+        "project_code": project.code,
+    }
+    return type("TaskExamView", (), data)()
 
 @app.route("/projects/<code>/task/<int:task_id>", methods=["GET", "POST"])
 @require_student()
@@ -2028,6 +2038,8 @@ def project_task_take(code, task_id):
     project = Project.query.filter_by(code=code).first_or_404()
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     student = current_student()
+    if not _project_visible_to_student(project, student):
+        abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
     submission = _project_task_submission(task, student)
@@ -2370,182 +2382,6 @@ def student_grades():
         student_name=student.name,
     )
 
-# --------------------------------------------------------------------
-# Lecture interaction dashboard
-# --------------------------------------------------------------------
-
-from datetime import datetime, timedelta
-from flask import Response, jsonify, render_template, request, abort
-import json, time, hmac, hashlib
-
-# ---------- Instructor dashboard page ----------
-@app.route("/signals")
-@require_user()  # instructor/admin only
-def signals_dashboard():
-    # how far back the “live” counts look (rolling window)
-    window_min = 5
-    return render_template(
-        "signals.html",
-        window_min=window_min,
-        user=current_user(),
-        student_name=session.get("student_name"),
-    )
-
-# ---------- SSE: live counts for OK/Confused + unseen questions count ----------
-@app.route("/api/signals/stream")
-@require_user()
-def signals_stream():
-    from models import LectureSignal, LectureQuestion  # avoid circulars
-
-    @stream_with_context
-    def generate():
-        yield "retry: 3000\n\n"  # polite reconnect hint
-        last_blob = None
-        try:
-            while True:
-                now = datetime.utcnow()
-                since = now - timedelta(minutes=5)
-                ok = LectureSignal.query.filter(
-                    LectureSignal.created_at >= since,
-                    LectureSignal.kind == "ok"
-                ).count()
-                confused = LectureSignal.query.filter(
-                    LectureSignal.created_at >= since,
-                    LectureSignal.kind == "confused"
-                ).count()
-                unread_q = LectureQuestion.query.filter_by(handled=False).count()
-
-                payload = {"ok": ok, "confused": confused, "unread_questions": unread_q, "window_min": 5}
-                blob = json.dumps(payload, separators=(",", ":"))
-                if blob != last_blob:
-                    yield f"data: {blob}\n\n"
-                    last_blob = blob
-                else:
-                    yield ": keep-alive\n\n"
-                time.sleep(2.5)
-        except GeneratorExit:
-            return
-
-    resp = Response(generate(), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return resp
-
-# ---------- List questions (latest first), optional filters ----------
-@app.route("/api/questions", methods=["GET"])
-@require_user()
-def questions_list():
-    from models import LectureQuestion
-    only_unhandled = (request.args.get("state") == "open")
-    q = LectureQuestion.query
-    if only_unhandled:
-        q = q.filter_by(handled=False)
-    q = q.order_by(LectureQuestion.id.desc()).limit(100)
-    items = [{
-        "id": it.id,
-        "student_name": it.student_name or "",
-        "text": it.text,
-        "handled": bool(it.handled),
-        "when": it.created_at.isoformat(timespec="seconds") + "Z"
-    } for it in q.all()]
-    return jsonify({"items": items})
-
-# ---------- Mark one question handled/unhandled ----------
-@app.route("/api/questions/<int:q_id>/handled", methods=["POST"])
-@require_user()
-def question_mark_handled(q_id):
-    from models import LectureQuestion, db
-    token = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(token, csrf_token()):
-        abort(400, "bad csrf")
-    body = request.get_json(silent=True) or {}
-    handled = bool(body.get("handled", True))
-    it = LectureQuestion.query.get_or_404(q_id)
-    it.handled = handled
-    db.session.commit()
-    return jsonify({"ok": True, "id": it.id, "handled": it.handled})
-
-# ---------- (Optional) Clear signals window (use sparingly) ----------
-@app.route("/api/signals/clear", methods=["POST"])
-@require_user()
-def signals_clear():
-    from models import LectureSignal, db
-    token = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(token, csrf_token()):
-        abort(400, "bad csrf")
-    cutoff = datetime.utcnow() - timedelta(minutes=5)
-    # delete older-than-window to “reset” live meters
-    LectureSignal.query.filter(LectureSignal.created_at < cutoff).delete(synchronize_session=False)
-    db.session.commit()
-    return jsonify({"ok": True})
-
-# --------------------------------------------------------------------
-# Lecture interaction
-# --------------------------------------------------------------------
-@app.route("/api/signal", methods=["POST"])
-def signal_post():
-    # Students only
-    stu = current_student()
-    if not stu:
-        abort(401)
-    # CSRF
-    token = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(token, csrf_token()):
-        abort(400, "bad csrf")
-
-    data = request.get_json(silent=True) or {}
-    kind = (data.get("kind") or "").lower()
-    if kind not in ("ok", "confused"):
-        abort(400, "bad kind")
-
-    s = LectureSignal(student_id=stu.id, student_name=stu.name, kind=kind)
-    db.session.add(s); db.session.commit()
-    return jsonify({"ok": True})
-
-@app.route("/api/question", methods=["POST"])
-def question_post():
-    # Students only
-    stu = current_student()
-    if not stu:
-        abort(401)
-    # CSRF
-    token = request.headers.get("X-CSRF", "")
-    if not hmac.compare_digest(token, csrf_token()):
-        abort(400, "bad csrf")
-
-    data = request.get_json(silent=True) or {}
-    text = (data.get("text") or "").strip()
-    if not text:
-        abort(400, "empty")
-
-    # Optional: simple per-student throttle (1 question / 60s)
-    recent = LectureQuestion.query.filter(
-        LectureQuestion.student_id == stu.id,
-        LectureQuestion.created_at >= datetime.utcnow() - timedelta(seconds=60)
-    ).first()
-    if recent:
-        return jsonify({"ok": False, "error": "rate_limited"}), 429
-
-    q = LectureQuestion(student_id=stu.id, student_name=stu.name, text=text)
-    db.session.add(q); db.session.commit()
-    return jsonify({"ok": True})
-
-# --------------------------------------------------------------------
-# Exports / landing routes
-# --------------------------------------------------------------------
-@app.route("/export/<code>.csv")
-@require_user()
-def export_csv(code):
-    poll = Poll.query.filter_by(code=code).first_or_404()
-    buf = io.StringIO(); w = csv.writer(buf)
-    w.writerow(["poll_code","question","student_name","choice_index","choice_text","correct","timestamp"])
-    for v in poll.votes:
-        choice_text = poll.options[v.choice] if 0 <= v.choice < len(poll.options) else ""
-        correct = (poll.correct_index is not None and v.choice == poll.correct_index)
-        w.writerow([poll.code, poll.question, v.student_name or "", v.choice, choice_text, int(correct), v.created_at.isoformat()])
-    mem = io.BytesIO(buf.getvalue().encode("utf-8"))
-    return send_file(mem, mimetype="text/csv", as_attachment=True, download_name=f"{poll.code}.csv")
-
 @app.route("/thanks")
 def thanks():
     return render_template("thanks.html", user=current_user(), student_name=session.get("student_name"))
@@ -2553,7 +2389,7 @@ def thanks():
 @app.route("/dashboard")
 @require_user()
 def dashboard_for_role():
-    return redirect(url_for("poll_list"))
+    return redirect(url_for("index"))
 
 @app.route("/student")
 @require_student()

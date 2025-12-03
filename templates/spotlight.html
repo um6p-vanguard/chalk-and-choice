@@ -50,22 +50,6 @@
 
   <div class="sp"></div>
 
-  <div class="card" id="poll-card" style="display:none; text-align:center;">
-    <h4 style="margin:0 0 6px 0;">Peer feedback poll</h4>
-    <p class="muted" id="poll-label">How did NAME do?</p>
-    <div style="display:flex; justify-content:center; margin:12px 0;">
-      <img id="qr-img"
-     alt="Poll QR"
-     decoding="async"
-     style="border:8px solid #0b1220; background:#fff; width:min(60vw,320px); height:auto; image-rendering:pixelated;">
-
-    </div>
-    <div class="row" style="justify-content:center; gap:8px;">
-      <a id="poll-open" class="btn" target="_blank" rel="noopener">Open poll</a>
-      <a id="poll-share" class="btn">Share / QR</a>
-    </div>
-  </div>
-
   <p class="muted" id="notice" style="margin-top:10px;"></p>
 </div>
 
@@ -200,7 +184,7 @@
     ticking = false;
     clearInterval(tickHandle);
     statusEl.textContent = "Completed";
-    // Ask server to finish + create poll
+    // Ask server to record completion
     const r = await fetch("{{ url_for('spotlight_complete') }}", {
       method: "POST",
       headers: { "Content-Type":"application/json", "X-CSRF": csrf },
@@ -209,19 +193,8 @@
     });
     if (!r.ok){ notice.textContent = "Couldn’t finalize."; return; }
     const j = await r.json();
-    // Show QR/poll
-// Show QR/poll
-    const pollCard = $("#poll-card");
-    pollCard.style.display = "block";
-    $("#poll-label").textContent = `How did ${pickedName} do?`;
-
-    // Use a dedicated QR PNG endpoint (no string replace hacks)
-    const qrPngUrl = `{{ url_for('poll_qr_png', code='CODE') }}`.replace("CODE", j.poll_code);
-    $("#qr-img").src = qrPngUrl;
-
-    $("#poll-open").href  = `{{ url_for('poll_view', code='CODE') }}`.replace("CODE", j.poll_code);
-    $("#poll-share").href = `{{ url_for('share', code='CODE') }}`.replace("CODE", j.poll_code);
-
+    if (!j.ok){ notice.textContent = "Couldn’t finalize."; return; }
+    notice.textContent = `Great job, ${pickedName}!`;
   }
 
   async function skip(){
@@ -235,7 +208,6 @@
     // Reset UI
     pickedName = null; interventionId = null;
     timerCard.style.display = "none";
-    $("#poll-card").style.display = "none";
     subtitle.textContent = "Shuffling…";
     nameEl.textContent = "—";
   }

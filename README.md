@@ -1,2 +1,2 @@
 # chalk-and-choice
-A minimal classroom polling app built for Render Starter + SQLite persistent disk.
+A lightweight classroom management portal for forms, exams, spotlight interventions, and project workflows.

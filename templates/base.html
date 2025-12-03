@@ -60,7 +60,7 @@
 
     .q { font-size:1.15rem; font-weight:600; }
 
-    /* Progress bar fill (used in poll results) */
+    /* Progress bar fill */
     .bar-fill { background: var(--brand); height:20px; border-radius:8px; transition: width .3s; }
     .bar-fill.correct { background: var(--heat); } /* optional: highlight correct bar */
     .text-danger { color: var(--danger); }
@@ -88,12 +88,10 @@
       <div class="row">
         {% if user %}
           <span>Instructor{% if user.role == 'admin' %}/Admin{% endif %}: <strong>{{ user.name }}</strong></span>
-          <a href="{{ url_for('signals_dashboard') }}" style="margin-left:10px;">Signals</a>
-          <a href="{{ url_for('poll_list') }}" style="margin-left:10px;">Polls</a>
-          <a href="{{ url_for('poll_new') }}">New Poll</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
           <a href="{{ url_for('exams_list') }}" style="margin-left:10px;">Exams</a>
           <a href="{{ url_for('projects_list') }}" style="margin-left:10px;">Projects</a>
+          <a href="{{ url_for('groups_list') }}" style="margin-left:10px;">Groups</a>
           <a href="{{ url_for('projects_reviews') }}" style="margin-left:10px;">Reviews</a>
           <a href="{{ url_for('grades_admin') }}" style="margin-left:10px;">Grades</a>
           <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
@@ -112,7 +110,7 @@
     {% block content %}{% endblock %}
     <div class="sp"></div>
 
-    <div class="muted">SASE Poll login</div>
+    <div class="muted">SASE Portal</div>
     {% block scripts %}{% endblock %}
   </div>
 </body>

@@ -46,35 +46,31 @@ class Student(db.Model):
     def set_password(self, pw): self.password_hash = generate_password_hash(pw)
     def check_password(self, pw): return check_password_hash(self.password_hash, pw)
 
-class Poll(db.Model):
-    __tablename__ = 'polls'
-    id = db.Column(db.Integer, primary_key=True)
-    code = db.Column(db.String(12), unique=True, index=True, nullable=False)
-    question = db.Column(db.Text, nullable=False)
-    options = db.Column(JSONText, nullable=False)
-    correct_index = db.Column(db.Integer, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    creator_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), index=True, nullable=True)
-    creator = db.relationship('User')
-    # NEW: gate voting without deleting the poll
-    is_open = db.Column(db.Boolean, nullable=False, default=True)
+    @property
+    def groups(self):
+        return [m.group for m in getattr(self, "group_memberships", []) if m.group]
 
-class Vote(db.Model):
-    __tablename__ = 'votes'
+
+class StudentGroup(db.Model):
+    __tablename__ = "student_groups"
     id = db.Column(db.Integer, primary_key=True)
-    poll_id = db.Column(db.Integer, db.ForeignKey('polls.id', ondelete="CASCADE"), index=True, nullable=False)
-    choice = db.Column(db.Integer, nullable=False)
-    voter_token_hash = db.Column(db.String(64), index=True, nullable=False)
-    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), index=True, nullable=True)
-    student_name = db.Column(db.String(120), nullable=True)
+    name = db.Column(db.String(120), unique=True, nullable=False)
+    description = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
-    poll = db.relationship('Poll', backref=db.backref('votes', cascade="all,delete-orphan"))
-    student = db.relationship('Student')
 
-    # NEW: one vote per (poll, student) at the DB layer
+class StudentGroupMembership(db.Model):
+    __tablename__ = "student_group_memberships"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="CASCADE"), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    student = db.relationship('Student', backref=db.backref('group_memberships', cascade="all,delete-orphan"))
+    group = db.relationship('StudentGroup', backref=db.backref('memberships', cascade="all,delete-orphan"))
+
     __table_args__ = (
-        UniqueConstraint('poll_id', 'student_id', name='uq_vote_poll_student'),
+        UniqueConstraint('student_id', 'group_id', name='uq_student_group_membership'),
     )
 
 class Form(db.Model):
@@ -170,24 +166,6 @@ class ExamSubmission(db.Model):
         UniqueConstraint('exam_id', 'student_id', name='uq_exam_submission_student'),
     )
 
-class LectureSignal(db.Model):
-    __tablename__ = "lecture_signals"
-    id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
-    student_name = db.Column(db.String(120))
-    kind = db.Column(db.String(16), nullable=False)  # "ok" | "confused"
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-
-class LectureQuestion(db.Model):
-    __tablename__ = "lecture_questions"
-    id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"))
-    student_name = db.Column(db.String(120))
-    text = db.Column(db.Text, nullable=False)
-    handled = db.Column(db.Boolean, default=False, nullable=False)  # NEW
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-
-
 class StudentStats(db.Model):
     __tablename__ = "student_stats"
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), primary_key=True)
@@ -204,7 +182,6 @@ class Intervention(db.Model):
     duration_sec = db.Column(db.Integer, default=120, nullable=False)
     started_at = db.Column(db.DateTime)
     ended_at = db.Column(db.DateTime)
-    poll_id = db.Column(db.Integer, db.ForeignKey('polls.id', ondelete="SET NULL"))
     status = db.Column(db.String(20), default="picked", nullable=False)  # picked|running|completed|skipped
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
@@ -231,6 +208,19 @@ class Project(db.Model):
     required_task_count = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ProjectGroupAssignment(db.Model):
+    __tablename__ = "project_group_assignments"
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="CASCADE"), nullable=True)
+    applies_to_all = db.Column(db.Boolean, nullable=False, default=False)
+    is_required = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    project = db.relationship('Project', backref=db.backref('group_assignments', cascade="all,delete-orphan"))
+    group = db.relationship('StudentGroup')
 
 class ProjectDependency(db.Model):
     __tablename__ = "project_dependencies"
