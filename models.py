@@ -73,6 +73,20 @@ class StudentGroupMembership(db.Model):
         UniqueConstraint('student_id', 'group_id', name='uq_student_group_membership'),
     )
 
+class StudentGroupReviewer(db.Model):
+    __tablename__ = "student_group_reviewers"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="CASCADE"), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    user = db.relationship('User', backref=db.backref('group_reviews', cascade="all,delete-orphan"))
+    group = db.relationship('StudentGroup', backref=db.backref('reviewers', cascade="all,delete-orphan"))
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'group_id', name='uq_group_reviewer'),
+    )
+
 class Form(db.Model):
     __tablename__ = "forms"
     id = db.Column(db.Integer, primary_key=True)

@@ -6,11 +6,34 @@
 </div>
 <div class="sp"></div>
 <div class="card">
+  <form method="get" class="row" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label>Project filter</label>
+      <select name="project_id">
+        <option value="">All projects</option>
+        {% for project in projects %}
+          <option value="{{ project.id }}" {% if filter_project_id == project.id %}selected{% endif %}>{{ project.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Sort</label>
+      <select name="sort">
+        <option value="newest" {% if filter_sort == 'newest' %}selected{% endif %}>Newest first</option>
+        <option value="oldest" {% if filter_sort == 'oldest' %}selected{% endif %}>Oldest first</option>
+      </select>
+    </div>
+    <button class="btn" type="submit">Apply</button>
+  </form>
+  {% if reviewer_groups %}
+    <p class="muted" style="margin-top:10px;">You are assigned to specific mentor groups; only submissions from those groups are shown.</p>
+  {% endif %}
   {% if submissions %}
     <table style="margin-top:12px;">
       <thead>
         <tr>
           <th>Student</th>
+          <th>Groups</th>
           <th>Project</th>
           <th>Task</th>
           <th>Submitted</th>
@@ -21,6 +44,15 @@
         {% for sub in submissions %}
         <tr>
           <td>{{ sub.student_name or "Unknown" }}</td>
+          <td>
+            {% if sub.student and sub.student.group_memberships %}
+              {% for membership in sub.student.group_memberships %}
+                {{ membership.group.name if membership.group else "(deleted)" }}{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
           <td>{{ sub.project.title if sub.project else "—" }}</td>
           <td>{{ sub.task.title if sub.task else "—" }}</td>
           <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>

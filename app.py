@@ -12,7 +12,7 @@ from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
-                    StudentGroup, StudentGroupMembership, ProjectGroupAssignment)
+                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment)
 import qrcode
 from sqlalchemy import func
 
@@ -1649,6 +1649,34 @@ def groups_list():
                     db.session.delete(group)
                     db.session.commit()
             return redirect(url_for("groups_list"))
+        elif action == "add_reviewer":
+            try:
+                group_id = int(request.form.get("group_id") or 0)
+                user_id = int(request.form.get("user_id") or 0)
+            except ValueError:
+                group_id = 0
+                user_id = 0
+            if group_id and user_id:
+                group = StudentGroup.query.get(group_id)
+                mentor = User.query.get(user_id)
+                if group and mentor:
+                    exists = StudentGroupReviewer.query.filter_by(group_id=group.id, user_id=mentor.id).first()
+                    if not exists:
+                        reviewer = StudentGroupReviewer(group_id=group.id, user_id=mentor.id)
+                        db.session.add(reviewer)
+                        db.session.commit()
+            return redirect(url_for("groups_list"))
+        elif action == "remove_reviewer":
+            try:
+                reviewer_id = int(request.form.get("reviewer_id") or 0)
+            except ValueError:
+                reviewer_id = 0
+            if reviewer_id:
+                reviewer = StudentGroupReviewer.query.get(reviewer_id)
+                if reviewer:
+                    db.session.delete(reviewer)
+                    db.session.commit()
+            return redirect(url_for("groups_list"))
     groups = StudentGroup.query.order_by(StudentGroup.name.asc(), StudentGroup.id.asc()).all()
     group_rows = []
     for group in groups:
@@ -1656,15 +1684,22 @@ def groups_list():
             group.memberships,
             key=lambda m: (m.student.name.lower() if m.student and m.student.name else ""),
         )
+        reviewers = sorted(
+            group.reviewers,
+            key=lambda r: (r.user.name.lower() if r.user and r.user.name else ""),
+        )
         group_rows.append({
             "group": group,
             "memberships": memberships,
+            "reviewers": reviewers,
         })
     students = Student.query.order_by(Student.name.asc()).all()
+    mentors = User.query.order_by(User.name.asc()).all()
     return render_template(
         "groups_list.html",
         groups=group_rows,
         students=students,
+        mentors=mentors,
         form_data=form_data,
         error=error,
         user=current_user(),
@@ -1681,6 +1716,16 @@ def projects_list():
         user=current_user(),
         student_name=session.get("student_name"),
     )
+
+@app.post("/projects/<code>/delete")
+@require_user()
+def projects_delete(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    db.session.delete(project)
+    db.session.commit()
+    return redirect(url_for("projects_list"))
 
 @app.route("/projects/new", methods=["GET", "POST"])
 @require_user()
@@ -1715,7 +1760,7 @@ def projects_new():
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
                 required_task_count=required_count,
-                is_active=True,
+                is_active=False,
             )
             db.session.add(project)
             db.session.commit()
@@ -1748,6 +1793,17 @@ def projects_show(code):
         user=current_user(),
         student_name=session.get("student_name"),
     )
+
+@app.post("/projects/<code>/publish")
+@require_user()
+def projects_publish(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    state = request.form.get("state") or "publish"
+    project.is_active = (state == "publish")
+    db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
 
 @app.post("/projects/<code>/dependencies")
 @require_user()
@@ -2215,10 +2271,40 @@ def projects_task_log_run(code, task_id):
 @app.route("/projects/reviews")
 @require_user()
 def projects_reviews():
-    submissions = ProjectTaskSubmission.query.filter_by(status="pending_review").order_by(ProjectTaskSubmission.submitted_at.desc()).all()
+    user = current_user()
+    sort_mode = request.args.get("sort", "newest")
+    project_filter = request.args.get("project_id")
+    try:
+        project_filter_id = int(project_filter) if project_filter else None
+    except ValueError:
+        project_filter_id = None
+    reviewer_groups = [rev.group_id for rev in getattr(user, "group_reviews", []) if rev.group_id]
+    query = ProjectTaskSubmission.query.filter_by(status="pending_review")
+    if project_filter_id:
+        query = query.filter_by(project_id=project_filter_id)
+    if sort_mode == "oldest":
+        query = query.order_by(ProjectTaskSubmission.submitted_at.asc())
+    else:
+        sort_mode = "newest"
+        query = query.order_by(ProjectTaskSubmission.submitted_at.desc())
+    submissions = query.all()
+    if reviewer_groups:
+        allowed = set(reviewer_groups)
+        pruned = []
+        for sub in submissions:
+            student = sub.student
+            groups = {m.group_id for m in getattr(student, "group_memberships", []) if m.group_id} if student else set()
+            if groups & allowed:
+                pruned.append(sub)
+        submissions = pruned
+    projects = Project.query.order_by(Project.title.asc()).all()
     return render_template(
         "projects_reviews.html",
         submissions=submissions,
+        filter_sort=sort_mode,
+        filter_project_id=project_filter_id,
+        reviewer_groups=reviewer_groups,
+        projects=projects,
         user=current_user(),
         student_name=session.get("student_name"),
     )
