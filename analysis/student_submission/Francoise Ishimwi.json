@@ -1,0 +1,198 @@
+{
+  "answers": {
+    "q1tus0u5": "tuple||set||comprehension||set",
+    "q3epf3qk": "2",
+    "q3l7cskf": "1",
+    "q3u513yg": "2",
+    "q3uedq0b": "we need algorithms because:\r\n they help in step by step and computer itself can get overloaded. so helps to break down some of its work which is useful to it.\r\n\r\n ",
+    "q4ely4yg": "s = input('gasasira')\r\nif length_of s > 3:\r\n    print(first_character_of 's' and the_lengh_of 's' as a number and the_last_characters_of 's'without spaces)\r\n    \r\nelse length_of s <= 3:\r\n    print(s)\r\n\r\n",
+    "q9cuwdw6": "1",
+    "qaq5q7q3": "def odd_even_product(nums):\r\n    pass\r\n    ",
+    "qcxymqfy": "in||len",
+    "qghbq7nr": "29 = 1002 (base 3)",
+    "qgvdxq8s": "23= 1011(base 2)",
+    "qizrr4cl": "2",
+    "qkz0opn7": "x = int(input()) \r\nif x > 0: print('positive')\r\nelse if x < 0: print('negative')\r\nelse x == 0: print('zero')\r\n   \r\n    ",
+    "qmekrpn0": "==||=||!=",
+    "qnc8yqn9": "0||3",
+    "qnx0ckfx": "3",
+    "qny208b3": "0||1||2||3",
+    "qplc45ct": "1",
+    "qpmuvq0u": "2",
+    "qqosf8nt": "1",
+    "qtu9plgm": "",
+    "qubltkrl": "boolean||True||False",
+    "qv1qu941": "int||float||str",
+    "qzpjmgaw": "set||element||value"
+  },
+  "exam": {
+    "code": "f6nwoalx",
+    "description": null,
+    "title": "Midterm Exam"
+  },
+  "grading": [
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q9cuwdw6",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qpmuvq0u",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3u513yg",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qnx0ckfx",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3l7cskf",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qplc45ct",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3epf3qk",
+      "type": "mcq"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qizrr4cl",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qqosf8nt",
+      "type": "mcq"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qnc8yqn9",
+      "type": "multi"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qny208b3",
+      "type": "multi"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qgvdxq8s",
+      "type": "text"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qghbq7nr",
+      "type": "text"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "q3uedq0b",
+      "type": "text"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qubltkrl",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qv1qu941",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qmekrpn0",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qcxymqfy",
+      "type": "tokens"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "q1tus0u5",
+      "type": "tokens"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qzpjmgaw",
+      "type": "tokens"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qkz0opn7",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "q4ely4yg",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qaq5q7q3",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qtu9plgm",
+      "type": "code"
+    }
+  ],
+  "last_activity_at": "2025-11-28T15:56:29.071119",
+  "max_score": 24.0,
+  "run_logs": [],
+  "score": 12.0,
+  "started_at": "2025-11-28T14:24:19.370363",
+  "status": "submitted",
+  "student": {
+    "id": 102,
+    "name": "Francoise Ishimwi"
+  },
+  "submitted_at": "2025-11-28T15:56:29.071119"
+}

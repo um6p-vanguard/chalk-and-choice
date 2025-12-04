@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}{{ submission.student.name }} - Student Detail{% endblock %}
+
+{% block content %}
+<div class="student-detail">
+    <div class="breadcrumb">
+        <a href="/">← Back to Dashboard</a>
+    </div>
+
+    <!-- Student Header -->
+    <div class="student-header">
+        <div class="student-info">
+            <h2>{{ submission.student.name }}</h2>
+            <p class="exam-title">{{ submission.exam.title }}</p>
+        </div>
+        <div class="score-summary">
+            <div class="final-score">
+                <div class="score-value">{{ submission.score }} / {{ submission.max_score }}</div>
+                <div class="score-label">Final Score</div>
+                {% set percentage = (submission.score / submission.max_score * 100) if submission.max_score > 0 else 0 %}
+                <div class="score-percentage">{{ "%.1f"|format(percentage) }}%</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Timeline Info -->
+    <div class="timeline-info">
+        <div class="timeline-item">
+            <strong>Started:</strong> {{ submission.started_at[:19] if submission.started_at else 'N/A' }}
+        </div>
+        <div class="timeline-item">
+            <strong>Submitted:</strong> {{ submission.submitted_at[:19] if submission.submitted_at else 'N/A' }}
+        </div>
+        <div class="timeline-item">
+            <strong>Status:</strong> <span class="status-badge status-{{ submission.status }}">{{ submission.status }}</span>
+        </div>
+    </div>
+
+    <!-- Grading Breakdown by Type -->
+    <div class="grading-sections">
+        {% for q_type, questions in grading_by_type.items() %}
+        <div class="question-type-section">
+            <h3 class="section-title">
+                {{ q_type.upper() }} Questions
+                <span class="question-count">({{ questions|length }} questions)</span>
+            </h3>
+
+            <div class="questions-grid">
+                {% for grade in questions %}
+                <div class="question-card {% if grade.earned == grade.points %}correct{% elif grade.earned == 0 %}incorrect{% else %}partial{% endif %}">
+                    <div class="question-header">
+                        <span class="question-id">{{ grade.question_id }}</span>
+                        <span class="question-score">
+                            {{ grade.earned }} / {{ grade.points }} pts
+                        </span>
+                    </div>
+
+                    <div class="question-type-badge">{{ grade.type }}</div>
+
+                    {% if grade.answer %}
+                    <div class="answer-section">
+                        <strong>Answer:</strong>
+                        <div class="answer-content">{{ grade.answer }}</div>
+                    </div>
+                    {% endif %}
+
+                    {% if grade.manual_review %}
+                    <div class="manual-review-flag">
+                        ⚠️ Requires Manual Review
+                    </div>
+                    {% endif %}
+
+                    {% if grade.cases %}
+                    <div class="test-cases">
+                        <strong>Test Cases:</strong>
+                        <ul>
+                            {% for case in grade.cases %}
+                            <li class="{% if case.passed %}passed{% else %}failed{% endif %}">
+                                {{ case.description or 'Test ' + loop.index|string }}
+                                {% if case.passed %}✓{% else %}✗{% endif %}
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Performance Summary -->
+    <div class="performance-summary">
+        <h3>Performance by Question Type</h3>
+        <table class="summary-table">
+            <thead>
+                <tr>
+                    <th>Question Type</th>
+                    <th>Questions</th>
+                    <th>Points Earned</th>
+                    <th>Total Points</th>
+                    <th>Success Rate</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for q_type, questions in grading_by_type.items() %}
+                {% set earned = questions|sum(attribute='earned') %}
+                {% set total = questions|sum(attribute='points') %}
+                {% set rate = (earned / total * 100) if total > 0 else 0 %}
+                <tr>
+                    <td><strong>{{ q_type.upper() }}</strong></td>
+                    <td>{{ questions|length }}</td>
+                    <td>{{ "%.1f"|format(earned) }}</td>
+                    <td>{{ total }}</td>
+                    <td>
+                        <div class="progress-bar small">
+                            <div class="progress-fill" style="width: {{ rate }}%"></div>
+                            <span class="progress-text">{{ "%.1f"|format(rate) }}%</span>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

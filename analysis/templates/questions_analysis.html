@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Questions Analysis{% endblock %}
+
+{% block content %}
+<div class="questions-analysis">
+    <div class="page-header">
+        <h2>Question Performance Analysis</h2>
+        <p class="subtitle">Analyzing {{ total_students }} student submissions</p>
+    </div>
+
+    <div class="analysis-info">
+        <p>This page shows how students performed on each question. Questions are sorted by success rate (lowest first) to highlight areas that need attention.</p>
+    </div>
+
+    <!-- Questions Table -->
+    <div class="questions-table-container">
+        <table class="questions-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Question ID</th>
+                    <th>Type</th>
+                    <th>Attempts</th>
+                    <th>Points Earned</th>
+                    <th>Total Points</th>
+                    <th>Success Rate</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for question in questions %}
+                <tr class="{% if question.success_rate < 50 %}low-performance{% elif question.success_rate >= 80 %}high-performance{% endif %}">
+                    <td>{{ loop.index }}</td>
+                    <td><code>{{ question.question_id }}</code></td>
+                    <td>
+                        <span class="type-badge type-{{ question.type }}">{{ question.type }}</span>
+                    </td>
+                    <td>{{ question.attempts }}</td>
+                    <td>{{ "%.1f"|format(question.earned_points) }}</td>
+                    <td>{{ question.total_points }}</td>
+                    <td>
+                        <div class="progress-bar small">
+                            <div class="progress-fill" style="width: {{ question.success_rate }}%"></div>
+                            <span class="progress-text">{{ "%.1f"|format(question.success_rate) }}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        {% if question.manual_review %}
+                        <span class="review-badge">📝 Manual Review</span>
+                        {% else %}
+                        <span class="auto-badge">✓ Auto-graded</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Performance Categories -->
+    <div class="performance-categories">
+        <h3>Performance Categories</h3>
+        <div class="category-grid">
+            <div class="category-card high">
+                <div class="category-icon">🟢</div>
+                <div class="category-label">High Performance</div>
+                <div class="category-desc">≥ 80% Success Rate</div>
+                <div class="category-count">
+                    {{ questions|selectattr('success_rate', 'ge', 80)|list|length }} questions
+                </div>
+            </div>
+            <div class="category-card medium">
+                <div class="category-icon">🟡</div>
+                <div class="category-label">Medium Performance</div>
+                <div class="category-desc">50-79% Success Rate</div>
+                <div class="category-count">
+                    {{ questions|selectattr('success_rate', 'ge', 50)|selectattr('success_rate', 'lt', 80)|list|length }} questions
+                </div>
+            </div>
+            <div class="category-card low">
+                <div class="category-icon">🔴</div>
+                <div class="category-label">Needs Attention</div>
+                <div class="category-desc">< 50% Success Rate</div>
+                <div class="category-count">
+                    {{ questions|selectattr('success_rate', 'lt', 50)|list|length }} questions
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

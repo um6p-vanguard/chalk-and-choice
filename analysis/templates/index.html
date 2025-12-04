@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Student Analysis{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="page-header">
+        <h2>{{ exam_title }} - Results Dashboard</h2>
+        <p class="subtitle">Comprehensive overview of student performance</p>
+    </div>
+
+    <!-- Summary Statistics -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">👥</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ stats.total_students }}</div>
+                <div class="stat-label">Total Students</div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon">📈</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ stats.average_score }} / {{ stats.max_score }}</div>
+                <div class="stat-label">Average Score</div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon">🏆</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ stats.highest_score }}</div>
+                <div class="stat-label">Highest Score</div>
+            </div>
+        </div>
+
+        <div class="stat-card">
+            <div class="stat-icon">⚠️</div>
+            <div class="stat-content">
+                <div class="stat-value">{{ stats.manual_review_needed }}</div>
+                <div class="stat-label">Need Manual Review</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Search and Filter -->
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="🔍 Search by student name..." class="search-box">
+        <select id="sortSelect" class="sort-select">
+            <option value="score-desc">Score (Highest First)</option>
+            <option value="score-asc">Score (Lowest First)</option>
+            <option value="name-asc">Name (A-Z)</option>
+            <option value="name-desc">Name (Z-A)</option>
+        </select>
+    </div>
+
+    <!-- Student List -->
+    <div class="student-list">
+        <table class="student-table" id="studentTable">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Student Name</th>
+                    <th>Score</th>
+                    <th>Percentage</th>
+                    <th>Status</th>
+                    <th>Submitted At</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for submission in submissions %}
+                <tr class="student-row" data-name="{{ submission.student.name }}" data-score="{{ submission.score }}">
+                    <td>{{ loop.index }}</td>
+                    <td class="student-name">
+                        <strong>{{ submission.student.name }}</strong>
+                    </td>
+                    <td class="score-cell">
+                        <span class="score-badge">{{ submission.score }} / {{ submission.max_score }}</span>
+                    </td>
+                    <td>
+                        {% set percentage = (submission.score / submission.max_score * 100) if submission.max_score > 0 else 0 %}
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: {{ percentage }}%"></div>
+                            <span class="progress-text">{{ "%.1f"|format(percentage) }}%</span>
+                        </div>
+                    </td>
+                    <td>
+                        <span class="status-badge status-{{ submission.status }}">
+                            {{ submission.status }}
+                        </span>
+                    </td>
+                    <td class="date-cell">
+                        {{ submission.submitted_at[:19] if submission.submitted_at else 'N/A' }}
+                    </td>
+                    <td>
+                        <a href="/student/{{ submission.filename }}" class="btn btn-primary">View Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Search functionality
+document.getElementById('searchInput').addEventListener('keyup', function() {
+    const searchTerm = this.value.toLowerCase();
+    const rows = document.querySelectorAll('.student-row');
+    
+    rows.forEach(row => {
+        const name = row.dataset.name.toLowerCase();
+        if (name.includes(searchTerm)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    updateRowNumbers();
+});
+
+// Sort functionality
+document.getElementById('sortSelect').addEventListener('change', function() {
+    const tbody = document.querySelector('#studentTable tbody');
+    const rows = Array.from(tbody.querySelectorAll('.student-row'));
+    const sortBy = this.value;
+    
+    rows.sort((a, b) => {
+        if (sortBy === 'score-desc') {
+            return parseFloat(b.dataset.score) - parseFloat(a.dataset.score);
+        } else if (sortBy === 'score-asc') {
+            return parseFloat(a.dataset.score) - parseFloat(b.dataset.score);
+        } else if (sortBy === 'name-asc') {
+            return a.dataset.name.localeCompare(b.dataset.name);
+        } else if (sortBy === 'name-desc') {
+            return b.dataset.name.localeCompare(a.dataset.name);
+        }
+    });
+    
+    rows.forEach(row => tbody.appendChild(row));
+    updateRowNumbers();
+});
+
+function updateRowNumbers() {
+    const visibleRows = document.querySelectorAll('.student-row:not([style*="display: none"])');
+    visibleRows.forEach((row, index) => {
+        row.querySelector('td:first-child').textContent = index + 1;
+    });
+}
+</script>
+{% endblock %}

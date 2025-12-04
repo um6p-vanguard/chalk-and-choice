@@ -1,0 +1,198 @@
+{
+  "answers": {
+    "q1tus0u5": "list||set||set||dict",
+    "q3epf3qk": "2",
+    "q3l7cskf": "1",
+    "q3u513yg": "2",
+    "q3uedq0b": "We need algorithms because they are efficient, they help  us solve a lot of questions in the short period of time. it is correct , never makes mistakes. it can read million instructions shortly.",
+    "q4ely4yg": "s = input()\r\nx = (s[0], len().s, s[-1])\r\nif:\r\n len().s>3 :\r\n    print(x)\r\nelif, len().s >= 3:\r\n    print(\"unchanged\")",
+    "q9cuwdw6": "1",
+    "qaq5q7q3": "def odd_even_product(nums):[nums > 0]\r\n    odd_sum = sum. [odd_even_product(nums) % 2 =! 0]\r\n    even_sum = sum. [odd_even_product(nums) % 2 == 0]\r\n    return (odd_sum * even_product)\r\n\r\n    \r\n",
+    "qcxymqfy": "in||len",
+    "qghbq7nr": "1002",
+    "qgvdxq8s": "10111",
+    "qizrr4cl": "2",
+    "qkz0opn7": "x = int(input())\r\nif x>0:\r\n print(\"positive\")\r\nelif x<0:\r\n print(\"negative\")\r\nelse:\r\n print(\"zero\")\r\n  ",
+    "qmekrpn0": "==||=||!=",
+    "qnc8yqn9": "0",
+    "qnx0ckfx": "3",
+    "qny208b3": "0||1||2||3",
+    "qplc45ct": "1",
+    "qpmuvq0u": "2",
+    "qqosf8nt": "1",
+    "qtu9plgm": "",
+    "qubltkrl": "boolean||True||False",
+    "qv1qu941": "int||float||str",
+    "qzpjmgaw": "dict||key||value"
+  },
+  "exam": {
+    "code": "f6nwoalx",
+    "description": null,
+    "title": "Midterm Exam"
+  },
+  "grading": [
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q9cuwdw6",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qpmuvq0u",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3u513yg",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qnx0ckfx",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3l7cskf",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qplc45ct",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "q3epf3qk",
+      "type": "mcq"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qizrr4cl",
+      "type": "mcq"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qqosf8nt",
+      "type": "mcq"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qnc8yqn9",
+      "type": "multi"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qny208b3",
+      "type": "multi"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qgvdxq8s",
+      "type": "text"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "qghbq7nr",
+      "type": "text"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "q3uedq0b",
+      "type": "text"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qubltkrl",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qv1qu941",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qmekrpn0",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qcxymqfy",
+      "type": "tokens"
+    },
+    {
+      "earned": 0.0,
+      "points": 1,
+      "question_id": "q1tus0u5",
+      "type": "tokens"
+    },
+    {
+      "earned": 1,
+      "points": 1,
+      "question_id": "qzpjmgaw",
+      "type": "tokens"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qkz0opn7",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "q4ely4yg",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qaq5q7q3",
+      "type": "code"
+    },
+    {
+      "cases": [],
+      "earned": 0.0,
+      "manual_review": true,
+      "points": 1,
+      "question_id": "qtu9plgm",
+      "type": "code"
+    }
+  ],
+  "last_activity_at": "2025-11-28T16:18:52.019516",
+  "max_score": 24.0,
+  "run_logs": [],
+  "score": 13.0,
+  "started_at": "2025-11-28T14:18:51.387530",
+  "status": "submitted",
+  "student": {
+    "id": 92,
+    "name": "Jessica Umuhire"
+  },
+  "submitted_at": "2025-11-28T16:18:52.019516"
+}
