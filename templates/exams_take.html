@@ -88,6 +88,9 @@
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
           <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+          {% if is_task %}
+            <p class="muted" style="margin:6px 0 0 0;">Copy/paste is disabled for this coding task.</p>
+          {% endif %}
           {% if raw_samples %}
             <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
               <div class="row" style="justify-content:space-between; align-items:center;">
@@ -254,6 +257,27 @@
   };
 
   tick();
+})();
+</script>
+{% endif %}
+{% if is_task %}
+<script>
+(function(){
+  const preventCopy = (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ["c","v","x"].includes(ev.key.toLowerCase())) {
+      ev.preventDefault();
+    }
+  };
+  const block = (ev) => ev.preventDefault();
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-code-input]").forEach((el) => {
+      el.addEventListener("copy", block);
+      el.addEventListener("cut", block);
+      el.addEventListener("paste", block);
+      el.addEventListener("contextmenu", block);
+      el.addEventListener("keydown", preventCopy);
+    });
+  });
 })();
 </script>
 {% endif %}

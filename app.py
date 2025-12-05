@@ -38,6 +38,37 @@ DB_URI  = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR links
 ALLOW_MULTI_ATTEMPTS = os.environ.get("ALLOW_MULTI_ATTEMPTS", "0") == "1"
 
+PROJECT_TASKS_SCHEMA = {
+    "type": "object",
+    "required": ["tasks"],
+    "properties": {
+        "tasks": {
+            "description": "List of task definitions to create for the project.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["title", "questions"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": ["string", "null"]},
+                    "instructions": {"type": ["string", "null"]},
+                    "required": {"type": "boolean", "default": True},
+                    "auto_grade": {"type": "boolean", "default": True},
+                    "requires_review": {"type": "boolean", "default": False},
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Question objects that follow the same structure as the task builder (multi-choice, code, text, tokens, etc.)."
+                    },
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    "additionalProperties": False,
+}
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -933,6 +964,47 @@ def _project_required_for_student(project, student):
         if assignment.is_required:
             required = True
     return required if matched else False
+
+def _import_project_tasks_from_config(project, config):
+    if not isinstance(config, dict):
+        raise ValueError("Config must be a JSON object.")
+    tasks_data = config.get("tasks")
+    if not isinstance(tasks_data, list) or not tasks_data:
+        raise ValueError("Config must include a non-empty 'tasks' array.")
+    existing = ProjectTask.query.filter_by(project_id=project.id).count() or 0
+    new_tasks = []
+    for offset, entry in enumerate(tasks_data, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Task #{offset} must be an object.")
+        title = (entry.get("title") or "").strip()
+        if not title:
+            raise ValueError(f"Task #{offset} is missing a title.")
+        questions_payload = entry.get("questions")
+        if not isinstance(questions_payload, list) or not questions_payload:
+            raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
+        try:
+            questions = _normalize_exam_questions(questions_payload)
+        except ValueError as exc:
+            raise ValueError(f"Task '{title}': {exc}")
+        except Exception:
+            raise ValueError(f"Task '{title}': unable to parse questions.")
+        description = (entry.get("description") or "").strip()
+        instructions = (entry.get("instructions") or "").strip()
+        task = ProjectTask(
+            project_id=project.id,
+            title=title,
+            description=description or None,
+            instructions=instructions or None,
+            questions_json=questions,
+            required=bool(entry.get("required", True)),
+            auto_grade=bool(entry.get("auto_grade", True)),
+            requires_review=bool(entry.get("requires_review", False)),
+            order_index=existing + offset,
+        )
+        new_tasks.append(task)
+    for task in new_tasks:
+        db.session.add(task)
+    return len(new_tasks)
 
 def _grade_exam_submission(exam, answers):
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
@@ -1875,6 +1947,11 @@ def projects_remove_group_assignment(code, assignment_id):
         db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
 
+@app.route("/projects/tasks/schema")
+@require_user()
+def projects_tasks_schema():
+    return jsonify(PROJECT_TASKS_SCHEMA)
+
 @app.route("/projects/<code>/tasks/new", methods=["GET", "POST"])
 @require_user()
 def projects_task_new(code):
@@ -1931,6 +2008,42 @@ def projects_task_new(code):
         project=project,
         task=None,
         form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/projects/<code>/tasks/import", methods=["GET", "POST"])
+@require_user()
+def projects_task_import(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    error = None
+    default_json = json.dumps({"tasks": []}, indent=2)
+    payload = request.form.get("payload") or default_json
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        try:
+            config = json.loads(payload or "{}")
+        except ValueError as exc:
+            error = f"Invalid JSON: {exc}"
+        else:
+            try:
+                created = _import_project_tasks_from_config(project, config)
+                db.session.commit()
+                return redirect(url_for("projects_show", code=project.code))
+            except ValueError as exc:
+                db.session.rollback()
+                error = str(exc)
+            except Exception:
+                db.session.rollback()
+                error = "Unable to import tasks. Please review your JSON."
+    schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2)
+    return render_template(
+        "projects_task_import.html",
+        project=project,
+        payload=payload,
+        schema_json=schema_json,
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),

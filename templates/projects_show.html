@@ -140,7 +140,10 @@
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:center;">
     <h3 style="margin:0;">Tasks</h3>
-    <a class="btn btn-primary" href="{{ url_for('projects_task_new', code=project.code) }}">Add task</a>
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('projects_task_import', code=project.code) }}">Import tasks</a>
+      <a class="btn btn-primary" href="{{ url_for('projects_task_new', code=project.code) }}">Add task</a>
+    </div>
   </div>
   {% if tasks %}
     <table style="margin-top:12px;">

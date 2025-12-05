@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Import tasks for {{ project.title }}</h3>
+      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged.</p>
+    </div>
+    <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  {% if error %}
+    <p class="text-danger">{{ error }}</p>
+  {% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Task JSON</label>
+    <textarea name="payload" rows="20" style="width:100%; font-family:ui-monospace;" required>{{ payload }}</textarea>
+    <div class="sp"></div>
+    <button class="btn btn-primary" type="submit">Import tasks</button>
+    <a class="btn" href="{{ url_for('projects_tasks_schema') }}" target="_blank" rel="noopener">Download schema</a>
+  </form>
+</div>
+<div class="sp"></div>
+<div class="card">
+  <h3 style="margin:0;">Schema</h3>
+  <p class="muted" style="margin-top:6px;">Reference schema for the JSON payload. Each task's <code>questions</code> array accepts the same fields as the regular builder.</p>
+  <pre class="code-block" style="max-height:320px; overflow:auto;">{{ schema_json }}</pre>
+</div>
+{% endblock %}
