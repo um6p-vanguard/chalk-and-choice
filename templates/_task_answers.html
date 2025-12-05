@@ -1,0 +1,125 @@
+{% macro render(questions, answers, logs_by_question=None) %}
+  {% set logs_by_question = logs_by_question or {} %}
+  {% if not questions %}
+    <p class="muted" style="margin:0;">No questions found for this task.</p>
+  {% else %}
+  <div style="display:flex; flex-direction:column; gap:14px;">
+    {% for q in questions %}
+      {% set qid = (q.id|string) if q.id is defined else (q.get("id")|string) %}
+      {% set answer = answers.get(qid) if answers else "" %}
+      {% set answer_val = "" if answer is none else (answer|string) %}
+      {% set qtype = q.type or q.get("type") %}
+      {% set qlogs = logs_by_question.get(qid, []) %}
+      <div style="border:1px solid #1f2937; border-radius:12px; padding:14px; background:#0b1220;">
+        <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
+          <div style="flex:1;">
+            <div class="muted" style="font-size:0.9rem;">Question {{ loop.index }}{% if q.title %} • {{ q.title }}{% endif %}</div>
+            {% if q.prompt %}<p style="margin:6px 0 0 0; white-space:pre-line;">{{ q.prompt }}</p>{% endif %}
+          </div>
+          <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; background:#1f2937; border:1px solid #334155; white-space:nowrap;">{{ qtype|capitalize }}</span>
+        </div>
+        {% if q.code_snippet %}
+          <pre style="margin-top:10px; white-space:pre-wrap; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ q.code_snippet }}</pre>
+        {% endif %}
+        {% if qtype == "code" %}
+          {% if q.statement %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px dashed #334155;">
+              <strong>Problem statement</strong>
+              <p class="muted" style="margin:6px 0 0 0; white-space:pre-line;">{{ q.statement }}</p>
+            </div>
+          {% endif %}
+          {% if q.mode == "function" and q.function_signature %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
+              <div class="muted">Signature</div>
+              <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ q.function_signature }}</pre>
+            </div>
+          {% endif %}
+        {% endif %}
+        <div style="margin-top:12px; padding:12px; border-radius:10px; border:1px solid #334155; background:#0f172a;">
+          <div class="muted" style="font-size:0.9rem;">Student answer</div>
+          {% if qtype in ("mcq", "multi") %}
+            {% set selected_raw = answer_val %}
+            {% if qtype == "multi" %}
+              {% set selected = selected_raw.split("||") if selected_raw else [] %}
+            {% else %}
+              {% set selected = [selected_raw] if selected_raw not in (None, "") else [] %}
+            {% endif %}
+            {% set options = q.options or [] %}
+            {% if options %}
+              <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin-top:8px;">
+                {% for opt in options %}
+                  {% set idx = loop.index0|string %}
+                  {% set chosen = idx in selected %}
+                  <div style="border:1px solid {{ '#38bdf8' if chosen else '#1f2937' }}; border-radius:10px; padding:10px; background:{{ '#0b1530' if chosen else '#0b1220' }};">
+                    <div class="muted" style="font-size:0.85rem;">Option {{ loop.index }}</div>
+                    <div style="margin-top:6px;">{{ opt }}</div>
+                    {% if chosen %}
+                      <span style="display:inline-block; margin-top:8px; font-size:0.8rem; padding:4px 8px; border-radius:14px; background:#0ea5e9; color:#0b1220;">Selected</span>
+                    {% endif %}
+                  </div>
+                {% endfor %}
+              </div>
+              {% if not selected %}
+                <p class="muted" style="margin-top:8px;">No choice selected.</p>
+              {% endif %}
+            {% else %}
+              <p class="muted" style="margin-top:8px;">No options configured.</p>
+            {% endif %}
+          {% elif qtype == "text" %}
+            <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
+          {% elif qtype == "code" %}
+            <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "# no submission" }}</pre>
+          {% elif qtype == "tokens" %}
+            {% set tpl = q.template or "" %}
+            {% set segments = tpl.split("[[blank]]") %}
+            {% set filled = answer_val.split("||") if answer_val else [] %}
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;">
+              {% for segment in segments %}
+                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if not loop.last %}
+                  {% set val = filled[loop.index0] if loop.index0 < filled|length else "" %}
+                  <span style="padding:6px 10px; border-radius:10px; background:#1f2937; border:1px solid #334155; min-width:80px; text-align:center;">{{ val or "—" }}</span>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% elif qtype == "fill" %}
+            {% set tpl = q.template or "" %}
+            {% set segments = tpl.split("[[blank]]") %}
+            {% set filled = answer_val.split("||") if answer_val else [] %}
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;">
+              {% for segment in segments %}
+                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if not loop.last %}
+                  {% set val = filled[loop.index0] if loop.index0 < filled|length else "" %}
+                  <span style="padding:6px 10px; border-radius:10px; background:#1f2937; border:1px solid #334155; min-width:80px; text-align:center;">{{ val or "—" }}</span>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% else %}
+            <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
+          {% endif %}
+        </div>
+        {% if qlogs %}
+          <details style="margin-top:10px;">
+            <summary class="muted">Run history ({{ qlogs|length }})</summary>
+            <ul style="margin:8px 0 0 16px; padding:0; list-style:square;">
+              {% for log in qlogs %}
+                <li style="margin-bottom:6px;">
+                  {{ log.ts or log.timestamp or "—" }}
+                  {% if log.samples %}
+                    <ul style="margin:4px 0 0 14px; list-style:circle;">
+                      {% for sample in log.samples %}
+                        <li>{{ sample.name or ("Sample " ~ loop.index) }} — {{ sample.status or "ran" }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endmacro %}

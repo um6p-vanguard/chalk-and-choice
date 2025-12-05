@@ -1079,6 +1079,20 @@ def _grade_exam_submission(exam, answers):
         earned += res["earned"]
     return earned, total, details
 
+def _run_logs_by_question(logs):
+    mapping = {}
+    if not isinstance(logs, list):
+        return mapping
+    for log in logs:
+        try:
+            qid = log.get("question_id")
+        except Exception:
+            continue
+        if qid is None:
+            continue
+        mapping.setdefault(str(qid), []).append(log)
+    return mapping
+
 def _run_code_tests_backend(code_text, tests, mode):
     results = []
     if not tests:
@@ -2389,6 +2403,98 @@ def projects_task_log_run(code, task_id):
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
+@app.route("/projects/<code>/submissions")
+@require_user()
+def projects_submissions_overview(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    tasks = project.tasks or []
+    submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id).order_by(ProjectTaskSubmission.last_activity_at.desc()).all()
+    grouped = {}
+    for sub in submissions:
+        sid = sub.student_id
+        key = sid if sid is not None else f"anon-{sub.id}"
+        student = sub.student
+        entry = grouped.setdefault(key, {
+            "student": student,
+            "student_id": sub.student_id,
+            "student_name": (student.name if student else None) or (sub.student_name or "Unknown student"),
+            "student_email": student.email if student else None,
+            "subs": [],
+        })
+        entry["subs"].append(sub)
+    student_rows = []
+    total_tasks = len(tasks)
+    for data in grouped.values():
+        subs = data["subs"]
+        attempted = len(subs)
+        completed = sum(1 for s in subs if s.status in ("submitted", "pending_review", "accepted", "rejected"))
+        accepted = sum(1 for s in subs if s.status == "accepted")
+        pending = sum(1 for s in subs if s.status == "pending_review")
+        in_progress = sum(1 for s in subs if s.status not in ("submitted", "pending_review", "accepted", "rejected"))
+        last_activity = max((s.last_activity_at for s in subs if s.last_activity_at), default=None)
+        student_rows.append({
+            "student": data["student"],
+            "student_id": data["student_id"],
+            "student_name": data["student_name"],
+            "student_email": data["student_email"],
+            "attempted_count": attempted,
+            "completed_count": completed,
+            "accepted_count": accepted,
+            "pending_count": pending,
+            "in_progress_count": in_progress,
+            "total_tasks": total_tasks,
+            "last_activity": last_activity,
+        })
+    student_rows.sort(key=lambda row: row["last_activity"] or datetime.min, reverse=True)
+    return render_template(
+        "projects_submissions_overview.html",
+        project=project,
+        student_rows=student_rows,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/projects/<code>/submissions/<int:student_id>")
+@require_user()
+def projects_student_submissions(code, student_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    tasks = project.tasks or []
+    submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student_id).all()
+    submissions_map = {sub.task_id: sub for sub in submissions}
+    return render_template(
+        "projects_student_submissions.html",
+        project=project,
+        student=student,
+        tasks=tasks,
+        submissions_map=submissions_map,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>")
+@require_user()
+def projects_submission_task_detail(code, student_id, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student_id).first_or_404()
+    questions = task.questions_json if isinstance(task.questions_json, list) else []
+    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
+    return render_template(
+        "projects_submission_task_detail.html",
+        project=project,
+        student=student,
+        task=task,
+        submission=submission,
+        questions=questions,
+        answers=answers,
+        logs_by_question=logs_by_question,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
 @app.route("/projects/reviews")
 @require_user()
 def projects_reviews():
@@ -2438,6 +2544,7 @@ def projects_review_detail(submission_id):
     project = submission.project
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
     answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
     return render_template(
         "projects_review_detail.html",
         submission=submission,
@@ -2445,6 +2552,7 @@ def projects_review_detail(submission_id):
         task=task,
         questions=questions,
         answers=answers,
+        logs_by_question=logs_by_question,
         user=current_user(),
         student_name=session.get("student_name"),
     )

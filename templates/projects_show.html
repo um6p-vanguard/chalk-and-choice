@@ -28,6 +28,7 @@
           {{ "Unpublish" if project.is_active else "Publish project" }}
         </button>
       </form>
+      <a class="btn" href="{{ url_for('projects_submissions_overview', code=project.code) }}">Student attempts</a>
       <a class="btn" href="{{ url_for('projects_list') }}">Back to list</a>
     </div>
   </div>

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">{{ student.name or "Unknown student" }}</h3>
+      <p class="muted" style="margin:4px 0;">{{ student.email or "No email provided" }}</p>
+      <p class="muted" style="margin:4px 0;">Project: <strong>{{ project.title }}</strong> ({{ project.code }})</p>
+    </div>
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('projects_submissions_overview', code=project.code) }}">Back to attempts</a>
+      <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Project settings</a>
+    </div>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Task attempts</h3>
+    <span class="muted" style="font-size:0.95rem;">{{ tasks|length }} tasks in project</span>
+  </div>
+  {% if tasks %}
+    <table style="margin-top:10px;">
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th>Status</th>
+          <th>Score</th>
+          <th>Submitted</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for task in tasks %}
+          {% set sub = submissions_map.get(task.id) %}
+          <tr>
+            <td>
+              <div><strong>{{ task.title }}</strong></div>
+              {% if task.description %}<div class="muted" style="font-size:0.9rem;">{{ task.description }}</div>{% endif %}
+            </td>
+            <td>
+              {% if sub %}
+                {% if sub.status == "accepted" %}
+                  <span style="color:#4ade80;">Accepted</span>
+                {% elif sub.status == "pending_review" %}
+                  <span style="color:#fde047;">Pending review</span>
+                {% elif sub.status == "rejected" %}
+                  <span style="color:#f87171;">Needs rework</span>
+                {% elif sub.status == "submitted" %}
+                  <span style="color:#38bdf8;">Submitted</span>
+                {% else %}
+                  <span class="muted">In progress</span>
+                {% endif %}
+              {% else %}
+                <span class="muted">Not started</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if sub and sub.max_score %}
+                {{ "%.1f"|format(sub.score or 0) }} / {{ "%.1f"|format(sub.max_score) }}
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if sub %}
+                {{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td style="text-align:right;">
+              {% if sub %}
+                <a class="btn btn-primary" href="{{ url_for('projects_submission_task_detail', code=project.code, student_id=student.id, task_id=task.id) }}">View answers</a>
+              {% else %}
+                <span class="muted">No attempt</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:0;">No tasks configured for this project.</p>
+  {% endif %}
+</div>
+{% endblock %}

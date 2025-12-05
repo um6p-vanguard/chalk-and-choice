@@ -24,13 +24,9 @@
             <h3 style="margin:0;">{{ row.project.title }}</h3>
             {% if row.project.description %}<p class="muted" style="margin:4px 0;">{{ row.project.description }}</p>{% endif %}
             <p class="muted" style="margin:4px 0;"><span style="color:#4ade80;">Completed</span></p>
-            <p class="muted" style="margin:4px 0;">
-              {% if row.required %}
-                <span style="color:#38bdf8;">Required for your group</span>
-              {% else %}
-                <span>This project was optional for your group.</span>
-              {% endif %}
-            </p>
+            {% if not row.required %}
+              <p class="muted" style="margin:4px 0;"><span>This project was optional for your group.</span></p>
+            {% endif %}
           </div>
           <div class="muted">{{ row.completed_count }} / {{ row.total_tasks }} tasks done</div>
         </div>
@@ -62,13 +58,9 @@
                 <span style="color:#fde047;">In progress</span>
               {% endif %}
             </p>
-            <p class="muted" style="margin:4px 0;">
-              {% if row.required %}
-                <span style="color:#38bdf8;">Required for your group</span>
-              {% else %}
-                <span>This project is optional for your group.</span>
-              {% endif %}
-            </p>
+            {% if not row.required %}
+              <p class="muted" style="margin:4px 0;"><span>This project is optional for your group.</span></p>
+            {% endif %}
           </div>
           {% if row.tasks %}
             <div class="muted">{{ row.completed_count }} / {{ row.total_tasks }} tasks done</div>

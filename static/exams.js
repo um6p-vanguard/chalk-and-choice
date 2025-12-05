@@ -1015,6 +1015,22 @@ json.dumps(results)
       return monacoReadyPromise;
     };
 
+    const disableCopyPaste = (editor, monaco) => {
+      editor.onKeyDown((evt) => {
+        if (!(evt.ctrlKey || evt.metaKey)) return;
+        if ([monaco.KeyCode.KEY_V, monaco.KeyCode.KEY_C, monaco.KeyCode.KEY_X].includes(evt.keyCode)) {
+          evt.preventDefault();
+        }
+      });
+      const domNode = editor.getDomNode();
+      if (!domNode) return;
+      const block = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      };
+      ["paste", "copy", "cut"].forEach((type) => domNode.addEventListener(type, block));
+    };
+
     ensureMonaco()
       .then((monaco) => {
         codeAreas.forEach((area) => {
@@ -1041,6 +1057,7 @@ json.dumps(results)
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
           });
+          disableCopyPaste(editor, monaco);
           const syncValue = () => {
             area.value = editor.getValue();
           };
