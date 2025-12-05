@@ -878,6 +878,14 @@ def _find_student_by_email(email: str):
         return None
     return Student.query.filter(func.lower(Student.email) == normalized).first()
 
+def _find_student_by_name(name: str):
+    if not name:
+        return None
+    normalized = " ".join(name.split()).lower()
+    if not normalized:
+        return None
+    return Student.query.filter(func.lower(Student.name) == normalized).first()
+
 def _create_grade_entry(student, assignment, score, max_score, remarks=None):
     if not student or not assignment:
         return None
@@ -2538,13 +2546,17 @@ def grades_import():
 
     for idx, row in enumerate(records, start=1):
         email = str(row.get("student_email") or row.get("email") or "").strip()
-        assignment = str(row.get("assignment") or row.get("name") or "").strip()
+        student_name = str(row.get("student_name") or row.get("student") or row.get("learner") or "").strip()
+        assignment = str(row.get("assignment") or row.get("assignment_name") or row.get("title") or row.get("name") or "").strip()
         remarks = str(row.get("remarks") or row.get("comment") or "").strip()
         score_raw = row.get("score")
         max_raw = row.get("max_score") or row.get("max") or row.get("total")
         student = _find_student_by_email(email)
+        if not student and student_name:
+            student = _find_student_by_name(student_name)
         if not student:
-            errors.append(f"Row {idx}: unknown student '{email}'.")
+            identifier = email or student_name or "unknown"
+            errors.append(f"Row {idx}: unknown student '{identifier}'.")
             continue
         if not assignment:
             errors.append(f"Row {idx}: missing assignment/test name.")
