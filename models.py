@@ -222,9 +222,9 @@ class Project(db.Model):
     required_task_count = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    # Points awarded once upon first project completion; retry cooldown applies after rejected submissions.
+    # Points awarded once upon first project completion; retry cooldown (minutes) applies after rejected submissions.
     points = db.Column(db.Integer, nullable=False, default=0)
-    retry_cooldown_hours = db.Column(db.Integer, nullable=False, default=0)
+    retry_cooldown_minutes = db.Column(db.Integer, nullable=False, default=0)
 
 
 class ProjectGroupAssignment(db.Model):

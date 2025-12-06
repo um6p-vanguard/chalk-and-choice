@@ -40,7 +40,7 @@
       <span style="color:#f87171;">Draft (hidden from students)</span>
     {% endif %}
   </p>
-  <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_hours }}h</strong></p>
+  <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_minutes }} min</strong></p>
 </div>
 
 <div class="sp"></div>
@@ -55,8 +55,8 @@
       <input type="number" min="0" name="points" value="{{ project.points }}" style="flex:1; min-width:160px;">
     </div>
     <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap;">
-      <label style="min-width:140px;">Retry cooldown (hours)</label>
-      <input type="number" min="0" name="retry_cooldown_hours" value="{{ project.retry_cooldown_hours }}" style="flex:1; min-width:160px;">
+      <label style="min-width:140px;">Retry cooldown (minutes)</label>
+      <input type="number" min="0" name="retry_cooldown_minutes" value="{{ project.retry_cooldown_minutes }}" style="flex:1; min-width:160px;">
     </div>
     <div>
       <button class="btn btn-primary" type="submit">Save</button>

@@ -2137,7 +2137,7 @@ def projects_new():
         "instructions": request.form.get("instructions") or "",
         "required_task_count": request.form.get("required_task_count") or "",
         "points": request.form.get("points") or "",
-        "retry_cooldown_hours": request.form.get("retry_cooldown_hours") or "",
+        "retry_cooldown_minutes": request.form.get("retry_cooldown_minutes") or "",
     }
     error = None
     if request.method == "POST":
@@ -2160,13 +2160,13 @@ def projects_new():
                 points_value = max(0, int(points_raw))
             except Exception:
                 error = "Points must be a number."
-        retry_hours_value = 0
-        retry_raw = form_data["retry_cooldown_hours"].strip()
+        retry_minutes_value = 0
+        retry_raw = form_data["retry_cooldown_minutes"].strip()
         if retry_raw and not error:
             try:
-                retry_hours_value = max(0, int(retry_raw))
+                retry_minutes_value = max(0, int(retry_raw))
             except Exception:
-                error = "Retry cooldown must be a number (hours)."
+                error = "Retry cooldown must be a number (minutes)."
         if not error:
             code = gen_code(8)
             while Project.query.filter_by(code=code).first() is not None:
@@ -2179,7 +2179,7 @@ def projects_new():
                 required_task_count=required_count,
                 is_active=False,
                 points=points_value,
-                retry_cooldown_hours=retry_hours_value,
+                retry_cooldown_minutes=retry_minutes_value,
             )
             db.session.add(project)
             db.session.commit()
@@ -2220,14 +2220,14 @@ def projects_update_meta(code):
         abort(400, "bad csrf")
     project = Project.query.filter_by(code=code).first_or_404()
     points_raw = (request.form.get("points") or "").strip()
-    retry_raw = (request.form.get("retry_cooldown_hours") or "").strip()
+    retry_raw = (request.form.get("retry_cooldown_minutes") or "").strip()
     try:
         points_val = int(points_raw) if points_raw else project.points or 0
-        retry_val = int(retry_raw) if retry_raw else project.retry_cooldown_hours or 0
+        retry_val = int(retry_raw) if retry_raw else project.retry_cooldown_minutes or 0
     except Exception:
         abort(400, "Points and retry cooldown must be numbers.")
     project.points = max(0, points_val)
-    project.retry_cooldown_hours = max(0, retry_val)
+    project.retry_cooldown_minutes = max(0, retry_val)
     db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
 
@@ -2524,10 +2524,10 @@ def student_projects():
                 if status in ("pending_review", "submitted", "accepted"):
                     can_retry_now = False
                 elif status == "rejected":
-                    retry_hours = project.retry_cooldown_hours or 0
-                    if retry_hours > 0 and submission.last_activity_at:
+                    retry_minutes = project.retry_cooldown_minutes or 0
+                    if retry_minutes > 0 and submission.last_activity_at:
                         elapsed = (datetime.utcnow() - submission.last_activity_at).total_seconds()
-                        wait_seconds = int(retry_hours * 3600 - elapsed)
+                        wait_seconds = int(retry_minutes * 60 - elapsed)
                         if wait_seconds > 0:
                             can_retry_now = False
                             cooldown_seconds = wait_seconds
@@ -2606,14 +2606,14 @@ def project_task_take(code, task_id):
     questions = task.questions_json if isinstance(task.questions_json, list) else []
     total_questions = len(questions)
     now = datetime.utcnow()
-    cooldown_hours = project.retry_cooldown_hours or 0
+    cooldown_minutes = project.retry_cooldown_minutes or 0
     cooldown_seconds_remaining = 0
     status = submission.status if submission and submission.status else "in_progress"
     can_submit = status not in ("submitted", "pending_review", "accepted")
-    if can_submit and cooldown_hours > 0 and status == "rejected":
+    if can_submit and cooldown_minutes > 0 and status == "rejected":
         if submission.last_activity_at:
             elapsed = (now - submission.last_activity_at).total_seconds()
-            wait_seconds = int(cooldown_hours * 3600 - elapsed)
+            wait_seconds = int(cooldown_minutes * 60 - elapsed)
             if wait_seconds > 0:
                 can_submit = False
                 cooldown_seconds_remaining = wait_seconds
@@ -2660,6 +2660,13 @@ def project_task_take(code, task_id):
                 action = "submit"
             else:
                 action = "next"
+        if action == "save":
+            answers = dict(base_answers)
+            answers.update(draft_answers)
+            submission.answers_json = answers
+            submission.last_activity_at = datetime.utcnow()
+            db.session.commit()
+            return redirect(url_for("student_projects"))
         if action == "submit":
             if not can_submit:
                 return render_template(

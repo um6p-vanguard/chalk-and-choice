@@ -214,6 +214,9 @@
         {% endif %}
       </div>
       <div class="row" style="gap:8px;">
+        {% if exam.kind == "project_task" and not preview %}
+          <button class="btn" type="submit" name="nav_action" value="save">Save without submitting</button>
+        {% endif %}
         {% if preview %}
           {% if has_next %}
             <a class="btn btn-primary" href="{{ url_for('exam_take', code=exam.code, q=current_index + 1) }}">Next</a>

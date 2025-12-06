@@ -1193,25 +1193,31 @@ json.dumps(results)
     };
 
     const disablePaste = (editor, monaco) => {
+      let lastValue = editor.getValue();
       const blockEvent = (evt) => {
         evt.preventDefault();
         evt.stopPropagation();
         return false;
       };
       editor.onKeyDown((evt) => {
-        if ((evt.ctrlKey || evt.metaKey) && evt.keyCode === monaco.KeyCode.KEY_V) {
+        const key = evt.keyCode;
+        if ((evt.ctrlKey || evt.metaKey) && key === monaco.KeyCode.KEY_V) {
+          blockEvent(evt);
+        }
+        if (evt.shiftKey && key === monaco.KeyCode.Insert) {
           blockEvent(evt);
         }
       });
       const domNode = editor.getDomNode();
-      if (domNode) {
-        ["paste", "drop"].forEach((type) => domNode.addEventListener(type, blockEvent, true));
-      }
+      const targets = [domNode, document, window].filter(Boolean);
+      targets.forEach((t) => {
+        ["paste", "drop"].forEach((type) => t.addEventListener(type, blockEvent, true));
+      });
+      editor.onDidChangeModelContent(() => {
+        lastValue = editor.getValue();
+      });
       editor.onDidPaste(() => {
-        const model = editor.getModel();
-        if (model) {
-          editor.undo();
-        }
+        editor.setValue(lastValue);
       });
     };
 
