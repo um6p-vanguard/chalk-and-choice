@@ -3050,6 +3050,26 @@ def grades_admin():
         student_name=session.get("student_name"),
     )
 
+@app.post("/grades/<int:grade_id>/update")
+@require_user()
+def grades_update(grade_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    grade = Grade.query.get_or_404(grade_id)
+    score_raw = request.form.get("score") or ""
+    max_raw = request.form.get("max_score") or ""
+    remarks = (request.form.get("remarks") or "").strip()
+    try:
+        grade.score = float(score_raw)
+        grade.max_score = float(max_raw)
+    except Exception:
+        session["grades_error"] = "Score and maximum score must be numbers."
+        return redirect(url_for("grades_admin"))
+    grade.remarks = remarks or None
+    db.session.commit()
+    session["grades_status"] = f"Updated grade for {grade.student_name}."
+    return redirect(url_for("grades_admin"))
+
 @app.post("/grades/import")
 @require_user()
 def grades_import():

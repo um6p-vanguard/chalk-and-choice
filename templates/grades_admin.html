@@ -65,6 +65,7 @@
           <th>Score</th>
           <th>Remarks</th>
           <th>Recorded</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -75,6 +76,16 @@
           <td>{{ "%.2f"|format(grade.score) }} / {{ "%.2f"|format(grade.max_score) }}</td>
           <td>{{ grade.remarks or "—" }}</td>
           <td>{{ grade.created_at.strftime("%b %d %H:%M") if grade.created_at else "—" }}</td>
+          <td style="min-width:220px;">
+            <form method="post" action="{{ url_for('grades_update', grade_id=grade.id) }}" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="number" name="score" step="0.01" min="0" value="{{ grade.score }}" style="width:80px;">
+              <span class="muted">/</span>
+              <input type="number" name="max_score" step="0.01" min="0" value="{{ grade.max_score }}" style="width:80px;">
+              <input type="text" name="remarks" value="{{ grade.remarks }}" placeholder="Remarks" style="flex:1; min-width:140px;">
+              <button class="btn" type="submit">Update</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
