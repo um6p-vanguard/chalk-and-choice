@@ -2322,7 +2322,7 @@ def projects_tasks_schema():
 def projects_task_new(code):
     project = Project.query.filter_by(code=code).first_or_404()
     req_flag = request.form.get("required")
-    auto_flag = request.form.get("auto_grade")
+    auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     form_data = {
         "title": request.form.get("title") or "",
@@ -2330,7 +2330,7 @@ def projects_task_new(code):
         "instructions": request.form.get("instructions") or "",
         "questions_payload": request.form.get("questions_payload") or "[]",
         "required": True if request.method != "POST" and req_flag is None else bool(req_flag),
-        "auto_grade": True if request.method != "POST" and auto_flag is None else (auto_flag == "1"),
+        "auto_grade": True if request.method != "POST" and not auto_flag_vals else ("1" in auto_flag_vals),
         "requires_review": bool(review_flag),
         "question_type": request.form.get("question_type") or "mcq",
     }
@@ -2420,7 +2420,7 @@ def projects_task_edit(code, task_id):
     project = Project.query.filter_by(code=code).first_or_404()
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     req_flag = request.form.get("required")
-    auto_flag = request.form.get("auto_grade")
+    auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     if request.method == "POST":
         form_data = {
@@ -2429,7 +2429,7 @@ def projects_task_edit(code, task_id):
             "instructions": request.form.get("instructions") or "",
             "questions_payload": request.form.get("questions_payload") or "[]",
             "required": bool(req_flag),
-            "auto_grade": (auto_flag == "1"),
+            "auto_grade": ("1" in auto_flag_vals),
             "requires_review": bool(review_flag),
             "question_type": request.form.get("question_type") or "mcq",
         }
@@ -2687,6 +2687,21 @@ def project_task_take(code, task_id):
             grade_details = []
             if task.auto_grade:
                 grade_score, grade_total, grade_details = _grade_exam_submission(task, answers)
+                try:
+                    app.logger.info(
+                        "TASK AUTO-GRADE DEBUG",
+                        extra={
+                            "project": project.code,
+                            "task_id": task.id,
+                            "student_id": student.id,
+                            "answers": answers,
+                            "grade_score": grade_score,
+                            "grade_total": grade_total,
+                            "grade_details": grade_details,
+                        },
+                    )
+                except Exception:
+                    app.logger.info(f"TASK AUTO-GRADE DEBUG [{project.code}-{task.id}] score={grade_score}/{grade_total} answers={answers}")
             submission.answers_json = answers
             submission.score = grade_score
             submission.max_score = grade_total
