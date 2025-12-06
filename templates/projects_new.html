@@ -23,6 +23,12 @@
     <label>Required tasks to complete</label>
     <input type="number" min="0" name="required_task_count" placeholder="Leave blank to require all tasks" value="{{ form_data.required_task_count }}">
 
+    <label>Project points (awarded on completion)</label>
+    <input type="number" min="0" name="points" placeholder="e.g., 100" value="{{ form_data.points }}">
+
+    <label>Retry cooldown (hours) after rejection</label>
+    <input type="number" min="0" name="retry_cooldown_hours" placeholder="0 = no cooldown" value="{{ form_data.retry_cooldown_hours }}">
+
     <button class="btn btn-primary" type="submit" style="margin-top:12px;">Create project</button>
     <a class="btn" href="{{ url_for('projects_list') }}" style="margin-left:8px;">Cancel</a>
   </form>

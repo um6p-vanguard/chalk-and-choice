@@ -14,7 +14,7 @@
   {% if exam.instructions %}
     <div style="margin-top:12px; padding:12px; border:1px dashed #334155; border-radius:10px;">
       <strong>Instructions</strong>
-      <p class="muted" style="margin:6px 0 0 0; white-space: pre-line;">{{ exam.instructions }}</p>
+      <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-instructions>{{ exam.instructions }}</div>
     </div>
   {% endif %}
 </div>
@@ -26,6 +26,11 @@
     <p class="muted">You already submitted this exam. Your responses are shown below.</p>
   {% elif not can_submit %}
     <p class="text-danger">This exam is not currently accepting submissions.</p>
+  {% endif %}
+  {% if cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and exam.kind == "project_task" and not can_submit %}
+    {% set hrs = cooldown_seconds_remaining // 3600 %}
+    {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
+    <p class="text-danger" style="margin-top:6px;">You can try this task again in approximately {{ hrs }}h {{ mins }}m.</p>
   {% endif %}
   {% if time_remaining_seconds is not none and not preview %}
   <div class="card" style="border:1px solid #1f2937; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;" data-timer data-seconds="{{ time_remaining_seconds }}">
@@ -44,7 +49,7 @@
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
         <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • {{ q.title }}{% endif %}</div>
-        <p class="q" style="margin:8px 0 12px 0; white-space: pre-line;">{{ q.prompt }}</p>
+        <div class="markdown-block q" style="margin:8px 0 12px 0;" data-markdown-prompt="{{ q.id }}">{{ q.prompt }}</div>
         {% if q.code_snippet %}
           <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
         {% endif %}
@@ -69,67 +74,95 @@
             {% endfor %}
           </div>
         {% elif q.type == "text" %}
-          <textarea name="answer_{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
+          <div class="text-answer-shell" data-markdown-shell="{{ q.id }}" style="display:flex; flex-direction:column; gap:8px;">
+            <textarea name="answer_{{ q.id }}" data-markdown-answer="{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" style="width:100%; min-height:120px; max-height:240px;" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
+            <div class="markdown-preview-header muted" style="font-size:0.9rem;">Preview (Markdown)</div>
+            <div class="markdown-preview-body" data-markdown-preview="{{ q.id }}" style="white-space:pre-wrap; min-height:60px; padding:8px; border:1px solid #1f2937; border-radius:8px; background:#0b1220;"></div>
+          </div>
         {% elif q.type == "code" %}
-          {% if q.statement %}
-            <div style="padding:10px; border-radius:8px; background:#0b1220; margin-bottom:10px;">
-              <strong>Problem statement</strong>
-              <p class="muted" style="margin:6px 0 0 0; white-space: pre-line;">{{ q.statement }}</p>
-            </div>
-          {% endif %}
-          {% if q.mode == "function" and q.function_signature %}
-            <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px;">
-              <strong>Implement:</strong>
-              <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px;">{{ q.function_signature }}</pre>
-            </div>
-          {% endif %}
           {% set raw_samples = q.samples or [] %}
           {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
-          <textarea name="answer_{{ q.id }}" rows="12" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
-          {% if is_task %}
-            <p class="muted" style="margin:6px 0 0 0;">Copy/paste is disabled for this coding task.</p>
-          {% endif %}
-          {% if raw_samples %}
-            <div style="margin-top:10px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
-              <div class="row" style="justify-content:space-between; align-items:center;">
-                <strong>Sample tests</strong>
-                {% if public_samples %}
-                  <button type="button" class="btn" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run samples</button>
+          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="code-question-main" style="display:flex; flex-wrap:wrap; gap:12px;">
+              <div class="code-question-description" style="flex:1 1 280px; min-width:260px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                {% if q.statement %}
+                  <div style="margin-bottom:10px;">
+                    <strong>Problem statement</strong>
+                    <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-statement="{{ q.id }}">{{ q.statement }}</div>
+                  </div>
+                {% endif %}
+                {% if q.mode == "function" and q.function_signature %}
+                  <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                    <strong>Implement</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.function_signature }}</pre>
+                  </div>
                 {% endif %}
               </div>
-              {% if public_samples %}
-                <ul style="list-style:none; padding:0; margin:10px 0;">
-                  {% for sample in public_samples %}
-                    <li style="margin-bottom:8px; border:1px dashed #334155; border-radius:8px; padding:8px;">
-                      <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
-                      {% if q.mode == "function" %}
-                        <div class="muted">Call: <code>{{ sample.call or sample.input }}</code></div>
-                      {% else %}
-                        <div class="muted">Input:</div>
-                        <pre style="background:#0b1220; padding:6px; border-radius:6px; white-space:pre-wrap;">{{ sample.input }}</pre>
-                      {% endif %}
-                    </li>
-                  {% endfor %}
-                </ul>
-              {% else %}
-                <p class="muted" style="margin:10px 0;">No public sample tests are available for this question.</p>
-              {% endif %}
-              <div data-results="{{ q.id }}" style="font-size:0.9rem;"></div>
+              <div class="code-question-editor" style="flex:1 1 360px; min-width:320px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                </div>
+                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+                {% if is_task %}
+                  <p class="muted" style="margin:6px 0 0 0;">Copy/paste is disabled for this coding task.</p>
+                {% endif %}
+              </div>
             </div>
-          {% endif %}
-          <div style="margin-top:12px; padding:10px; border:1px solid #1f2937; border-radius:8px;">
-            <strong>Try your own input</strong>
-            {% if q.mode == "function" %}
-              <label style="display:block; margin-top:6px;">Function call</label>
-              <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)">
-            {% else %}
-              <label style="display:block; margin-top:6px;">Standard input</label>
-              <textarea rows="4" style="width:100%;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
-            {% endif %}
-            <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
-            <div data-custom-results="{{ q.id }}" style="margin-top:8px; font-size:0.9rem;"></div>
+
+            <div class="code-question-tests" style="display:flex; flex-direction:column; gap:10px;">
+              <div class="code-samples-card" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <strong>Sample tests</strong>
+                    <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-sample-summary="{{ q.id }}">Not run</span>
+                  </div>
+                  {% if public_samples %}
+                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
+                  {% endif %}
+                </div>
+                {% if public_samples %}
+                  <ul style="list-style:none; padding:0; margin:10px 0; display:grid; gap:8px;">
+                    {% for sample in public_samples %}
+                      <li style="border:1px dashed #334155; border-radius:8px; padding:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                          <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
+                          {% if q.mode == "function" %}
+                            <span class="muted" style="font-size:0.85rem;">Call: <code>{{ sample.call or sample.input }}</code></span>
+                          {% else %}
+                            <span class="muted" style="font-size:0.85rem;">Std in</span>
+                          {% endif %}
+                        </div>
+                        {% if q.mode != "function" and sample.input %}
+                          <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; white-space:pre-wrap;">{{ sample.input }}</pre>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <p class="muted" style="margin:10px 0;">No public sample tests are available for this question.</p>
+                {% endif %}
+                <div data-results="{{ q.id }}" class="test-results" style="font-size:0.95rem; margin-top:8px;"></div>
+              </div>
+
+              <div class="code-custom-run" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+                  <strong>Try your own input</strong>
+                  <span class="muted" style="font-size:0.85rem;" data-custom-summary="{{ q.id }}">Not run</span>
+                </div>
+                {% if q.mode == "function" %}
+                  <label style="display:block; margin-top:6px;">Function call</label>
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                {% else %}
+                  <label style="display:block; margin-top:6px;">Standard input</label>
+                  <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
+                {% endif %}
+                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+                <div data-custom-results="{{ q.id }}" class="code-custom-results" style="margin-top:8px; font-size:0.95rem;"></div>
+              </div>
+            </div>
           </div>
         {% elif q.type == "tokens" %}
           {% set tpl = q.template or "" %}
@@ -137,24 +170,14 @@
           {% set existing_value = previous_answers.get(q.id, '') or '' %}
           {% set filled = existing_value.split('||') if existing_value else [] %}
           <div data-token-question>
-            <div class="token-expression">
-              {% for segment in segments %}
-                {% if segment %}
-                  <span>{{ segment }}</span>
-                {% endif %}
-                {% if not loop.last %}
-                  {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
-                  <button type="button" class="token-slot" data-token-slot data-placeholder="____">{{ slot_val or '____' }}</button>
-                {% endif %}
-              {% endfor %}
-            </div>
+            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;">{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
             <input type="hidden" name="answer_{{ q.id }}" data-token-answer value="{{ existing_value }}">
-            <div class="token-bank">
+            <div class="token-bank" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
               {% set base_tokens = q.correct_tokens or [] %}
               {% set extra_tokens = q.distractor_tokens or [] %}
               {% set options = q.token_options if q.token_options else (base_tokens + extra_tokens) %}
               {% for opt in options %}
-                <button type="button" class="token-option" data-token-option data-token-value="{{ opt }}">{{ opt }}</button>
+                <button type="button" class="token-option" data-token-option data-token-value="{{ opt }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;">{{ opt }}</button>
               {% endfor %}
             </div>
           </div>
@@ -164,12 +187,12 @@
           {% set existing_value = previous_answers.get(q.id, '') or '' %}
           {% set filled = existing_value.split('||') if existing_value else [] %}
           <div data-fill-question>
-            <div class="fill-expression">
+            <div class="fill-expression" style="display:flex; flex-wrap:wrap; gap:6px; padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
               {% for segment in segments %}
                 {% if segment %}<span>{{ segment }}</span>{% endif %}
                 {% if not loop.last %}
                   {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
-                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}">
+                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}" style="min-width:4ch; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
                 {% endif %}
               {% endfor %}
             </div>
@@ -206,6 +229,10 @@
               <button class="btn btn-primary" type="submit" name="nav_action" value="submit">{{ submit_label }}</button>
             {% elif already_submitted %}
               <span class="muted">Submission already received.</span>
+            {% elif cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and exam.kind == "project_task" %}
+              {% set hrs = cooldown_seconds_remaining // 3600 %}
+              {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
+              <span class="muted">Try again in {{ hrs }}h {{ mins }}m.</span>
             {% else %}
               <span class="muted">Exam is not accepting submissions.</span>
             {% endif %}

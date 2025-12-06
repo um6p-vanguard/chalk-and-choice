@@ -3,6 +3,49 @@
   let monacoLoaderPromise = null;
   let monacoReadyPromise = null;
 
+  const escapeHtml = (str) => {
+    return (str || "").replace(/[&<>"']/g, (char) => {
+      const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+      return map[char] || char;
+    });
+  };
+
+  const inlineMarkdown = (text) => {
+    let t = escapeHtml(text || "");
+    t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    return t;
+  };
+
+  const renderMarkdownText = (text) => {
+    const lines = (text || "").split(/\n/);
+    const parts = [];
+    let inList = false;
+    lines.forEach((line) => {
+      const listMatch = line.match(/^\s*-\s+(.*)/);
+      if (listMatch) {
+        if (!inList) {
+          parts.push("<ul style=\"margin:6px 0 6px 18px; padding:0;\">");
+          inList = true;
+        }
+        parts.push(`<li style="margin:2px 0;">${inlineMarkdown(listMatch[1])}</li>`);
+        return;
+      }
+      if (inList) {
+        parts.push("</ul>");
+        inList = false;
+      }
+      if (!line.trim()) {
+        parts.push("<br>");
+      } else {
+        parts.push(`<p style="margin:4px 0;">${inlineMarkdown(line)}</p>`);
+      }
+    });
+    if (inList) parts.push("</ul>");
+    return parts.join("");
+  };
+
   function setupExamBuilder() {
     const root = document.querySelector("[data-exam-builder]");
     if (!root) return;
@@ -674,66 +717,188 @@
       }
     };
 
-    const renderResults = (container, results) => {
+    const renderResults = (container, results, summaryEl) => {
+      const safeResults = Array.isArray(results) ? results : [];
       container.innerHTML = "";
-      results.forEach((sample) => {
-        const block = document.createElement("div");
-        block.style.borderTop = "1px solid #1f2937";
-        block.style.paddingTop = "6px";
-        block.style.marginTop = "6px";
-        const statusColor = sample.status === "passed" ? "#4ade80" : "#f87171";
-        block.innerHTML = `
-          <strong>${sample.name || "Sample"}</strong>
-          <span style="color:${statusColor}; margin-left:8px;">${sample.status}</span>
+      const total = safeResults.length;
+      const passed = safeResults.filter((s) => s.status === "passed").length;
+      if (summaryEl) {
+        let badge = `${passed}/${total} passed`;
+        let color = "#38bdf8";
+        if (total === 0) {
+          badge = "Not run";
+          color = "#94a3b8";
+        } else if (passed === total) {
+          color = "#4ade80";
+          badge = "All tests passed";
+        } else if (passed === 0) {
+          color = "#f87171";
+        } else {
+          color = "#fbbf24";
+        }
+        summaryEl.textContent = badge;
+        summaryEl.style.color = color;
+        summaryEl.style.borderColor = "#334155";
+      }
+      if (!total) {
+        container.textContent = "No results to show.";
+        return;
+      }
+
+      const summary = document.createElement("div");
+      summary.className = "test-summary";
+      summary.innerHTML = `<strong>Summary:</strong> ${passed} / ${total} tests passed`;
+      summary.style.padding = "8px";
+      summary.style.border = "1px solid #1f2937";
+      summary.style.borderRadius = "8px";
+      summary.style.marginBottom = "8px";
+      summary.style.background = "#0f172a";
+      container.appendChild(summary);
+
+      const buildDiff = (expected, output) => {
+        const diffWrap = document.createElement("div");
+        diffWrap.style.marginTop = "6px";
+        const expLines = (expected || "").split("\n");
+        const outLines = (output || "").split("\n");
+        const rows = Math.max(expLines.length, outLines.length);
+        const list = document.createElement("div");
+        list.style.border = "1px solid #1f2937";
+        list.style.borderRadius = "8px";
+        list.style.overflow = "hidden";
+        for (let i = 0; i < rows; i += 1) {
+          const expLine = expLines[i] || "";
+          const outLine = outLines[i] || "";
+          const match = expLine === outLine;
+          const row = document.createElement("div");
+          row.style.display = "grid";
+          row.style.gridTemplateColumns = "1fr 1fr";
+          row.style.gap = "1px";
+          row.style.background = "#0b1220";
+          const expCell = document.createElement("div");
+          expCell.style.padding = "6px";
+          expCell.style.background = match ? "#0b1220" : "#1f2937";
+          expCell.style.fontFamily = "SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace";
+          expCell.style.whiteSpace = "pre-wrap";
+          expCell.innerHTML = escapeHtml(expLine || "");
+          const outCell = document.createElement("div");
+          outCell.style.padding = "6px";
+          outCell.style.background = match ? "#0b1220" : "#1f2937";
+          outCell.style.fontFamily = "SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace";
+          outCell.style.whiteSpace = "pre-wrap";
+          outCell.innerHTML = escapeHtml(outLine || "");
+          row.appendChild(expCell);
+          row.appendChild(outCell);
+          list.appendChild(row);
+        }
+        diffWrap.appendChild(list);
+        return diffWrap;
+      };
+
+      safeResults.forEach((sample) => {
+        const status = sample.status || "unknown";
+        const statusColor = {
+          passed: "#4ade80",
+          mismatch: "#fbbf24",
+          timeout: "#fbbf24",
+          error: "#f87171",
+          unknown: "#38bdf8",
+        }[status] || "#38bdf8";
+
+        const card = document.createElement("div");
+        card.className = "test-case";
+        card.style.border = "1px solid #1f2937";
+        card.style.borderRadius = "10px";
+        card.style.padding = "10px";
+        card.style.marginBottom = "8px";
+        card.style.background = "#0f172a";
+
+        const header = document.createElement("div");
+        header.style.display = "flex";
+        header.style.justifyContent = "space-between";
+        header.style.alignItems = "center";
+        header.style.gap = "10px";
+        const left = document.createElement("div");
+        left.innerHTML = `<strong>${escapeHtml(sample.name || "Sample")}</strong>`;
+        const badge = document.createElement("span");
+        badge.textContent = status;
+        badge.style.color = statusColor;
+        badge.style.border = `1px solid ${statusColor}`;
+        badge.style.borderRadius = "12px";
+        badge.style.padding = "4px 8px";
+        badge.style.fontSize = "0.85rem";
+        header.appendChild(left);
+        header.appendChild(badge);
+        card.appendChild(header);
+
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.textContent = "Details";
+        toggle.className = "btn";
+        toggle.style.marginTop = "8px";
+
+        const details = document.createElement("div");
+        details.style.marginTop = "10px";
+        details.style.display = "none";
+
+        toggle.addEventListener("click", () => {
+          const open = details.style.display === "block";
+          details.style.display = open ? "none" : "block";
+          toggle.textContent = open ? "Details" : "Hide details";
+        });
+
+        const labelInput = sample.mode === "function" ? "Call" : "Input";
+        const inputBlock = document.createElement("div");
+        inputBlock.innerHTML = `
+          <div class="muted">${labelInput}</div>
+          <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.input || "")}</pre>
         `;
 
-        const splitRow = document.createElement("div");
-        splitRow.style.display = "flex";
-        splitRow.style.flexWrap = "wrap";
-        splitRow.style.gap = "12px";
-        splitRow.style.marginTop = "8px";
-
-        const leftCol = document.createElement("div");
-        leftCol.style.flex = "1 1 240px";
-        leftCol.innerHTML = `
-          <div class="muted">Input</div>
-          <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.input || "")}</pre>
+        const outputBlock = document.createElement("div");
+        outputBlock.style.marginTop = "8px";
+        outputBlock.innerHTML = `
+          <div class="muted">Your output</div>
+          <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.output || "")}</pre>
         `;
 
-        const rightCol = document.createElement("div");
-        rightCol.style.flex = "1 1 240px";
-        rightCol.innerHTML = `
-          <div style="margin-bottom:6px;">
-            <div class="muted">Your output</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.output || "")}</pre>
-          </div>
-          <div>
-            <div class="muted">Expected output</div>
-            <pre style="white-space:pre-wrap; background:#0b1220; padding:6px; border-radius:6px; min-height:66px;">${escapeHtml(sample.expected || "")}</pre>
-          </div>
+        const expectedBlock = document.createElement("div");
+        expectedBlock.style.marginTop = "8px";
+        expectedBlock.innerHTML = `
+          <div class="muted">Expected output</div>
+          <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.expected || "")}</pre>
         `;
 
-        splitRow.appendChild(leftCol);
-        splitRow.appendChild(rightCol);
-        block.appendChild(splitRow);
+        details.appendChild(inputBlock);
+        details.appendChild(outputBlock);
+        details.appendChild(expectedBlock);
+
+        if (sample.expected && (sample.output || sample.output === "")) {
+          const diffWrap = buildDiff(sample.expected, sample.output);
+          const diffLabel = document.createElement("div");
+          diffLabel.className = "muted";
+          diffLabel.style.marginTop = "8px";
+          diffLabel.textContent = "Diff (expected vs your output)";
+          details.appendChild(diffLabel);
+          details.appendChild(diffWrap);
+        }
 
         if (sample.error) {
+          const errLabel = document.createElement("div");
+          errLabel.className = "muted";
+          errLabel.style.marginTop = "8px";
+          errLabel.textContent = "Error details";
           const errBlock = document.createElement("pre");
           errBlock.textContent = sample.error;
           errBlock.style.background = "#1f2937";
-          errBlock.style.padding = "6px";
-          errBlock.style.borderRadius = "6px";
-          errBlock.style.marginTop = "6px";
-          block.appendChild(errBlock);
+          errBlock.style.padding = "8px";
+          errBlock.style.borderRadius = "8px";
+          errBlock.style.whiteSpace = "pre-wrap";
+          details.appendChild(errLabel);
+          details.appendChild(errBlock);
         }
-        container.appendChild(block);
-      });
-    };
 
-    const escapeHtml = (str) => {
-      return (str || "").replace(/[&<>"']/g, (char) => {
-        const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-        return map[char] || char;
+        card.appendChild(toggle);
+        card.appendChild(details);
+        container.appendChild(card);
       });
     };
 
@@ -842,6 +1007,7 @@ for sample in samples:
             "output": output_value,
             "expected": expected_output,
             "error": error_text,
+            "mode": "function",
         })
 
     else:
@@ -888,6 +1054,7 @@ for sample in samples:
             "output": output_value,
             "expected": expected_output,
             "error": error_text,
+            "mode": "script",
         })
 
 json.dumps(results)
@@ -910,6 +1077,7 @@ json.dumps(results)
         const questionId = btn.dataset.question;
         const codeArea = root.querySelector(`[data-code-input="${questionId}"]`);
         const resultsContainer = root.querySelector(`[data-results="${questionId}"]`);
+        const summaryEl = root.querySelector(`[data-sample-summary="${questionId}"]`);
         if (!codeArea || !resultsContainer) return;
         if (!samples.length) {
           resultsContainer.textContent = "No samples configured for this question.";
@@ -921,11 +1089,15 @@ json.dumps(results)
         resultsContainer.textContent = "Preparing Pyodide...";
         try {
           const parsed = await executeSamples(btn, samples, btn.getAttribute("data-mode") || "script", codeArea.value);
-          renderResults(resultsContainer, parsed);
+          renderResults(resultsContainer, parsed, summaryEl);
           postLog(questionId, parsed);
         } catch (err) {
           console.error(err);
           resultsContainer.textContent = `Unable to run samples: ${err.message || err}`;
+          if (summaryEl) {
+            summaryEl.textContent = "Run failed";
+            summaryEl.style.color = "#f87171";
+          }
         } finally {
           btn.disabled = false;
           btn.textContent = originalText;
@@ -939,6 +1111,7 @@ json.dumps(results)
         const mode = btn.dataset.mode || "script";
         const container = root.querySelector(`[data-custom-results="${questionId}"]`);
         const codeArea = root.querySelector(`[data-code-input="${questionId}"]`);
+        const summaryEl = root.querySelector(`[data-custom-summary="${questionId}"]`);
         if (!questionId || !container) return;
         let samples = [];
         if (mode === "function") {
@@ -957,9 +1130,13 @@ json.dumps(results)
         container.textContent = "Running custom input...";
         try {
           const results = await executeSamples(btn, samples, mode, codeArea ? codeArea.value : undefined);
-          renderResults(container, results);
+          renderResults(container, results, summaryEl);
         } catch (err) {
           container.textContent = `Unable to run: ${err.message || err}`;
+          if (summaryEl) {
+            summaryEl.textContent = "Run failed";
+            summaryEl.style.color = "#f87171";
+          }
         }
       });
     });
@@ -1058,6 +1235,7 @@ json.dumps(results)
             scrollBeyondLastLine: false,
           });
           disableCopyPaste(editor, monaco);
+          area._monacoEditor = editor;
           const syncValue = () => {
             area.value = editor.getValue();
           };
@@ -1194,8 +1372,58 @@ json.dumps(results)
     });
   }
 
+  function setupMarkdownAnswers() {
+    const areas = Array.from(document.querySelectorAll("textarea[data-markdown-answer]"));
+    if (!areas.length) return;
+    const render = (area) => {
+      const qid = area.dataset.markdownAnswer;
+      const preview = document.querySelector(`[data-markdown-preview="${qid}"]`);
+      if (!preview) return;
+      preview.innerHTML = renderMarkdownText(area.value || "");
+    };
+    areas.forEach((area) => {
+      render(area);
+      area.addEventListener("input", () => render(area));
+      area.addEventListener("change", () => render(area));
+    });
+  }
+
+  function setupMarkdownStatic() {
+    const blocks = document.querySelectorAll("[data-markdown-prompt], [data-markdown-statement], [data-markdown-instructions]");
+    if (!blocks.length) return;
+    blocks.forEach((block) => {
+      const content = (block.textContent || "").trim();
+      block.innerHTML = renderMarkdownText(content);
+      block.style.whiteSpace = "normal";
+      block.style.fontFamily = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+    });
+  }
+
+  function setupCodeReset() {
+    const buttons = Array.from(document.querySelectorAll("[data-code-reset]"));
+    if (!buttons.length) return;
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const target = btn.dataset.target;
+        const area = document.querySelector(`textarea[data-code-input="${target}"]`);
+        if (!area) return;
+        const initial = area.dataset.codeInitial !== undefined ? area.dataset.codeInitial : (btn.dataset.initial || "");
+        area.value = initial;
+        if (area._monacoEditor) {
+          area._monacoEditor.setValue(initial);
+        } else {
+          const ev = new Event("input", { bubbles: true });
+          area.dispatchEvent(ev);
+        }
+      });
+    });
+  }
+
   setupExamBuilder();
   setupCodeEditors();
+  setupCodeReset();
+  setupMarkdownStatic();
+  setupMarkdownAnswers();
   setupExamRunner();
   setupTokenQuestions();
   setupFillQuestions();

@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -37,6 +37,8 @@ DB_PATH = os.path.abspath(os.environ.get("CLASSVOTE_DB", "classvote.db"))
 DB_URI  = os.environ.get("DATABASE_URL") or f"sqlite:///{DB_PATH}"
 SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR links
 ALLOW_MULTI_ATTEMPTS = os.environ.get("ALLOW_MULTI_ATTEMPTS", "0") == "1"
+ENABLE_BACKEND_CODE_RUNS = os.environ.get("ENABLE_BACKEND_CODE_RUNS", "1") == "1"
+CODE_RUN_TIME_LIMIT_SEC = float(os.environ.get("CODE_RUN_TIME_LIMIT_SEC", "3.0"))
 
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
@@ -922,12 +924,8 @@ def _project_completed(project, student):
         sub = _project_task_submission(task, student)
         if not sub:
             continue
-        if task.requires_review:
-            if sub.status == "accepted":
-                completed += 1
-        else:
-            if sub.status in ("submitted", "accepted"):
-                completed += 1
+        if sub.status == "accepted":
+            completed += 1
         if completed >= required_count:
             return True
     return False
@@ -938,6 +936,27 @@ def _project_dependencies_met(project, student):
         if not _project_completed(dep.prerequisite, student):
             return False
     return True
+
+def _award_project_points_if_needed(project, student):
+    """
+    Award project points once per student/project when completed.
+    Caller must commit.
+    """
+    if not project or not student:
+        return
+    if not project.points or project.points <= 0:
+        return
+    assignment_name = f"Project: {project.title}"
+    existing = Grade.query.filter_by(student_id=student.id, assignment=assignment_name).first()
+    if existing:
+        return
+    _create_grade_entry(
+        student,
+        assignment_name,
+        float(project.points),
+        float(project.points),
+        remarks=f"Auto-awarded for completing project '{project.title}'.",
+    )
 
 def _student_group_ids(student):
     if not student:
@@ -1093,7 +1112,48 @@ def _run_logs_by_question(logs):
         mapping.setdefault(str(qid), []).append(log)
     return mapping
 
-def _run_code_tests_backend(code_text, tests, mode):
+# --------------------------------------------------------------------
+# Safe builtins for student code
+# --------------------------------------------------------------------
+UNSAFE_BUILTINS = {
+    "__import__",      # arbitrary imports
+    "eval", "exec", "compile",
+    "open",           # file I/O
+    "help", "quit", "exit",
+    "globals", "locals", "vars",
+    "dir",             # not fatal, but lets them inspect too much
+    "input",           # we will override with our own stub/fake
+    "breakpoint",
+}
+
+def build_safe_builtins():
+    safe = {}
+    for name in dir(builtins):
+        if name.startswith("_"):
+            continue
+        if name in UNSAFE_BUILTINS:
+            continue
+        safe[name] = getattr(builtins, name)
+    return safe
+
+SAFE_CODE_BUILTINS = build_safe_builtins()
+
+def _disallow_input(*args, **kwargs):
+    """
+    Default stub for input(): used in function-mode problems, where
+    students must not use input().
+    """
+    raise RuntimeError("input() is not allowed in this problem; use function arguments instead.")
+
+SAFE_CODE_BUILTINS["input"] = _disallow_input
+
+def safe_env():
+    """
+    Return a fresh environment dict with safe builtins.
+    """
+    return {"__builtins__": dict(SAFE_CODE_BUILTINS)}
+
+def _run_code_tests_worker(code_text, tests, mode):
     results = []
     if not tests:
         return results
@@ -1114,10 +1174,11 @@ def _run_code_tests_backend(code_text, tests, mode):
     mode = (mode or "script").strip().lower()
     if mode not in ("script", "function"):
         mode = "script"
-    namespace = {}
+    env_base = None
     if mode == "function":
         try:
-            exec(code_text, namespace, namespace)
+            env_base = safe_env()
+            exec(code_text, env_base, env_base)
         except Exception:
             tb = traceback.format_exc()
             for idx, test in enumerate(tests):
@@ -1146,11 +1207,12 @@ def _run_code_tests_backend(code_text, tests, mode):
                 status = "error"
                 error_text = "Missing call expression."
             else:
+                env = dict(env_base or safe_env())
                 stdout = io.StringIO()
                 original_stdout = sys.stdout
                 sys.stdout = stdout
                 try:
-                    result = eval(call_expr, namespace, namespace)
+                    result = eval(call_expr, env, env)
                     output_value = repr(result)
                 except Exception:
                     status = "error"
@@ -1171,28 +1233,33 @@ def _run_code_tests_backend(code_text, tests, mode):
         else:
             sample_input = test.get("input") or ""
             expected_output = (test.get("expected") or test.get("output") or "")
-            stdin = io.StringIO(sample_input)
-            stdout = io.StringIO()
-            original_stdout = sys.stdout
-            original_stdin = sys.stdin
-            original_input = builtins.input
-            sys.stdout = stdout
-            sys.stdin = stdin
-            builtins.input = lambda prompt=None: stdin.readline().rstrip("\n")
+            stdin_buffer = io.StringIO(sample_input)
+            stdout_buffer = io.StringIO()
             status = "passed"
             error_text = ""
             try:
-                exec(code_text, {"__name__": "__main__"})
+                env = safe_env()
+                def fake_input(prompt: str = ""):
+                    line = stdin_buffer.readline()
+                    if line == "":
+                        raise EOFError("EOF when reading a line")
+                    return line.rstrip("\n")
+                env["input"] = fake_input
+                env["__name__"] = "__main__"
+                original_stdout = sys.stdout
+                sys.stdout = stdout_buffer
+                try:
+                    exec(code_text, env, env)
+                finally:
+                    sys.stdout = original_stdout
             except Exception:
                 status = "error"
                 error_text = traceback.format_exc()
-            finally:
-                sys.stdout = original_stdout
-                sys.stdin = original_stdin
-                builtins.input = original_input
-            output_value = stdout.getvalue()
-            if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
-                status = "mismatch"
+            output_value = stdout_buffer.getvalue()
+            if status == "passed" and expected_output.strip():
+                if output_value.rstrip() != expected_output.rstrip():
+                    status = "mismatch"
+                    error_text = ""
             results.append({
                 "name": name,
                 "status": status,
@@ -1203,6 +1270,126 @@ def _run_code_tests_backend(code_text, tests, mode):
                 "hidden": hidden,
             })
     return results
+
+def _run_code_tests_backend(code_text, tests, mode):
+    """
+    Run code in a child process with a hard time limit.
+    Returns (results, timed_out).
+    """
+    if not tests:
+        return [], False
+
+    try:
+        ctx = multiprocessing.get_context("fork")
+    except ValueError:
+        ctx = multiprocessing.get_context()
+    result_queue = ctx.Queue()
+
+    def _child():
+        try:
+            res = _run_code_tests_worker(code_text, tests, mode)
+        except Exception as e:
+            res = []
+            for idx, t in enumerate(tests):
+                hidden = bool(t.get("hidden"))
+                name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                res.append({
+                    "name": name,
+                    "status": "error",
+                    "input": t.get("call") or t.get("input") or "",
+                    "output": "",
+                    "expected": t.get("expected") or t.get("output") or "",
+                    "error": repr(e),
+                    "hidden": hidden,
+                })
+        result_queue.put(res)
+
+    proc = ctx.Process(target=_child)
+    proc.start()
+    proc.join(CODE_RUN_TIME_LIMIT_SEC)
+
+    timed_out = False
+    results = []
+
+    if proc.is_alive():
+        timed_out = True
+        try:
+            proc.terminate()
+        finally:
+            proc.join()
+        for idx, t in enumerate(tests):
+            hidden = bool(t.get("hidden"))
+            name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            results.append({
+                "name": name,
+                "status": "timeout",
+                "input": "",
+                "output": "",
+                "expected": "",
+                "error": "Time limit exceeded",
+                "hidden": hidden,
+            })
+    else:
+        try:
+            results = result_queue.get_nowait()
+        except Exception:
+            timed_out = True
+            for idx, t in enumerate(tests):
+                hidden = bool(t.get("hidden"))
+                name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                results.append({
+                    "name": name,
+                    "status": "error",
+                    "input": "",
+                    "output": "",
+                    "expected": "",
+                    "error": "No results from worker process",
+                    "hidden": hidden,
+                })
+
+    return results, timed_out
+
+def _split_visible_hidden_results(results):
+    visible = []
+    hidden = []
+    for res in results or []:
+        is_hidden = bool(res.get("hidden"))
+        base = {
+            "name": res.get("name") or ("Hidden test" if is_hidden else "Test"),
+            "status": res.get("status") or "error",
+            "hidden": is_hidden,
+        }
+        if is_hidden:
+            hidden.append(base)
+        else:
+            base.update({
+                "input": res.get("input") or "",
+                "output": res.get("output") or "",
+                "expected": res.get("expected") or "",
+                "error": res.get("error") or "",
+            })
+            visible.append(base)
+    return visible, hidden
+
+def _summarize_test_results(visible, hidden, timed_out):
+    visible_passed = sum(1 for r in visible if r.get("status") == "passed")
+    hidden_passed = sum(1 for r in hidden if r.get("status") == "passed")
+    visible_total = len(visible)
+    hidden_total = len(hidden)
+    all_passed = (
+        (visible_total + hidden_total) > 0
+        and visible_passed == visible_total
+        and hidden_passed == hidden_total
+        and not timed_out
+    )
+    return {
+        "visible_passed": visible_passed,
+        "visible_total": visible_total,
+        "hidden_passed": hidden_passed,
+        "hidden_total": hidden_total,
+        "all_passed": all_passed,
+        "timed_out": bool(timed_out),
+    }
 
 @app.route("/exams")
 @require_user()
@@ -1675,6 +1862,115 @@ def exams_log_run(code):
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
+@app.route("/api/exams/<code>/run-code", methods=["POST"])
+def exams_run_code(code):
+    if not ENABLE_BACKEND_CODE_RUNS:
+        return jsonify({"ok": False, "error": "Backend code runs are disabled."}), 503
+    exam = Exam.query.filter_by(code=code).first_or_404()
+    student = current_student()
+    if not student:
+        abort(401)
+    if exam.access_password_hash and not _exam_has_access(exam.id):
+        abort(403)
+    if not exam.is_available:
+        abort(403)
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    qid = data.get("question_id")
+    code_text = data.get("code") or ""
+    if not qid or code_text is None:
+        return jsonify({"ok": False, "error": "Missing question_id or code"}), 400
+    questions = exam.questions_json if isinstance(exam.questions_json, list) else []
+    q = next((qq for qq in questions if str(qq.get("id")) == str(qid)), None)
+    if not q or q.get("type") != "code":
+        return jsonify({"ok": False, "error": "Unknown or non-code question"}), 400
+    tests = q.get("samples") or []
+    mode = q.get("mode") or "script"
+    results, timed_out = _run_code_tests_backend(code_text, tests, mode)
+    visible, hidden = _split_visible_hidden_results(results)
+    summary = _summarize_test_results(visible, hidden, timed_out)
+
+    submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
+    if not submission:
+        submission = ExamSubmission(
+            exam_id=exam.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+            ip_address=(request.remote_addr or "")[:64],
+        )
+        db.session.add(submission)
+
+    logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+    logs.append({
+        "question_id": qid,
+        "tests": visible + hidden,
+        "summary": summary,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    })
+    submission.run_logs = logs
+    submission.last_activity_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
+
+@app.route("/api/projects/<code>/tasks/<int:task_id>/run-code", methods=["POST"])
+def projects_run_code(code, task_id):
+    if not ENABLE_BACKEND_CODE_RUNS:
+        return jsonify({"ok": False, "error": "Backend code runs are disabled."}), 503
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    student = current_student()
+    if not student:
+        abort(401)
+    if not _project_visible_to_student(project, student):
+        abort(403)
+    if not _project_dependencies_met(project, student):
+        abort(403)
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    data = request.get_json(silent=True) or {}
+    qid = data.get("question_id")
+    code_text = data.get("code") or ""
+    if not qid or code_text is None:
+        return jsonify({"ok": False, "error": "Missing question_id or code"}), 400
+    questions = task.questions_json if isinstance(task.questions_json, list) else []
+    q = next((qq for qq in questions if str(qq.get("id")) == str(qid)), None)
+    if not q or q.get("type") != "code":
+        return jsonify({"ok": False, "error": "Unknown or non-code question"}), 400
+    tests = q.get("samples") or []
+    mode = q.get("mode") or "script"
+    results, timed_out = _run_code_tests_backend(code_text, tests, mode)
+    visible, hidden = _split_visible_hidden_results(results)
+    summary = _summarize_test_results(visible, hidden, timed_out)
+
+    submission = _project_task_submission(task, student)
+    if not submission:
+        submission = ProjectTaskSubmission(
+            task_id=task.id,
+            project_id=project.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+        )
+        db.session.add(submission)
+
+    logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+    logs.append({
+        "question_id": qid,
+        "tests": visible + hidden,
+        "summary": summary,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    })
+    submission.run_logs = logs
+    submission.last_activity_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
+
 # --------------------------------------------------------------------
 # Student Groups (admin)
 # --------------------------------------------------------------------
@@ -1829,6 +2125,8 @@ def projects_new():
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
         "required_task_count": request.form.get("required_task_count") or "",
+        "points": request.form.get("points") or "",
+        "retry_cooldown_hours": request.form.get("retry_cooldown_hours") or "",
     }
     error = None
     if request.method == "POST":
@@ -1844,6 +2142,20 @@ def projects_new():
                 required_count = max(0, int(rtc_raw))
             except Exception:
                 error = "Required task count must be a number."
+        points_value = 0
+        points_raw = form_data["points"].strip()
+        if points_raw and not error:
+            try:
+                points_value = max(0, int(points_raw))
+            except Exception:
+                error = "Points must be a number."
+        retry_hours_value = 0
+        retry_raw = form_data["retry_cooldown_hours"].strip()
+        if retry_raw and not error:
+            try:
+                retry_hours_value = max(0, int(retry_raw))
+            except Exception:
+                error = "Retry cooldown must be a number (hours)."
         if not error:
             code = gen_code(8)
             while Project.query.filter_by(code=code).first() is not None:
@@ -1855,6 +2167,8 @@ def projects_new():
                 instructions=form_data["instructions"].strip() or None,
                 required_task_count=required_count,
                 is_active=False,
+                points=points_value,
+                retry_cooldown_hours=retry_hours_value,
             )
             db.session.add(project)
             db.session.commit()
@@ -1887,6 +2201,24 @@ def projects_show(code):
         user=current_user(),
         student_name=session.get("student_name"),
     )
+
+@app.post("/projects/<code>/update-meta")
+@require_user()
+def projects_update_meta(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    points_raw = (request.form.get("points") or "").strip()
+    retry_raw = (request.form.get("retry_cooldown_hours") or "").strip()
+    try:
+        points_val = int(points_raw) if points_raw else project.points or 0
+        retry_val = int(retry_raw) if retry_raw else project.retry_cooldown_hours or 0
+    except Exception:
+        abort(400, "Points and retry cooldown must be numbers.")
+    project.points = max(0, points_val)
+    project.retry_cooldown_hours = max(0, retry_val)
+    db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
 
 @app.post("/projects/<code>/publish")
 @require_user()
@@ -2175,10 +2507,25 @@ def student_projects():
             status = submission.status if submission and submission.status else "not_started"
             if status in ("submitted", "accepted", "pending_review"):
                 completed_count += 1
+            cooldown_seconds = 0
+            can_retry_now = True
+            if submission:
+                if status in ("pending_review", "submitted", "accepted"):
+                    can_retry_now = False
+                elif status == "rejected":
+                    retry_hours = project.retry_cooldown_hours or 0
+                    if retry_hours > 0 and submission.last_activity_at:
+                        elapsed = (datetime.utcnow() - submission.last_activity_at).total_seconds()
+                        wait_seconds = int(retry_hours * 3600 - elapsed)
+                        if wait_seconds > 0:
+                            can_retry_now = False
+                            cooldown_seconds = wait_seconds
             tasks.append({
                 "task": task,
                 "status": status,
                 "submission": submission,
+                "can_retry_now": can_retry_now,
+                "cooldown_seconds_remaining": cooldown_seconds,
             })
         row = {
             "project": project,
@@ -2247,6 +2594,18 @@ def project_task_take(code, task_id):
         db.session.commit()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
     total_questions = len(questions)
+    now = datetime.utcnow()
+    cooldown_hours = project.retry_cooldown_hours or 0
+    cooldown_seconds_remaining = 0
+    status = submission.status if submission and submission.status else "in_progress"
+    can_submit = status not in ("submitted", "pending_review", "accepted")
+    if can_submit and cooldown_hours > 0 and status == "rejected":
+        if submission.last_activity_at:
+            elapsed = (now - submission.last_activity_at).total_seconds()
+            wait_seconds = int(cooldown_hours * 3600 - elapsed)
+            if wait_seconds > 0:
+                can_submit = False
+                cooldown_seconds_remaining = wait_seconds
 
     def clamp_q(idx):
         if total_questions <= 0:
@@ -2264,7 +2623,6 @@ def project_task_take(code, task_id):
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
 
-    can_submit = submission.status not in ("submitted", "pending_review", "accepted")
     preview = False
 
     if request.method == "POST":
@@ -2309,6 +2667,7 @@ def project_task_take(code, task_id):
                     user=current_user(),
                     student_name=student.name,
                     run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
@@ -2320,12 +2679,21 @@ def project_task_take(code, task_id):
             submission.answers_json = answers
             submission.score = grade_score
             submission.max_score = grade_total
-            submission.last_activity_at = datetime.utcnow()
-            submission.submitted_at = datetime.utcnow()
+            submission.last_activity_at = now
+            submission.submitted_at = now
             if task.requires_review:
                 submission.status = "pending_review"
             else:
-                submission.status = "submitted"
+                if task.auto_grade and grade_total > 0:
+                    if grade_score >= grade_total:
+                        submission.status = "accepted"
+                    else:
+                        submission.status = "rejected"
+                else:
+                    submission.status = "submitted"
+            if submission.status == "accepted":
+                if _project_completed(project, student):
+                    _award_project_points_if_needed(project, student)
             db.session.commit()
             _clear_task_draft(task.id)
             return render_template(
@@ -2360,12 +2728,42 @@ def project_task_take(code, task_id):
         has_next=(q_index + 1 < total_questions),
         can_submit=can_submit,
         preview=preview,
-        already_submitted=(submission.status in ("submitted", "pending_review", "accepted")),
+        already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
         previous_answers=previous_answers,
         time_remaining_seconds=None,
         user=current_user(),
         student_name=student.name,
         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+        cooldown_seconds_remaining=cooldown_seconds_remaining,
+    )
+
+@app.route("/student/projects/<code>/tasks/<int:task_id>/submission")
+@require_student()
+def project_task_submission_self_view(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = current_student()
+    if not _project_visible_to_student(project, student):
+        abort(403)
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    submission = ProjectTaskSubmission.query.filter_by(
+        project_id=project.id,
+        task_id=task.id,
+        student_id=student.id,
+    ).first_or_404()
+    questions = task.questions_json if isinstance(task.questions_json, list) else []
+    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
+    return render_template(
+        "projects_submission_task_detail.html",
+        project=project,
+        student=student,
+        task=task,
+        submission=submission,
+        questions=questions,
+        answers=answers,
+        logs_by_question=logs_by_question,
+        user=current_user(),
+        student_name=student.name,
     )
 
 @app.route("/api/projects/<code>/tasks/<int:task_id>/log-run", methods=["POST"])
@@ -2572,6 +2970,9 @@ def projects_review_decision(submission_id):
     if notes:
         submission.review_notes = notes
     submission.last_activity_at = datetime.utcnow()
+    if submission.status == "accepted" and submission.student:
+        if _project_completed(submission.project, submission.student):
+            _award_project_points_if_needed(submission.project, submission.student)
     db.session.commit()
     return redirect(url_for("projects_reviews"))
 

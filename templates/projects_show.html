@@ -40,6 +40,28 @@
       <span style="color:#f87171;">Draft (hidden from students)</span>
     {% endif %}
   </p>
+  <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_hours }}h</strong></p>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin:0;">Project meta</h3>
+  <p class="muted" style="margin-top:6px;">Update points and retry cooldown. Points are awarded once when a student completes the project; cooldown delays retries after rejection.</p>
+  <form method="post" action="{{ url_for('projects_update_meta', code=project.code) }}" style="margin-top:10px; display:grid; gap:10px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap;">
+      <label style="min-width:140px;">Points</label>
+      <input type="number" min="0" name="points" value="{{ project.points }}" style="flex:1; min-width:160px;">
+    </div>
+    <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap;">
+      <label style="min-width:140px;">Retry cooldown (hours)</label>
+      <input type="number" min="0" name="retry_cooldown_hours" value="{{ project.retry_cooldown_hours }}" style="flex:1; min-width:160px;">
+    </div>
+    <div>
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
 </div>
 
 <div class="sp"></div>
