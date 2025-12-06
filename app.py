@@ -1092,8 +1092,19 @@ def _grade_exam_submission(exam, answers):
             if matches and answers_expected:
                 res["earned"] = points
         elif qtype == "code":
-            res["manual_review"] = True
-            res["cases"] = []    
+            samples = q.get("samples") or []
+            mode = q.get("mode") or "script"
+            res["cases"] = []
+            res["timed_out"] = False
+            if samples:
+                run_results, timed_out = _run_code_tests_backend(raw_answer, samples, mode)
+                res["cases"] = run_results
+                res["timed_out"] = timed_out
+                if not timed_out and all((r.get("status") == "passed") for r in run_results):
+                    res["earned"] = points
+                res["manual_review"] = False
+            else:
+                res["manual_review"] = True
         details.append(res)
         earned += res["earned"]
     return earned, total, details
@@ -2684,7 +2695,8 @@ def project_task_take(code, task_id):
             if task.requires_review:
                 submission.status = "pending_review"
             else:
-                if task.auto_grade and grade_total > 0:
+                has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
+                if task.auto_grade and not has_manual_review and grade_total > 0:
                     if grade_score >= grade_total:
                         submission.status = "accepted"
                     else:
