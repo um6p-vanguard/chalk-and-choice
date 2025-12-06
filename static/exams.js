@@ -1211,13 +1211,21 @@ json.dumps(results)
       const domNode = editor.getDomNode();
       const targets = [domNode, document, window].filter(Boolean);
       targets.forEach((t) => {
-        ["paste", "drop"].forEach((type) => t.addEventListener(type, blockEvent, true));
+        ["paste", "drop", "contextmenu"].forEach((type) => t.addEventListener(type, blockEvent, true));
       });
+      editor.onContextMenu((evt) => blockEvent(evt.event));
+      editor.updateOptions({ contextmenu: false });
       editor.onDidChangeModelContent(() => {
         lastValue = editor.getValue();
       });
       editor.onDidPaste(() => {
         editor.setValue(lastValue);
+      });
+      ["editor.action.clipboardPasteAction", "editor.action.clipboardCopyAction", "editor.action.clipboardCutAction"].forEach((id) => {
+        const action = editor.getAction(id);
+        if (action && action.dispose) {
+          action.dispose();
+        }
       });
     };
 

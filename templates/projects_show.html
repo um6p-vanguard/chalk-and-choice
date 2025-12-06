@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
       <h3 style="margin:0;">{{ project.title }}</h3>
-      {% if project.description %}<p class="muted" style="margin:6px 0;">{{ project.description }}</p>{% endif %}
+      {% if project.description %}<div class="muted markdown-block" style="margin:6px 0;" data-markdown-project>{{ project.description }}</div>{% endif %}
       <p class="muted" style="margin:6px 0;">Project code: <code>{{ project.code }}</code></p>
       <p class="muted" style="margin:6px 0;">
         {% if project.required_task_count %}
@@ -16,7 +16,7 @@
       {% if project.instructions %}
         <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
           <strong>Student instructions</strong>
-          <p class="muted" style="margin:6px 0 0 0; white-space:pre-line;">{{ project.instructions }}</p>
+          <div class="muted markdown-block" style="margin:6px 0 0 0;" data-markdown-project>{{ project.instructions }}</div>
         </div>
       {% endif %}
     </div>
@@ -205,4 +205,33 @@
     <p class="muted" style="margin-top:12px;">No tasks yet.</p>
   {% endif %}
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function(){
+  const blocks = document.querySelectorAll("[data-markdown-project]");
+  if (!blocks.length) return;
+  const escapeHtml = (str) => (str || "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[ch] || ch));
+  const inline = (text) => escapeHtml(text || "").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  const render = (text) => {
+    const lines = (text || "").split(/\n/);
+    const parts = [];
+    let inList = false;
+    lines.forEach((line) => {
+      const m = line.match(/^\s*-\s+(.*)/);
+      if (m) {
+        if (!inList) { parts.push("<ul style='margin:6px 0 6px 18px; padding:0;'>"); inList = true; }
+        parts.push(`<li style="margin:2px 0;">${inline(m[1])}</li>`);
+      } else {
+        if (inList) { parts.push("</ul>"); inList = false; }
+        if (!line.trim()) { parts.push("<br>"); }
+        else { parts.push(`<p style="margin:4px 0;">${inline(line)}</p>`); }
+      }
+    });
+    if (inList) parts.push("</ul>");
+    return parts.join("");
+  };
+  blocks.forEach((el) => { el.innerHTML = render(el.textContent || ""); el.style.whiteSpace = "normal"; });
+})();
+</script>
 {% endblock %}
