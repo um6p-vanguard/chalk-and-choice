@@ -2766,6 +2766,23 @@ def project_task_submission_self_view(code, task_id):
         student_name=student.name,
     )
 
+@app.post("/projects/<code>/students/<int:student_id>/reset")
+@require_user()
+def project_reset_student_progress(code, student_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    # delete all task submissions for this student/project
+    subs = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student.id).all()
+    for sub in subs:
+        db.session.delete(sub)
+    # remove awarded grade entry if present
+    assignment_name = f"Project: {project.title}"
+    Grade.query.filter_by(student_id=student.id, assignment=assignment_name).delete()
+    db.session.commit()
+    return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
+
 @app.route("/api/projects/<code>/tasks/<int:task_id>/log-run", methods=["POST"])
 def projects_task_log_run(code, task_id):
     project = Project.query.filter_by(code=code).first_or_404()
