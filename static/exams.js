@@ -1192,20 +1192,27 @@ json.dumps(results)
       return monacoReadyPromise;
     };
 
-    const disableCopyPaste = (editor, monaco) => {
+    const disablePaste = (editor, monaco) => {
+      const blockEvent = (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        return false;
+      };
       editor.onKeyDown((evt) => {
-        if (!(evt.ctrlKey || evt.metaKey)) return;
-        if ([monaco.KeyCode.KEY_V, monaco.KeyCode.KEY_C, monaco.KeyCode.KEY_X].includes(evt.keyCode)) {
-          evt.preventDefault();
+        if ((evt.ctrlKey || evt.metaKey) && evt.keyCode === monaco.KeyCode.KEY_V) {
+          blockEvent(evt);
         }
       });
       const domNode = editor.getDomNode();
-      if (!domNode) return;
-      const block = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      };
-      ["paste", "copy", "cut"].forEach((type) => domNode.addEventListener(type, block));
+      if (domNode) {
+        ["paste", "drop"].forEach((type) => domNode.addEventListener(type, blockEvent, true));
+      }
+      editor.onDidPaste(() => {
+        const model = editor.getModel();
+        if (model) {
+          editor.undo();
+        }
+      });
     };
 
     ensureMonaco()
@@ -1234,8 +1241,8 @@ json.dumps(results)
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
           });
-          disableCopyPaste(editor, monaco);
           area._monacoEditor = editor;
+          disablePaste(editor, monaco);
           const syncValue = () => {
             area.value = editor.getValue();
           };

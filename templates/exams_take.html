@@ -106,9 +106,6 @@
                   <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
                 </div>
                 <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
-                {% if is_task %}
-                  <p class="muted" style="margin:6px 0 0 0;">Copy/paste is disabled for this coding task.</p>
-                {% endif %}
               </div>
             </div>
 
