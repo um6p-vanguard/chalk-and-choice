@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator, TEXT
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import UniqueConstraint, func
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
