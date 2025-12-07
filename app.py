@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -109,51 +109,62 @@ def verify_csrf(form_field="csrf"):
 def inject_csrf():
     return {"csrf_token": csrf_token}
 
-# Minimal markdown renderer (bold/italic/code + lists; escapes HTML first)
+# Minimal markdown renderer with headings, inline code, fenced code blocks, lists.
 def render_md(text):
     if text is None:
         return Markup("")
-    raw = str(text)
-    esc = escape(raw)
-    # inline formatting
-    esc = esc.replace("**", "\u0001")  # temp
-    parts = esc.split("\u0001")
-    buf = []
-    for i, chunk in enumerate(parts):
-        if i % 2 == 1:
-            buf.append(f"<strong>{chunk}</strong>")
-        else:
-            buf.append(chunk)
-    esc = "".join(buf)
-    esc = esc.replace("*", "\u0002")
-    parts = esc.split("\u0002")
-    buf = []
-    for i, chunk in enumerate(parts):
-        if i % 2 == 1:
-            buf.append(f"<em>{chunk}</em>")
-        else:
-            buf.append(chunk)
-    esc = "".join(buf)
-    esc = esc.replace("`", "\u0003")
-    parts = esc.split("\u0003")
-    buf = []
-    for i, chunk in enumerate(parts):
-        if i % 2 == 1:
-            buf.append(f"<code>{chunk}</code>")
-        else:
-            buf.append(chunk)
-    esc = "".join(buf)
 
-    lines = esc.split("\n")
+    raw = str(text).replace("\r\n", "\n")
+
+    def fmt_inline(chunk: str) -> str:
+        esc = escape(chunk)
+        esc = re.sub(r"`([^`]+)`", r"<code>\1</code>", esc)
+        esc = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", esc)
+        esc = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", esc)
+        return esc
+
     out = []
     in_list = False
+    in_code = False
+    code_lines = []
+    code_lang = ""
+
+    lines = raw.split("\n")
     for line in lines:
-        m = line.strip().startswith("- ")
-        if m:
+        fence = re.match(r"^```(.*)$", line.strip())
+        if fence:
+            if in_code:
+                lang_attr = f' data-lang="{escape(code_lang)}"' if code_lang else ""
+                code_html = escape("\n".join(code_lines))
+                out.append(f"<pre class=\"md-code\"><code{lang_attr}>{code_html}</code></pre>")
+                in_code = False
+                code_lines = []
+                code_lang = ""
+            else:
+                in_code = True
+                code_lang = fence.group(1).strip()
+            continue
+
+        if in_code:
+            code_lines.append(line)
+            continue
+
+        heading = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if heading:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            level = len(heading.group(1))
+            content = fmt_inline(heading.group(2).strip())
+            out.append(f"<h{level} class=\"md-heading\">{content}</h{level}>")
+            continue
+
+        is_list = line.strip().startswith("- ")
+        if is_list:
             if not in_list:
-                out.append("<ul style='margin:6px 0 6px 18px; padding:0;'>")
+                out.append("<ul class=\"md-list\">")
                 in_list = True
-            out.append(f"<li style='margin:2px 0;'>{line.strip()[2:]}</li>")
+            out.append(f"<li>{fmt_inline(line.strip()[2:])}</li>")
         else:
             if in_list:
                 out.append("</ul>")
@@ -161,9 +172,16 @@ def render_md(text):
             if line.strip() == "":
                 out.append("<br>")
             else:
-                out.append(f"<p style='margin:4px 0;'>{line}</p>")
+                out.append(f"<p class=\"md-p\">{fmt_inline(line)}</p>")
+
+    if in_code:
+        lang_attr = f' data-lang="{escape(code_lang)}"' if code_lang else ""
+        code_html = escape("\n".join(code_lines))
+        out.append(f"<pre class=\"md-code\"><code{lang_attr}>{code_html}</code></pre>")
+
     if in_list:
         out.append("</ul>")
+
     return Markup("".join(out))
 
 @app.template_filter("markdown")
