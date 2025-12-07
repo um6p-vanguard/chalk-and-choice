@@ -42,6 +42,8 @@ class Student(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     first_login = db.Column(db.Boolean, nullable=False, default=True)
     last_login  = db.Column(db.DateTime, nullable=True)
+    # Last activity timestamp (updated on each student request)
+    last_seen_at = db.Column(db.DateTime, nullable=True)
 
     def set_password(self, pw): self.password_hash = generate_password_hash(pw)
     def check_password(self, pw): return check_password_hash(self.password_hash, pw)
@@ -225,6 +227,36 @@ class Project(db.Model):
     # Points awarded once upon first project completion; retry cooldown (minutes) applies after rejected submissions.
     points = db.Column(db.Integer, nullable=False, default=0)
     retry_cooldown_minutes = db.Column(db.Integer, nullable=False, default=0)
+
+# --------------------------
+# Blog
+# --------------------------
+class BlogPost(db.Model):
+    __tablename__ = "blog_posts"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    slug = db.Column(db.String(255), unique=True, nullable=True)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now())
+    author_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
+    is_published = db.Column(db.Boolean, nullable=False, default=True)
+
+    author = db.relationship("User", backref="blog_posts")
+    comments = db.relationship("BlogComment", back_populates="post", cascade="all,delete-orphan")
+
+class BlogComment(db.Model):
+    __tablename__ = "blog_comments"
+    id = db.Column(db.Integer, primary_key=True)
+    post_id = db.Column(db.Integer, db.ForeignKey('blog_posts.id', ondelete="CASCADE"), nullable=False)
+    author_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="CASCADE"), nullable=True)
+    author_name = db.Column(db.String(120), nullable=True)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now())
+
+    post = db.relationship("BlogPost", back_populates="comments")
+    author = db.relationship("User", backref="blog_comments")
 
 
 class ProjectGroupAssignment(db.Model):

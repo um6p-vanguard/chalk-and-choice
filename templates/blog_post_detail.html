@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h2 style="margin:0;">{{ post.title }}</h2>
+      <p class="muted" style="margin:4px 0;">By {{ post.author.name if post.author else "Unknown" }} • {{ post.created_at.strftime("%b %d, %Y %H:%M") if post.created_at else "" }}</p>
+      {% if post.updated_at and post.updated_at != post.created_at %}
+        <p class="muted" style="margin:2px 0;">Updated {{ post.updated_at.strftime("%b %d, %Y %H:%M") }}</p>
+      {% endif %}
+    </div>
+    {% if user and (user.role in ["instructor","admin","mentor","staff"] or user.id == post.author_id) %}
+      <div class="row" style="gap:6px;">
+        <a class="btn" href="{{ url_for('blog_edit', post_id=post.id) }}">Edit</a>
+        <form method="post" action="{{ url_for('blog_delete', post_id=post.id) }}" onsubmit="return confirm('Delete this post?');">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <button class="btn btn-danger" type="submit">Delete</button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+  <div style="margin-top:12px; line-height:1.6;">{{ post.body|markdown }}</div>
+</div>
+
+<div class="sp"></div>
+<div class="card" id="comments">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Comments ({{ comments|length }})</h3>
+  </div>
+  {% if error %}<p class="text-danger" style="margin-top:6px;">{{ error }}</p>{% endif %}
+  {% if comments %}
+    <div style="display:flex; flex-direction:column; gap:12px; margin-top:10px;">
+      {% for comment in comments %}
+        <div style="border:1px solid var(--border); border-radius:10px; padding:10px; background:#0b1220;">
+          <div class="muted" style="font-size:0.9rem;">{{ comment.author.name if comment.author else (comment.author_name or "Anon") }} • {{ comment.created_at.strftime("%b %d %H:%M") if comment.created_at else "" }}</div>
+          <div style="margin-top:6px; line-height:1.5;">{{ comment.body|markdown }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="margin-top:10px;">No comments yet.</p>
+  {% endif %}
+
+  <div class="sp"></div>
+  {% if user or student_name %}
+    <form method="post" action="{{ url_for('blog_add_comment', post_id=post.id) }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Add a comment</label>
+      <textarea name="body" rows="3" required></textarea>
+      <button class="btn btn-primary" type="submit" style="margin-top:8px;">Post comment</button>
+    </form>
+  {% else %}
+    <p class="muted">Log in to comment.</p>
+  {% endif %}
+</div>
+{% endblock %}

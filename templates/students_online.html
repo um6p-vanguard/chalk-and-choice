@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Online students (last {{ minutes }} minutes)</h3>
+    <form method="get" class="row" style="gap:8px;">
+      <label style="margin:0;">Window (min)</label>
+      <input type="number" name="minutes" min="1" max="120" value="{{ minutes }}" style="width:80px;">
+      <button class="btn" type="submit">Update</button>
+    </form>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  {% if students %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in students %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td>{{ s.email }}</td>
+          <td>{{ s.last_seen_at.strftime("%b %d %H:%M:%S") if s.last_seen_at else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:0;">No students online in this window.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">{{ project.title }}</h3>
+      {% if project.description %}<div class="muted markdown-block" style="margin:6px 0;" data-markdown-project>{{ project.description }}</div>{% endif %}
+      {% if project.instructions %}
+        <div style="margin-top:8px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+          <strong>Instructions</strong>
+          <div class="muted markdown-block" style="margin:6px 0 0 0;" data-markdown-project>{{ project.instructions }}</div>
+        </div>
+      {% endif %}
+    </div>
+    <div class="muted">{{ "Unlocked" if unlocked else "Locked" }}</div>
+  </div>
+</div>
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin:0;">Tasks</h3>
+  {% if tasks %}
+    <table style="margin-top:10px;">
+      <thead>
+        <tr>
+          <th>Task</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in tasks %}
+          <tr>
+            <td>{{ entry.task.title }}</td>
+            <td>
+              {% if entry.status == "accepted" %}
+                <span style="color:#4ade80;">Accepted</span>
+              {% elif entry.status == "submitted" %}
+                <span style="color:#38bdf8;">Submitted</span>
+              {% elif entry.status == "pending_review" %}
+                <span style="color:#fde047;">Pending mentor review</span>
+              {% elif entry.status == "in_progress" %}
+                <span class="muted">In progress</span>
+              {% elif entry.status == "rejected" %}
+                <span style="color:#f87171;">Needs rework</span>
+                {% if entry.submission and entry.submission.review_notes %}
+                  <div class="muted" style="margin-top:4px;">{{ entry.submission.review_notes }}</div>
+                {% endif %}
+              {% else %}
+                <span class="muted">Not started</span>
+              {% endif %}
+            </td>
+            <td>
+              <div class="row" style="gap:6px; flex-wrap:wrap;">
+                {% if entry.submission %}
+                  <a class="btn" href="{{ url_for('project_task_submission_self_view', code=project.code, task_id=entry.task.id) }}">View attempt</a>
+                {% endif %}
+                {% if entry.status in ["not_started", "in_progress"] or (entry.status == "rejected" and entry.can_retry_now) %}
+                  <a class="btn btn-primary" href="{{ url_for('project_task_take', code=project.code, task_id=entry.task.id) }}">Start / Continue</a>
+                {% elif entry.status == "rejected" and not entry.can_retry_now and entry.cooldown_seconds_remaining %}
+                  {% set mins = (entry.cooldown_seconds_remaining // 60) %}
+                  <span class="muted">Try again in {{ mins }}m</span>
+                {% elif entry.status in ["pending_review", "submitted", "accepted"] %}
+                  <span class="muted">Waiting for review / complete</span>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:0;">No tasks configured.</p>
+  {% endif %}
+</div>
+{% endblock %}

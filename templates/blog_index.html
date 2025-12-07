@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Blog</h3>
+    {% if user and user.role in ["instructor","admin","mentor","staff"] %}
+      <a class="btn btn-primary" href="{{ url_for('blog_new') }}">New post</a>
+    {% endif %}
+  </div>
+</div>
+<div class="sp"></div>
+{% if posts %}
+  {% for post in posts %}
+    <div class="card" style="margin-bottom:12px;">
+      <div class="row" style="justify-content:space-between; align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;"><a href="{{ url_for('blog_post_detail', post_id=post.id) }}">{{ post.title }}</a></h3>
+          <p class="muted" style="margin:4px 0;">By {{ post.author.name if post.author else "Unknown" }} • {{ post.created_at.strftime("%b %d, %Y") if post.created_at else "" }}</p>
+        </div>
+        <div class="muted">{{ post.comments|length }} comments</div>
+      </div>
+      <div style="margin-top:8px; color:var(--muted);">
+        {% set preview = (post.body[:200] ~ ("..." if post.body|length > 200 else "")) %}
+        {{ preview|markdown }}
+      </div>
+      <div style="margin-top:10px;">
+        <a class="btn" href="{{ url_for('blog_post_detail', post_id=post.id) }}">Read more</a>
+      </div>
+    </div>
+  {% endfor %}
+  <div class="row" style="justify-content:space-between; align-items:center; margin-top:12px;">
+    <div class="muted">Page {{ page }} / {{ total_pages }}</div>
+    <div class="row" style="gap:8px;">
+      {% if has_prev %}
+        <a class="btn" href="?page={{ page - 1 }}">Previous</a>
+      {% endif %}
+      {% if has_next %}
+        <a class="btn" href="?page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+{% else %}
+  <div class="card">
+    <p class="muted" style="margin:0;">No posts yet.</p>
+  </div>
+{% endif %}
+{% endblock %}

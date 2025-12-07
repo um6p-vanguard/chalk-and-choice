@@ -31,6 +31,9 @@
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project was optional for your group.</span></p>
           {% endif %}
+          <div style="margin:8px 0;">
+            <a class="btn btn-primary" href="{{ url_for('student_project_detail', code=row.project.code) }}">Open project page</a>
+          </div>
           {% if row.tasks %}
             <table style="margin-top:12px;">
               <thead>
@@ -64,18 +67,7 @@
                   </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
-                      {% if entry.submission %}
-                        <a class="btn" href="{{ url_for('project_task_submission_self_view', code=row.project.code, task_id=entry.task.id) }}">View attempt</a>
-                      {% endif %}
-                      {% if entry.status in ["not_started", "in_progress"] or (entry.status == "rejected" and entry.can_retry_now) %}
-                        <a class="btn btn-primary" href="{{ url_for('project_task_take', code=row.project.code, task_id=entry.task.id) }}">Start / Continue</a>
-                      {% elif entry.status == "rejected" and not entry.can_retry_now and entry.cooldown_seconds_remaining %}
-                        {% set hrs = entry.cooldown_seconds_remaining // 3600 %}
-                        {% set mins = (entry.cooldown_seconds_remaining % 3600) // 60 %}
-                        <span class="muted">Try again in {{ hrs }}h {{ mins }}m</span>
-                      {% else %}
-                        <span class="muted">Locked</span>
-                      {% endif %}
+                      <span class="muted">Tasks available on project page.</span>
                     </div>
                   </td>
                 </tr>
@@ -121,6 +113,9 @@
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project is optional for your group.</span></p>
           {% endif %}
+          <div style="margin:8px 0;">
+            <a class="btn btn-primary" href="{{ url_for('student_project_detail', code=row.project.code) }}">Open project page</a>
+          </div>
           {% if row.project.instructions %}
             <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
               <strong>Instructions</strong>
@@ -160,18 +155,7 @@
                   </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
-                      {% if entry.submission %}
-                        <a class="btn" href="{{ url_for('project_task_submission_self_view', code=row.project.code, task_id=entry.task.id) }}">View attempt</a>
-                      {% endif %}
-                      {% if entry.status in ["not_started", "in_progress"] or (entry.status == "rejected" and entry.can_retry_now) %}
-                        <a class="btn btn-primary" href="{{ url_for('project_task_take', code=row.project.code, task_id=entry.task.id) }}">Start / Continue</a>
-                      {% elif entry.status == "rejected" and not entry.can_retry_now and entry.cooldown_seconds_remaining %}
-                        {% set hrs = entry.cooldown_seconds_remaining // 3600 %}
-                        {% set mins = (entry.cooldown_seconds_remaining % 3600) // 60 %}
-                        <span class="muted">Try again in {{ hrs }}h {{ mins }}m</span>
-                      {% elif entry.status in ["pending_review", "submitted", "accepted"] %}
-                        <span class="muted">Waiting for review / complete</span>
-                      {% endif %}
+                      <span class="muted">Tasks available on project page.</span>
                     </div>
                   </td>
                 </tr>

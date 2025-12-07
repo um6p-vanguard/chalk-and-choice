@@ -7,12 +7,14 @@ from flask import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
+from markupsafe import Markup, escape
 
 from models import (db, Student, User, Form, 
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
-                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment)
+                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
+                    BlogPost, BlogComment)
 import qrcode
 from sqlalchemy import func
 
@@ -106,6 +108,83 @@ def verify_csrf(form_field="csrf"):
 @app.context_processor
 def inject_csrf():
     return {"csrf_token": csrf_token}
+
+# Minimal markdown renderer (bold/italic/code + lists; escapes HTML first)
+def render_md(text):
+    if text is None:
+        return Markup("")
+    raw = str(text)
+    esc = escape(raw)
+    # inline formatting
+    esc = esc.replace("**", "\u0001")  # temp
+    parts = esc.split("\u0001")
+    buf = []
+    for i, chunk in enumerate(parts):
+        if i % 2 == 1:
+            buf.append(f"<strong>{chunk}</strong>")
+        else:
+            buf.append(chunk)
+    esc = "".join(buf)
+    esc = esc.replace("*", "\u0002")
+    parts = esc.split("\u0002")
+    buf = []
+    for i, chunk in enumerate(parts):
+        if i % 2 == 1:
+            buf.append(f"<em>{chunk}</em>")
+        else:
+            buf.append(chunk)
+    esc = "".join(buf)
+    esc = esc.replace("`", "\u0003")
+    parts = esc.split("\u0003")
+    buf = []
+    for i, chunk in enumerate(parts):
+        if i % 2 == 1:
+            buf.append(f"<code>{chunk}</code>")
+        else:
+            buf.append(chunk)
+    esc = "".join(buf)
+
+    lines = esc.split("\n")
+    out = []
+    in_list = False
+    for line in lines:
+        m = line.strip().startswith("- ")
+        if m:
+            if not in_list:
+                out.append("<ul style='margin:6px 0 6px 18px; padding:0;'>")
+                in_list = True
+            out.append(f"<li style='margin:2px 0;'>{line.strip()[2:]}</li>")
+        else:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            if line.strip() == "":
+                out.append("<br>")
+            else:
+                out.append(f"<p style='margin:4px 0;'>{line}</p>")
+    if in_list:
+        out.append("</ul>")
+    return Markup("".join(out))
+
+@app.template_filter("markdown")
+def markdown_filter(text):
+    return render_md(text)
+
+@app.before_request
+def update_student_last_seen():
+    try:
+        s = current_student()
+    except Exception:
+        s = None
+    if not s:
+        return
+    now = datetime.utcnow()
+    if not s.last_seen_at or (now - s.last_seen_at).total_seconds() > 60:
+        s.last_seen_at = now
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 # --------------------------------------------------------------------
 # Auth/session helpers
@@ -295,6 +374,8 @@ def password_new():
 def index():
     u = current_user()
     student = current_student()
+    if student and not u:
+        return blog_index()
     exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
     available_exams = [ex for ex in exams if ex.is_available] if student else []
     return render_template(
@@ -361,6 +442,215 @@ def _eligible_students(section=None):
     pick_idx = random.choices(range(len(choices)), weights=probs, k=1)[0]
     return choices[pick_idx][0]  # return Student
 # -------------------------------------
+
+# --------------------------------------------------------------------
+# Blog helpers and views
+# --------------------------------------------------------------------
+
+PAGE_SIZE = 10
+
+def _is_staff(user):
+    if not user:
+        return False
+    role = getattr(user, "role", "")
+    return role in ("instructor", "admin", "mentor", "staff")
+
+def _paginate_posts(query, page, per_page=10):
+    total = query.count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    posts = query.order_by(BlogPost.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    return {
+        "posts": posts,
+        "page": page,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+    }
+
+def blog_index():
+    page = 1
+    try:
+        page = int(request.args.get("page", "1"))
+    except Exception:
+        page = 1
+    base_query = BlogPost.query.filter_by(is_published=True)
+    pagination = _paginate_posts(base_query, page, PAGE_SIZE)
+    return render_template(
+        "blog_index.html",
+        posts=pagination["posts"],
+        page=pagination["page"],
+        total_pages=pagination["total_pages"],
+        has_prev=pagination["has_prev"],
+        has_next=pagination["has_next"],
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/blog")
+def blog_list():
+    return blog_index()
+
+@app.route("/blog/<int:post_id>")
+def blog_post_detail(post_id):
+    post = BlogPost.query.filter_by(id=post_id, is_published=True).first_or_404()
+    comments = BlogComment.query.filter_by(post_id=post.id).order_by(BlogComment.created_at.asc()).all()
+    return render_template(
+        "blog_post_detail.html",
+        post=post,
+        comments=comments,
+        error=None,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/blog/<int:post_id>/comments")
+def blog_add_comment(post_id):
+    post = BlogPost.query.filter_by(id=post_id, is_published=True).first_or_404()
+    author = current_user() or current_student()
+    if not author:
+        abort(401)
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    body = (request.form.get("body") or "").strip()
+    error = None
+    if not body:
+        error = "Comment cannot be empty."
+    if body and len(body) > 5000:
+        error = "Comment is too long (max 5000 characters)."
+    if error:
+        comments = BlogComment.query.filter_by(post_id=post.id).order_by(BlogComment.created_at.asc()).all()
+        return render_template(
+            "blog_post_detail.html",
+            post=post,
+            comments=comments,
+            error=error,
+            user=current_user(),
+            student_name=session.get("student_name"),
+        ), 400
+    comment = BlogComment(
+        post_id=post.id,
+        author_id=getattr(author, "id", None) if isinstance(author, User) else None,
+        author_name=getattr(author, "name", None),
+        body=body,
+    )
+    db.session.add(comment)
+    db.session.commit()
+    return redirect(url_for("blog_post_detail", post_id=post.id) + "#comments")
+
+@app.route("/blog/new", methods=["GET", "POST"])
+@require_user()
+def blog_new():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    form = {
+        "title": request.form.get("title") or "",
+        "body": request.form.get("body") or "",
+        "is_published": request.form.get("is_published") == "1",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        if not form["title"].strip():
+            error = "Title is required."
+        if not error and not form["body"].strip():
+            error = "Body is required."
+        if not error:
+            post = BlogPost(
+                title=form["title"].strip(),
+                body=form["body"],
+                is_published=form["is_published"],
+                author_id=user.id,
+            )
+            db.session.add(post)
+            db.session.commit()
+            return redirect(url_for("blog_post_detail", post_id=post.id))
+    return render_template(
+        "blog_form.html",
+        form=form,
+        editing=False,
+        error=error,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/blog/<int:post_id>/edit", methods=["GET", "POST"])
+@require_user()
+def blog_edit(post_id):
+    user = current_user()
+    post = BlogPost.query.get_or_404(post_id)
+    if not (_is_staff(user) or (user and user.id == post.author_id)):
+        abort(403)
+    if request.method == "POST":
+        form = {
+            "title": request.form.get("title") or "",
+            "body": request.form.get("body") or "",
+            "is_published": request.form.get("is_published") == "1",
+        }
+    else:
+        form = {
+            "title": post.title,
+            "body": post.body,
+            "is_published": post.is_published,
+        }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        if not form["title"].strip():
+            error = "Title is required."
+        if not error and not form["body"].strip():
+            error = "Body is required."
+        if not error:
+            post.title = form["title"].strip()
+            post.body = form["body"]
+            post.is_published = form["is_published"]
+            db.session.commit()
+            return redirect(url_for("blog_post_detail", post_id=post.id))
+    return render_template(
+        "blog_form.html",
+        form=form,
+        editing=True,
+        error=error,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/blog/<int:post_id>/delete")
+@require_user()
+def blog_delete(post_id):
+    user = current_user()
+    post = BlogPost.query.get_or_404(post_id)
+    if not (_is_staff(user) or (user and user.id == post.author_id)):
+        abort(403)
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    db.session.delete(post)
+    db.session.commit()
+    return redirect(url_for("blog_list"))
+
+@app.route("/students/online")
+@require_user()
+def students_online():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    try:
+        minutes = int(request.args.get("minutes", "10"))
+    except Exception:
+        minutes = 10
+    minutes = max(1, min(minutes, 120))
+    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    students = Student.query.filter(Student.last_seen_at != None, Student.last_seen_at >= cutoff).order_by(Student.last_seen_at.desc()).all()
+    return render_template(
+        "students_online.html",
+        students=students,
+        minutes=minutes,
+        user=user,
+        student_name=session.get("student_name"),
+    )
 
 # ---------- Page ----------
 @app.route("/spotlight")
@@ -991,6 +1281,29 @@ def _project_required_for_student(project, student):
         if assignment.is_required:
             required = True
     return required if matched else False
+
+# --------------------------------------------------------------------
+# Blog helpers
+# --------------------------------------------------------------------
+
+def _is_staff(user):
+    if not user:
+        return False
+    role = getattr(user, "role", "")
+    return role in ("instructor", "admin", "mentor", "staff")
+
+def _paginate_posts(query, page, per_page=10):
+    total = query.count()
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+    posts = query.order_by(BlogPost.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    return {
+        "posts": posts,
+        "page": page,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+    }
 
 def _import_project_tasks_from_config(project, config):
     if not isinstance(config, dict):
@@ -2563,6 +2876,47 @@ def student_projects():
         locked_projects=locked_rows,
         completed_projects=completed_rows,
         selected_tab=tab,
+        user=current_user(),
+        student_name=student.name,
+    )
+
+@app.route("/student/projects/<code>")
+@require_student()
+def student_project_detail(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = current_student()
+    if not _project_visible_to_student(project, student):
+        abort(403)
+    unlocked = _project_dependencies_met(project, student)
+    tasks = []
+    for task in project.tasks:
+        submission = _project_task_submission(task, student)
+        status = submission.status if submission and submission.status else "not_started"
+        cooldown_seconds = 0
+        can_retry_now = True
+        if submission:
+            if status in ("pending_review", "submitted", "accepted"):
+                can_retry_now = False
+            elif status == "rejected":
+                retry_minutes = project.retry_cooldown_minutes or 0
+                if retry_minutes > 0 and submission.last_activity_at:
+                    elapsed = (datetime.utcnow() - submission.last_activity_at).total_seconds()
+                    wait_seconds = int(retry_minutes * 60 - elapsed)
+                    if wait_seconds > 0:
+                        can_retry_now = False
+                        cooldown_seconds = wait_seconds
+        tasks.append({
+            "task": task,
+            "submission": submission,
+            "status": status,
+            "can_retry_now": can_retry_now,
+            "cooldown_seconds_remaining": cooldown_seconds,
+        })
+    return render_template(
+        "projects_student_detail.html",
+        project=project,
+        unlocked=unlocked,
+        tasks=tasks,
         user=current_user(),
         student_name=student.name,
     )
