@@ -89,6 +89,18 @@ class StudentGroupReviewer(db.Model):
         UniqueConstraint('user_id', 'group_id', name='uq_group_reviewer'),
     )
 
+class Leaderboard(db.Model):
+    __tablename__ = "leaderboards"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    metric = db.Column(db.String(64), nullable=False)  # total_points | projects_done | logtime
+    group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True)
+    is_published = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    group = db.relationship('StudentGroup')
+
 class Form(db.Model):
     __tablename__ = "forms"
     id = db.Column(db.Integer, primary_key=True)

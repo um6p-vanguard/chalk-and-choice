@@ -102,6 +102,7 @@
           <a href="{{ url_for('exams_list') }}" style="margin-left:10px;">Exams</a>
           <a href="{{ url_for('projects_list') }}" style="margin-left:10px;">Projects</a>
           <a href="{{ url_for('groups_list') }}" style="margin-left:10px;">Groups</a>
+          <a href="{{ url_for('leaderboards_admin') }}" style="margin-left:10px;">Leaderboards</a>
           <a href="{{ url_for('projects_reviews') }}" style="margin-left:10px;">Reviews</a>
           <a href="{{ url_for('grades_admin') }}" style="margin-left:10px;">Grades</a>
           <a href="{{ url_for('spotlight_page') }}" style="margin-left:10px;">Spotlight</a>
@@ -111,6 +112,7 @@
           <span class="muted">Student: <strong>{{ student_name }}</strong></span>
           <a href="{{ url_for('blog_list') }}" style="margin-left:10px;">Blog</a>
           <a href="{{ url_for('student_projects') }}" style="margin-left:10px;">Projects</a>
+          <a href="{{ url_for('leaderboards_public') }}" style="margin-left:10px;">Leaderboards</a>
           <a href="{{ url_for('student_grades') }}" style="margin-left:10px;">My Grades</a>
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% else %}

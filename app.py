@@ -14,9 +14,10 @@ from models import (db, Student, User, Form,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
-                    BlogPost, BlogComment)
+                    BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func
+from sqlalchemy.orm import subqueryload
 
 # --------------------------------------------------------------------
 # Utils
@@ -71,6 +72,12 @@ PROJECT_TASKS_SCHEMA = {
         },
     },
     "additionalProperties": False,
+}
+
+LEADERBOARD_METRICS = {
+    "total_points": {"label": "Total points", "description": "Sum of all recorded grade scores."},
+    "projects_done": {"label": "Projects done", "description": "Count of projects with required tasks accepted."},
+    "logtime": {"label": "Log time", "description": "Total spotlight time (minutes)."},
 }
 
 def create_app(db_path=DB_URI):
@@ -1300,6 +1307,74 @@ def _project_required_for_student(project, student):
             required = True
     return required if matched else False
 
+def _leaderboard_students(group_id=None):
+    q = Student.query
+    if group_id:
+        q = q.join(StudentGroupMembership).filter(StudentGroupMembership.group_id == group_id)
+    return q.distinct().order_by(Student.name.asc()).all()
+
+def _project_completion_counts(student_ids):
+    if not student_ids:
+        return {}
+    projects = Project.query.options(subqueryload(Project.tasks)).all()
+    accepted = ProjectTaskSubmission.query.filter(
+        ProjectTaskSubmission.student_id.in_(student_ids),
+        ProjectTaskSubmission.status == "accepted",
+    ).all()
+    accepted_map = {}
+    for sub in accepted:
+        key = (sub.student_id, sub.project_id)
+        accepted_map.setdefault(key, set()).add(sub.task_id)
+    counts = {sid: 0 for sid in student_ids}
+    for project in projects:
+        required_count = _project_required_count(project)
+        tasks_to_check = [t for t in project.tasks if t.required] or list(project.tasks)
+        task_ids = [t.id for t in tasks_to_check]
+        for sid in student_ids:
+            if required_count <= 0:
+                counts[sid] = counts.get(sid, 0) + 1
+                continue
+            accepted_tasks = accepted_map.get((sid, project.id), set())
+            completed = sum(1 for tid in task_ids if tid in accepted_tasks)
+            if completed >= required_count:
+                counts[sid] = counts.get(sid, 0) + 1
+    return counts
+
+def _compute_leaderboard_rows(metric, group_id=None):
+    students = _leaderboard_students(group_id=group_id)
+    student_ids = [s.id for s in students]
+    if not student_ids:
+        return []
+    values = {sid: 0 for sid in student_ids}
+    if metric == "total_points":
+        totals = db.session.query(
+            Grade.student_id,
+            func.coalesce(func.sum(Grade.score), 0),
+        ).filter(Grade.student_id.in_(student_ids)).group_by(Grade.student_id).all()
+        for sid, total in totals:
+            values[sid] = float(total or 0)
+    elif metric == "projects_done":
+        values.update(_project_completion_counts(student_ids))
+    elif metric == "logtime":
+        totals = db.session.query(
+            Intervention.student_id,
+            func.coalesce(func.sum(Intervention.duration_sec), 0),
+        ).filter(
+            Intervention.status == "completed",
+            Intervention.student_id.in_(student_ids),
+        ).group_by(Intervention.student_id).all()
+        for sid, total in totals:
+            values[sid] = float(total or 0)
+    else:
+        return []
+    rows = []
+    for st in students:
+        rows.append({"student": st, "value": values.get(st.id, 0)})
+    rows.sort(key=lambda row: row["value"], reverse=True)
+    for idx, row in enumerate(rows):
+        row["rank"] = idx + 1
+    return rows
+
 # --------------------------------------------------------------------
 # Blog helpers
 # --------------------------------------------------------------------
@@ -2436,6 +2511,128 @@ def groups_list():
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),
+    )
+
+@app.route("/leaderboards", methods=["GET", "POST"])
+@require_user()
+def leaderboards_admin():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    form_data = {
+        "title": request.form.get("title") or "",
+        "metric": request.form.get("metric") or "total_points",
+        "group_id": request.form.get("group_id") or "all",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        action = request.form.get("action") or "create"
+        if action == "create":
+            metric = form_data["metric"]
+            if metric not in LEADERBOARD_METRICS:
+                error = "Pick a valid metric."
+            title = (form_data["title"] or "").strip()
+            if not title and not error:
+                title = LEADERBOARD_METRICS[metric]["label"]
+            group_id = None
+            group_raw = form_data["group_id"]
+            if group_raw and group_raw != "all":
+                try:
+                    gid = int(group_raw)
+                    group = StudentGroup.query.get(gid)
+                    if not group:
+                        error = "Group not found."
+                    else:
+                        group_id = gid
+                except Exception:
+                    error = "Invalid group selection."
+            if not title and not error:
+                error = "Title is required."
+            if not error:
+                lb = Leaderboard(
+                    title=title,
+                    metric=metric,
+                    group_id=group_id,
+                    is_published=False,
+                )
+                db.session.add(lb)
+                db.session.commit()
+                return redirect(url_for("leaderboards_admin"))
+        elif action in ("publish", "unpublish", "delete"):
+            try:
+                lb_id = int(request.form.get("leaderboard_id") or 0)
+            except Exception:
+                lb_id = 0
+            if not lb_id:
+                abort(400)
+            lb = Leaderboard.query.get_or_404(lb_id)
+            if action == "delete":
+                db.session.delete(lb)
+            elif action == "publish":
+                lb.is_published = True
+            elif action == "unpublish":
+                lb.is_published = False
+            db.session.commit()
+            return redirect(url_for("leaderboards_admin"))
+
+    leaderboards = Leaderboard.query.order_by(Leaderboard.created_at.desc()).all()
+    leaderboard_rows = {}
+    for lb in leaderboards:
+        rows = _compute_leaderboard_rows(lb.metric, lb.group_id)
+        leaderboard_rows[lb.id] = rows[:5]
+    return render_template(
+        "leaderboards_admin.html",
+        leaderboards=leaderboards,
+        leaderboard_rows=leaderboard_rows,
+        groups=groups,
+        metrics=LEADERBOARD_METRICS,
+        form_data=form_data,
+        error=error,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/leaderboards/published")
+def leaderboards_public():
+    user = current_user()
+    student = current_student()
+    if not (user or student):
+        return redirect(url_for("login", next=request.path))
+    boards = Leaderboard.query.filter_by(is_published=True).order_by(Leaderboard.created_at.desc()).all()
+    leaderboard_rows = {}
+    for lb in boards:
+        leaderboard_rows[lb.id] = _compute_leaderboard_rows(lb.metric, lb.group_id)
+    viewer_name = student.name if student else session.get("student_name")
+    return render_template(
+        "leaderboards_public.html",
+        leaderboards=boards,
+        leaderboard_rows=leaderboard_rows,
+        metrics=LEADERBOARD_METRICS,
+        user=user,
+        student_name=viewer_name,
+    )
+
+@app.route("/leaderboards/<int:leaderboard_id>")
+def leaderboard_view(leaderboard_id):
+    user = current_user()
+    student = current_student()
+    if not (user or student):
+        return redirect(url_for("login", next=request.path))
+    lb = Leaderboard.query.get_or_404(leaderboard_id)
+    if not lb.is_published and not _is_staff(user):
+        abort(403)
+    rows = _compute_leaderboard_rows(lb.metric, lb.group_id)
+    viewer_name = student.name if student else session.get("student_name")
+    return render_template(
+        "leaderboard_view.html",
+        leaderboard=lb,
+        rows=rows,
+        metrics=LEADERBOARD_METRICS,
+        user=user,
+        student_name=viewer_name,
     )
 
 @app.route("/projects")

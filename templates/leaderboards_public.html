@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin:0;">Leaderboards</h3>
+  <p class="muted" style="margin:6px 0 0 0;">Published boards shared by your instructors.</p>
+</div>
+
+<div class="sp"></div>
+
+{% if leaderboards %}
+  {% for lb in leaderboards %}
+    <div class="card" style="margin-bottom:14px;">
+      <div class="row" style="justify-content:space-between; align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;">{{ lb.title }}</h3>
+          <p class="muted" style="margin:4px 0 0 0;">
+            {{ metrics[lb.metric].label if lb.metric in metrics else lb.metric }} • {{ lb.group.name if lb.group else "All students" }}
+          </p>
+        </div>
+        <a class="btn" href="{{ url_for('leaderboard_view', leaderboard_id=lb.id) }}">View full board</a>
+      </div>
+      {% set rows = leaderboard_rows.get(lb.id, []) %}
+      {% if rows %}
+        <table style="margin-top:12px;">
+          <thead>
+            <tr>
+              <th style="width:70px;">Rank</th>
+              <th>Student</th>
+              <th style="text-align:right;">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows[:5] %}
+              <tr>
+                <td>#{{ row.rank }}</td>
+                <td>{{ row.student.name if row.student else "Student removed" }}</td>
+                <td style="text-align:right;">
+                  {% if lb.metric == "logtime" %}
+                    {{ "%.1f"|format((row.value or 0) / 60) }} min
+                  {% elif lb.metric == "total_points" %}
+                    {{ "%.2f"|format(row.value or 0) }}
+                  {% else %}
+                    {{ row.value|int }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted" style="margin-top:10px;">No results yet.</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <p class="muted" style="margin:0;">No published leaderboards right now.</p>
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h3 style="margin:0;">Leaderboard builder</h3>
+  <p class="muted" style="margin:6px 0 0 0;">Create a board, choose who appears on it, and publish when ready.</p>
+  {% if error %}
+    <div style="margin-top:10px; padding:10px; border:1px solid var(--danger); border-radius:8px; background:#3f1512;">{{ error }}</div>
+  {% endif %}
+  <form method="post" style="margin-top:14px;">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="create">
+    <label>Title</label>
+    <input type="text" name="title" value="{{ form_data.title }}" placeholder="Weekly progress leaderboard">
+    <div class="row" style="gap:12px; margin-top:10px;">
+      <div style="flex:1; min-width:240px;">
+        <label>Metric</label>
+        <select name="metric" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); background:#0b1220; color:var(--text);">
+          {% for key, meta in metrics.items() %}
+            <option value="{{ key }}" {% if form_data.metric == key %}selected{% endif %}>{{ meta.label }}</option>
+          {% endfor %}
+        </select>
+        <p class="muted" style="margin:6px 0 0 0;">Total points uses grade scores, projects done counts accepted projects, and log time uses completed spotlight minutes.</p>
+      </div>
+      <div style="flex:1; min-width:220px;">
+        <label>Students included</label>
+        <select name="group_id" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); background:#0b1220; color:var(--text);">
+          <option value="all" {% if form_data.group_id == "all" %}selected{% endif %}>All students</option>
+          {% for group in groups %}
+            <option value="{{ group.id }}" {% if form_data.group_id|int == group.id %}selected{% endif %}>{{ group.name }}</option>
+          {% endfor %}
+        </select>
+        <p class="muted" style="margin:6px 0 0 0;">Pick a cohort or leave as all students.</p>
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end; margin-top:14px;">
+      <button class="btn btn-primary" type="submit">Create leaderboard</button>
+    </div>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+{% if leaderboards %}
+  {% for lb in leaderboards %}
+    <div class="card" style="margin-bottom:14px;">
+      <div class="row" style="justify-content:space-between; align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;">{{ lb.title }}</h3>
+          <p class="muted" style="margin:4px 0 0 0;">
+            {{ metrics[lb.metric].label if lb.metric in metrics else lb.metric }} •
+            {{ lb.group.name if lb.group else "All students" }}
+          </p>
+          <p class="muted" style="margin:4px 0 0 0;">Status: {{ "Published" if lb.is_published else "Draft" }} • Updated {{ lb.updated_at.strftime("%b %d %H:%M") if lb.updated_at else "—" }}</p>
+        </div>
+        <div class="row" style="gap:8px;">
+          <a class="btn" href="{{ url_for('leaderboard_view', leaderboard_id=lb.id) }}">View</a>
+          {% if lb.is_published %}
+            <form method="post" action="{{ url_for('leaderboards_admin') }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="unpublish">
+              <input type="hidden" name="leaderboard_id" value="{{ lb.id }}">
+              <button class="btn" type="submit">Unpublish</button>
+            </form>
+          {% else %}
+            <form method="post" action="{{ url_for('leaderboards_admin') }}">
+              <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="publish">
+              <input type="hidden" name="leaderboard_id" value="{{ lb.id }}">
+              <button class="btn btn-primary" type="submit">Publish</button>
+            </form>
+          {% endif %}
+          <form method="post" action="{{ url_for('leaderboards_admin') }}" onsubmit="return confirm('Delete this leaderboard?');">
+            <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="leaderboard_id" value="{{ lb.id }}">
+            <button class="btn btn-danger" type="submit">Delete</button>
+          </form>
+        </div>
+      </div>
+      {% set rows = leaderboard_rows.get(lb.id, []) %}
+      {% if rows %}
+        <table style="margin-top:12px;">
+          <thead>
+            <tr>
+              <th style="width:70px;">Rank</th>
+              <th>Student</th>
+              <th style="text-align:right;">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+              <tr>
+                <td>#{{ row.rank }}</td>
+                <td>{{ row.student.name if row.student else "Student removed" }}</td>
+                <td style="text-align:right;">
+                  {% if lb.metric == "logtime" %}
+                    {{ "%.1f"|format((row.value or 0) / 60) }} min
+                  {% elif lb.metric == "total_points" %}
+                    {{ "%.2f"|format(row.value or 0) }}
+                  {% else %}
+                    {{ row.value|int }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted" style="margin-top:10px;">No data yet for this leaderboard.</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+{% else %}
+  <div class="card">
+    <p class="muted" style="margin:0;">No leaderboards created yet. Use the form above to start one.</p>
+  </div>
+{% endif %}
+{% endblock %}
