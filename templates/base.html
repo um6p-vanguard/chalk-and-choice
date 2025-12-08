@@ -74,9 +74,11 @@
     .fill-input { background:#0b1220; border:1px solid var(--border); border-radius:6px; color:var(--text); padding:6px 10px; min-width:80px; }
     .code-block { background:#1e293b; padding:12px; border-radius:8px; font-family:ui-monospace, SFMono-Regular, Menlo; margin-bottom:12px; overflow-x:auto; }
     .choice-list { display:flex; flex-direction:column; gap:8px; }
-    .choice-option { display:flex; align-items:center; gap:10px; background:#1f2937; border:1px solid transparent; padding:10px 14px; border-radius:10px; cursor:pointer; }
-    .choice-option input { transform:scale(1.2); }
+    .choice-option { display:flex; align-items:flex-start; gap:10px; background:#1f2937; border:1px solid transparent; padding:10px 14px; border-radius:10px; cursor:pointer; }
+    .choice-option input { transform:scale(1.2); margin-top:4px; }
     .choice-option:hover { border-color:var(--brand-2); }
+    .choice-option-text { flex:1; display:block; }
+    .choice-option-text p { margin:0 0 6px 0; }
     .code-editor-shell { border:1px solid var(--border); border-radius:10px; background:#0b1220; margin-top:8px; overflow:hidden; }
     .code-editor-host { height:320px; }
     /* Markdown helpers */

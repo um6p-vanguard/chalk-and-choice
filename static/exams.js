@@ -46,6 +46,37 @@
     return parts.join("");
   };
 
+  const renderMarkdownInline = (text) => inlineMarkdown(text || "").replace(/\n/g, "<br>");
+
+  function disableClipboardOnInput(element) {
+    if (!element || element.dataset.clipboardGuard === "1") return;
+    element.dataset.clipboardGuard = "1";
+    const blockEvent = (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      evt.returnValue = false;
+      if (typeof evt.stopImmediatePropagation === "function") {
+        evt.stopImmediatePropagation();
+      }
+      return false;
+    };
+    const keyHandler = (evt) => {
+      const ctrlOrCmd = evt.ctrlKey || evt.metaKey;
+      const key = (evt.key || "").toLowerCase();
+      const ctrlAction = ctrlOrCmd && ["c", "x", "v"].includes(key);
+      const shiftInsert = evt.shiftKey && key === "insert";
+      const ctrlInsert = ctrlOrCmd && key === "insert";
+      const shiftDelete = evt.shiftKey && key === "delete";
+      if (ctrlAction || shiftInsert || ctrlInsert || shiftDelete) {
+        blockEvent(evt);
+      }
+    };
+    element.addEventListener("keydown", keyHandler);
+    ["copy", "cut", "paste", "drop", "contextmenu"].forEach((type) => {
+      element.addEventListener(type, blockEvent);
+    });
+  }
+
   function setupExamBuilder() {
     const root = document.querySelector("[data-exam-builder]");
     if (!root) return;
@@ -1403,6 +1434,7 @@ json.dumps(results)
       preview.innerHTML = renderMarkdownText(area.value || "");
     };
     areas.forEach((area) => {
+      disableClipboardOnInput(area);
       render(area);
       area.addEventListener("input", () => render(area));
       area.addEventListener("change", () => render(area));
@@ -1410,13 +1442,18 @@ json.dumps(results)
   }
 
   function setupMarkdownStatic() {
-    const blocks = document.querySelectorAll("[data-markdown-prompt], [data-markdown-statement], [data-markdown-instructions]");
-    if (!blocks.length) return;
+    const blockSelectors = "[data-markdown-prompt], [data-markdown-statement], [data-markdown-instructions], [data-markdown-block]";
+    const blocks = document.querySelectorAll(blockSelectors);
     blocks.forEach((block) => {
       const content = (block.textContent || "").trim();
       block.innerHTML = renderMarkdownText(content);
       block.style.whiteSpace = "normal";
       block.style.fontFamily = "system-ui, -apple-system, 'Segoe UI', sans-serif";
+    });
+    const inlineNodes = document.querySelectorAll("[data-markdown-inline]");
+    inlineNodes.forEach((node) => {
+      const content = node.textContent || "";
+      node.innerHTML = renderMarkdownInline(content);
     });
   }
 

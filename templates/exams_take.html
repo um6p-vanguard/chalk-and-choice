@@ -4,8 +4,10 @@
 {% set submit_label = "Submit task" if is_task else "Submit exam" %}
 {% set log_url = run_log_url if run_log_url is defined and run_log_url else url_for('exams_log_run', code=exam.code) %}
 <div class="card">
-  <h3 style="margin:0;">{{ exam.title }}</h3>
-  {% if exam.description %}<p class="muted" style="margin:6px 0;">{{ exam.description }}</p>{% endif %}
+  <h3 style="margin:0;" data-markdown-inline>{{ exam.title }}</h3>
+  {% if exam.description %}
+    <div class="muted" style="margin:6px 0;" data-markdown-block>{{ exam.description }}</div>
+  {% endif %}
   <p class="muted" style="margin:6px 0;">
     {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }}, {% else %}Open now, {% endif %}
     {% if exam.ends_at %} closes {{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %} no end date{% endif %}.
@@ -48,7 +50,7 @@
     {% if question %}
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
-        <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • {{ q.title }}{% endif %}</div>
+        <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • <span data-markdown-inline>{{ q.title }}</span>{% endif %}</div>
         <div class="markdown-block q" style="margin:8px 0 12px 0;" data-markdown-prompt="{{ q.id }}">{{ q.prompt }}</div>
         {% if q.code_snippet %}
           <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
@@ -69,7 +71,7 @@
                 {% else %}
                   <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
                 {% endif %}
-                <span>{{ option }}</span>
+                <div class="choice-option-text" data-markdown-block>{{ option }}</div>
               </label>
             {% endfor %}
           </div>
@@ -167,14 +169,14 @@
           {% set existing_value = previous_answers.get(q.id, '') or '' %}
           {% set filled = existing_value.split('||') if existing_value else [] %}
           <div data-token-question>
-            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;">{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
+            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;">{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
             <input type="hidden" name="answer_{{ q.id }}" data-token-answer value="{{ existing_value }}">
             <div class="token-bank" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
               {% set base_tokens = q.correct_tokens or [] %}
               {% set extra_tokens = q.distractor_tokens or [] %}
               {% set options = q.token_options if q.token_options else (base_tokens + extra_tokens) %}
               {% for opt in options %}
-                <button type="button" class="token-option" data-token-option data-token-value="{{ opt }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;">{{ opt }}</button>
+                <button type="button" class="token-option" data-token-option data-token-value="{{ opt|e }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;" data-markdown-inline>{{ opt }}</button>
               {% endfor %}
             </div>
           </div>
@@ -186,7 +188,7 @@
           <div data-fill-question>
             <div class="fill-expression" style="display:flex; flex-wrap:wrap; gap:6px; padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
               {% for segment in segments %}
-                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}
                 {% if not loop.last %}
                   {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
                   <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}" style="min-width:4ch; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
