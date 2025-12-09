@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -1617,9 +1617,20 @@ def _run_code_tests_worker(code_text, tests, mode):
         if mode == "function":
             call_expr = (test.get("call") or test.get("input") or "").strip()
             expected_output = (test.get("expected") or test.get("output") or "")
+            expected_display = expected_output
+            expected_trimmed = expected_output.strip()
+            expected_literal = None
+            expected_literal_defined = False
+            if expected_trimmed:
+                try:
+                    expected_literal = ast.literal_eval(expected_trimmed)
+                    expected_literal_defined = True
+                except Exception:
+                    expected_literal_defined = False
             status = "passed"
             error_text = ""
             output_value = ""
+            result_value = None
             if not call_expr:
                 status = "error"
                 error_text = "Missing call expression."
@@ -1630,20 +1641,26 @@ def _run_code_tests_worker(code_text, tests, mode):
                 sys.stdout = stdout
                 try:
                     result = eval(call_expr, env, env)
+                    result_value = result
                     output_value = repr(result)
                 except Exception:
                     status = "error"
                     error_text = traceback.format_exc()
                 finally:
                     sys.stdout = original_stdout
-            if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
-                status = "mismatch"
+            if status == "passed" and expected_trimmed:
+                if expected_literal_defined:
+                    if result_value != expected_literal:
+                        status = "mismatch"
+                else:
+                    if output_value.strip() != expected_trimmed:
+                        status = "mismatch"
             results.append({
                 "name": name,
                 "status": status,
                 "input": call_expr,
                 "output": output_value,
-                "expected": expected_output,
+                "expected": expected_display,
                 "error": error_text,
                 "hidden": hidden,
             })
@@ -3384,6 +3401,38 @@ def project_reset_student_progress(code, student_id):
     assignment_name = f"Project: {project.title}"
     Grade.query.filter_by(student_id=student.id, assignment=assignment_name).delete()
     db.session.commit()
+    return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
+
+@app.post("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>/validate")
+@require_user()
+def projects_submission_task_validate(code, student_id, task_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
+    submission.status = "accepted"
+    if not submission.submitted_at:
+        submission.submitted_at = datetime.utcnow()
+    submission.last_activity_at = datetime.utcnow()
+    if submission.student and _project_completed(project, submission.student):
+        _award_project_points_if_needed(project, submission.student)
+    db.session.commit()
+    return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
+
+@app.post("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>/reset")
+@require_user()
+def projects_submission_task_reset(code, student_id, task_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first()
+    if submission:
+        db.session.delete(submission)
+        db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
 
 @app.route("/api/projects/<code>/tasks/<int:task_id>/log-run", methods=["POST"])

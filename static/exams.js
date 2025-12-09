@@ -941,7 +941,7 @@
       pyodide.globals.set("runner_samples", samples);
       pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
       const output = await pyodide.runPythonAsync(`
-import io, sys, traceback, json, builtins
+import io, sys, traceback, json, builtins, ast
 
 code = str(runner_code)
 samples = runner_samples.to_py()
@@ -999,11 +999,21 @@ for sample in samples:
 
     if mode == "function":
         call_expr = (sample.get("call") or sample.get("input") or "").strip()
-        expected_output = (sample.get("expected") or sample.get("output") or "").strip()
+        expected_output_display = (sample.get("expected") or sample.get("output") or "")
+        expected_output = expected_output_display.strip()
+        expected_literal = None
+        expected_literal_defined = False
+        if expected_output:
+            try:
+                expected_literal = ast.literal_eval(expected_output)
+                expected_literal_defined = True
+            except Exception:
+                expected_literal_defined = False
 
         status = "passed"
         error_text = ""
         output_value = ""
+        result_value = None
 
         if not call_expr:
             status = "error"
@@ -1018,6 +1028,7 @@ for sample in samples:
             try:
                 try:
                     result = _safe_eval(call_expr, namespace, namespace, MAX_RUN_OPS)
+                    result_value = result
                     output_value = repr(result)
                 except TimeLimitExceeded:
                     status = "timeout"
@@ -1028,15 +1039,20 @@ for sample in samples:
             finally:
                 sys.stdout = original_stdout
 
-        if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
-            status = "mismatch"
+        if status == "passed" and expected_output:
+            if expected_literal_defined:
+                if result_value != expected_literal:
+                    status = "mismatch"
+            else:
+                if output_value.strip() != expected_output:
+                    status = "mismatch"
 
         results.append({
             "name": name,
             "status": status,
             "input": call_expr,
             "output": output_value,
-            "expected": expected_output,
+            "expected": expected_output_display,
             "error": error_text,
             "mode": "function",
         })

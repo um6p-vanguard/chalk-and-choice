@@ -75,7 +75,19 @@
             </td>
             <td style="text-align:right;">
               {% if sub %}
-                <a class="btn btn-primary" href="{{ url_for('projects_submission_task_detail', code=project.code, student_id=student.id, task_id=task.id) }}">View answers</a>
+                <div class="row" style="justify-content:flex-end; gap:6px; flex-wrap:wrap;">
+                  <a class="btn btn-primary" href="{{ url_for('projects_submission_task_detail', code=project.code, student_id=student.id, task_id=task.id) }}">View answers</a>
+                  {% if sub.status in ["pending_review", "rejected"] %}
+                    <form method="post" action="{{ url_for('projects_submission_task_validate', code=project.code, student_id=student.id, task_id=task.id) }}">
+                      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                      <button class="btn" type="submit">Validate task</button>
+                    </form>
+                  {% endif %}
+                  <form method="post" action="{{ url_for('projects_submission_task_reset', code=project.code, student_id=student.id, task_id=task.id) }}" onsubmit="return confirm('Reset this task attempt?');">
+                    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                    <button class="btn btn-danger" type="submit">Reset task</button>
+                  </form>
+                </div>
               {% else %}
                 <span class="muted">No attempt</span>
               {% endif %}
