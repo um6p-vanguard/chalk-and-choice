@@ -3085,8 +3085,8 @@ def student_projects():
                     can_retry_now = False
                 elif status == "rejected":
                     retry_minutes = project.retry_cooldown_minutes or 0
-                    if retry_minutes > 0 and submission.last_activity_at:
-                        elapsed = (datetime.utcnow() - submission.last_activity_at).total_seconds()
+                    if retry_minutes > 0 and submission.submitted_at:
+                        elapsed = (datetime.utcnow() - submission.submitted_at).total_seconds()
                         wait_seconds = int(retry_minutes * 60 - elapsed)
                         if wait_seconds > 0:
                             can_retry_now = False
@@ -3146,8 +3146,8 @@ def student_project_detail(code):
                 can_retry_now = False
             elif status == "rejected":
                 retry_minutes = project.retry_cooldown_minutes or 0
-                if retry_minutes > 0 and submission.last_activity_at:
-                    elapsed = (datetime.utcnow() - submission.last_activity_at).total_seconds()
+                if retry_minutes > 0 and submission.submitted_at:
+                    elapsed = (datetime.utcnow() - submission.submitted_at).total_seconds()
                     wait_seconds = int(retry_minutes * 60 - elapsed)
                     if wait_seconds > 0:
                         can_retry_now = False
@@ -3212,8 +3212,8 @@ def project_task_take(code, task_id):
     status = submission.status if submission and submission.status else "in_progress"
     can_submit = status not in ("submitted", "pending_review", "accepted")
     if can_submit and cooldown_minutes > 0 and status == "rejected":
-        if submission.last_activity_at:
-            elapsed = (now - submission.last_activity_at).total_seconds()
+        if submission.submitted_at:
+            elapsed = (now - submission.submitted_at).total_seconds()
             wait_seconds = int(cooldown_minutes * 60 - elapsed)
             if wait_seconds > 0:
                 can_submit = False
