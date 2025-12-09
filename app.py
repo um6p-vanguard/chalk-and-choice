@@ -2412,9 +2412,17 @@ def projects_run_code(code, task_id):
 @app.route("/groups", methods=["GET", "POST"])
 @require_user()
 def groups_list():
+    raw_selected_ids = request.form.getlist("student_ids")
+    selected_student_ids = []
+    for raw_id in raw_selected_ids:
+        try:
+            selected_student_ids.append(int(raw_id))
+        except (ValueError, TypeError):
+            continue
     form_data = {
         "name": (request.form.get("name") or "").strip(),
         "description": request.form.get("description") or "",
+        "student_ids": selected_student_ids,
     }
     error = None
     action = request.form.get("action") or ""
@@ -2432,6 +2440,13 @@ def groups_list():
             if not error:
                 group = StudentGroup(name=name, description=form_data["description"].strip() or None)
                 db.session.add(group)
+                db.session.flush()
+                for student_id in form_data["student_ids"]:
+                    student = Student.query.get(student_id)
+                    if not student:
+                        continue
+                    membership = StudentGroupMembership(group_id=group.id, student_id=student.id)
+                    db.session.add(membership)
                 db.session.commit()
                 return redirect(url_for("groups_list"))
         elif action == "add_member":

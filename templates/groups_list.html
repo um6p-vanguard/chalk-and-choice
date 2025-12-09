@@ -19,6 +19,21 @@
     <input type="text" name="name" value="{{ form_data.name }}" required>
     <label>Description (optional)</label>
     <textarea name="description" rows="2">{{ form_data.description }}</textarea>
+    {% if students %}
+      <label>Select students to include</label>
+      <div style="max-height:220px; overflow:auto; border:1px solid var(--border); border-radius:10px; padding:10px; background:#0b1220; margin-top:6px;">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:6px;">
+          {% for student in students %}
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.95rem;">
+              <input type="checkbox" name="student_ids" value="{{ student.id }}" {% if student.id in form_data.student_ids %}checked{% endif %}>
+              <span>{{ student.name }}{% if student.email %} <span class="muted" style="font-size:0.85rem;">({{ student.email }})</span>{% endif %}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    {% else %}
+      <p class="muted" style="margin-top:6px;">No students available to add.</p>
+    {% endif %}
     <div class="row" style="justify-content:flex-end; margin-top:12px;">
       <button class="btn btn-primary" type="submit">Create group</button>
     </div>
