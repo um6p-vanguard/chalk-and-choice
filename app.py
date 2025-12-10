@@ -3436,6 +3436,20 @@ def projects_submission_task_validate(code, student_id, task_id):
     db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
 
+@app.post("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>/need-rework")
+@require_user()
+def projects_submission_task_need_rework(code, student_id, task_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    student = Student.query.get_or_404(student_id)
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
+    submission.status = "rejected"
+    submission.last_activity_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
+
 @app.post("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>/reset")
 @require_user()
 def projects_submission_task_reset(code, student_id, task_id):
@@ -3448,6 +3462,8 @@ def projects_submission_task_reset(code, student_id, task_id):
     if submission:
         db.session.delete(submission)
         db.session.commit()
+    # Also clear any session draft for this task (in case the student has one)
+    _clear_task_draft(task_id)
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
 
 @app.route("/api/projects/<code>/tasks/<int:task_id>/log-run", methods=["POST"])
@@ -3649,7 +3665,7 @@ def projects_review_decision(submission_id):
     notes = (request.form.get("review_notes") or "").strip()
     if action == "accept":
         submission.status = "accepted"
-    elif action == "reject":
+    elif action in ("reject", "need_rework"):
         submission.status = "rejected"
     if notes:
         submission.review_notes = notes
