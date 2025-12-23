@@ -1,5 +1,6 @@
-{% macro render(questions, answers, logs_by_question=None) %}
+{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True) %}
   {% set logs_by_question = logs_by_question or {} %}
+  {% set grading_by_question = grading_by_question or {} %}
   {% if not questions %}
     <p class="muted" style="margin:0;">No questions found for this task.</p>
   {% else %}
@@ -10,13 +11,33 @@
       {% set answer_val = "" if answer is none else (answer|string) %}
       {% set qtype = q.type or q.get("type") %}
       {% set qlogs = logs_by_question.get(qid, []) %}
+      {% set grading = grading_by_question.get(qid) if grading_by_question else None %}
+      {% set q_samples = q.samples if q.samples is defined else q.get("samples") %}
+      {% set has_samples = q_samples and (q_samples|length > 0) %}
+      {% set auto_status = "Manual review" %}
+      {% set auto_color = "#f59e0b" %}
+      {% if not task_auto_grade %}
+        {% set auto_status = "Auto-grade off" %}
+        {% set auto_color = "#94a3b8" %}
+      {% elif qtype in ("mcq", "multi", "tokens", "fill") %}
+        {% set auto_status = "Auto-graded" %}
+        {% set auto_color = "#10b981" %}
+      {% elif qtype == "code" and has_samples %}
+        {% set auto_status = "Auto-graded" %}
+        {% set auto_color = "#10b981" %}
+      {% endif %}
       <div style="border:1px solid #1f2937; border-radius:12px; padding:14px; background:#0b1220;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
           <div style="flex:1;">
             <div class="muted" style="font-size:0.9rem;">Question {{ loop.index }}{% if q.title %} • {{ q.title }}{% endif %}</div>
             {% if q.prompt %}<p style="margin:6px 0 0 0; white-space:pre-line;">{{ q.prompt }}</p>{% endif %}
           </div>
-          <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; background:#1f2937; border:1px solid #334155; white-space:nowrap;">{{ qtype|capitalize }}</span>
+          <div class="row" style="gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+            {% if show_meta %}
+              <span style="font-size:0.8rem; padding:4px 10px; border-radius:20px; border:1px solid {{ auto_color }}; color:{{ auto_color }}; background:#0b1220; white-space:nowrap;">{{ auto_status }}</span>
+            {% endif %}
+            <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; background:#1f2937; border:1px solid #334155; white-space:nowrap;">{{ qtype|capitalize }}</span>
+          </div>
         </div>
         {% if q.code_snippet %}
           <pre style="margin-top:10px; white-space:pre-wrap; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ q.code_snippet }}</pre>
@@ -99,6 +120,167 @@
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
           {% endif %}
         </div>
+        {% if show_meta %}
+          <div style="margin-top:12px; padding:12px; border-radius:10px; border:1px dashed #334155; background:#0b1220;">
+            <div class="muted" style="font-size:0.9rem;">Correct answer</div>
+            {% if qtype in ("mcq", "multi") %}
+              {% set correct_indices = q.correct_indices or [] %}
+              {% set options = q.options or [] %}
+              {% if correct_indices %}
+                <ul style="margin:8px 0 0 16px; padding:0; list-style:square;">
+                  {% for raw_idx in correct_indices %}
+                    {% set idx = raw_idx|int %}
+                    {% set opt = options[idx] if idx < (options|length) else "" %}
+                    <li>
+                      Option {{ idx + 1 }}
+                      {% if opt %}- {{ opt }}{% endif %}
+                    </li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted" style="margin:6px 0 0 0;">No correct option configured.</p>
+              {% endif %}
+            {% elif qtype == "tokens" %}
+              {% set correct_tokens = q.correct_tokens or [] %}
+              {% if correct_tokens %}
+                <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+                  {% for tok in correct_tokens %}
+                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ tok }}</span>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <p class="muted" style="margin:6px 0 0 0;">No correct tokens configured.</p>
+              {% endif %}
+            {% elif qtype == "fill" %}
+              {% set answers_expected = q.answers or [] %}
+              {% if answers_expected %}
+                <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+                  {% for ans in answers_expected %}
+                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ ans }}</span>
+                  {% endfor %}
+                </div>
+                {% if q.case_sensitive %}
+                  <div class="muted" style="margin-top:6px; font-size:0.85rem;">Case-sensitive</div>
+                {% endif %}
+              {% else %}
+                <p class="muted" style="margin:6px 0 0 0;">No correct answers configured.</p>
+              {% endif %}
+            {% elif qtype == "code" %}
+              {% if has_samples %}
+                <p class="muted" style="margin:6px 0 0 0;">Expected outputs are shown in the test results below.</p>
+              {% else %}
+                <p class="muted" style="margin:6px 0 0 0;">No tests configured for this code question.</p>
+              {% endif %}
+            {% else %}
+              <p class="muted" style="margin:6px 0 0 0;">Manual review required.</p>
+            {% endif %}
+          </div>
+        {% endif %}
+        {% if show_meta and qtype == "code" %}
+          <div style="margin-top:12px; padding:12px; border-radius:10px; border:1px solid #334155; background:#0f172a;">
+            <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+              <strong>Code test results</strong>
+              {% if grading and grading.timed_out %}
+                <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid #f87171; color:#f87171;">Timed out</span>
+              {% endif %}
+            </div>
+            {% if not code_runs_enabled %}
+              <p class="muted" style="margin:8px 0 0 0;">Backend code runs are disabled.</p>
+            {% elif not grading or not grading.cases %}
+              <p class="muted" style="margin:8px 0 0 0;">No test runs available.</p>
+            {% else %}
+              {% set cases = grading.cases %}
+              {% set visible_cases = cases | selectattr("hidden", "ne", True) | list %}
+              {% set hidden_cases = cases | selectattr("hidden", "eq", True) | list %}
+              {% set visible_passed = visible_cases | selectattr("status", "equalto", "passed") | list | length %}
+              {% set hidden_passed = hidden_cases | selectattr("status", "equalto", "passed") | list | length %}
+              <div class="muted" style="margin-top:8px; font-size:0.9rem;">
+                Samples: {{ visible_passed }}/{{ visible_cases|length }} passed • Hidden: {{ hidden_passed }}/{{ hidden_cases|length }} passed
+              </div>
+              {% set input_label = "Call" if q.mode == "function" else "Input" %}
+              {% if visible_cases %}
+                <div style="margin-top:10px;">
+                  <div class="muted" style="font-size:0.85rem;">Sample tests</div>
+                  {% for case in visible_cases %}
+                    {% set status = case.status or "unknown" %}
+                    {% set status_color = "#38bdf8" %}
+                    {% if status == "passed" %}
+                      {% set status_color = "#4ade80" %}
+                    {% elif status in ("mismatch", "timeout") %}
+                      {% set status_color = "#fbbf24" %}
+                    {% elif status == "error" %}
+                      {% set status_color = "#f87171" %}
+                    {% endif %}
+                    <div style="margin-top:8px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0b1220;">
+                      <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+                        <strong>{{ case.name or "Sample" }}</strong>
+                        <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">{{ input_label }}</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">Output</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">Expected</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
+                      </div>
+                      {% if case.error %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Error</div>
+                          <pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">{{ case.error }}</pre>
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endif %}
+              {% if hidden_cases %}
+                <div style="margin-top:12px;">
+                  <div class="muted" style="font-size:0.85rem;">Hidden tests</div>
+                  {% for case in hidden_cases %}
+                    {% set status = case.status or "unknown" %}
+                    {% set status_color = "#38bdf8" %}
+                    {% if status == "passed" %}
+                      {% set status_color = "#4ade80" %}
+                    {% elif status in ("mismatch", "timeout") %}
+                      {% set status_color = "#fbbf24" %}
+                    {% elif status == "error" %}
+                      {% set status_color = "#f87171" %}
+                    {% endif %}
+                    <div style="margin-top:8px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0b1220;">
+                      <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+                        <strong>{{ case.name or "Hidden test" }}</strong>
+                        <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">{{ input_label }}</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">Output</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
+                      </div>
+                      <div style="margin-top:8px;">
+                        <div class="muted">Expected</div>
+                        <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
+                      </div>
+                      {% if case.error %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Error</div>
+                          <pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">{{ case.error }}</pre>
+                        </div>
+                      {% endif %}
+                    </div>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            {% endif %}
+          </div>
+        {% endif %}
         {% if qlogs %}
           <details style="margin-top:10px;">
             <summary class="muted">Run history ({{ qlogs|length }})</summary>

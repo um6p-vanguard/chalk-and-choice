@@ -3603,7 +3603,6 @@ def projects_reviews():
         project_filter_id = int(project_filter) if project_filter else None
     except ValueError:
         project_filter_id = None
-    reviewer_groups = [rev.group_id for rev in getattr(user, "group_reviews", []) if rev.group_id]
     query = ProjectTaskSubmission.query.filter_by(status="pending_review")
     if project_filter_id:
         query = query.filter_by(project_id=project_filter_id)
@@ -3613,22 +3612,13 @@ def projects_reviews():
         sort_mode = "newest"
         query = query.order_by(ProjectTaskSubmission.submitted_at.desc())
     submissions = query.all()
-    if reviewer_groups:
-        allowed = set(reviewer_groups)
-        pruned = []
-        for sub in submissions:
-            student = sub.student
-            groups = {m.group_id for m in getattr(student, "group_memberships", []) if m.group_id} if student else set()
-            if groups & allowed:
-                pruned.append(sub)
-        submissions = pruned
+    # Mentors can see all pending reviews, regardless of group assignments.
     projects = Project.query.order_by(Project.title.asc()).all()
     return render_template(
         "projects_reviews.html",
         submissions=submissions,
         filter_sort=sort_mode,
         filter_project_id=project_filter_id,
-        reviewer_groups=reviewer_groups,
         projects=projects,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -3643,6 +3633,18 @@ def projects_review_detail(submission_id):
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
     answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
     logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
+    grading_by_question = {}
+    has_code_questions = any((q.get("type") == "code") for q in questions)
+    if task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
+        try:
+            _, _, grading_details = _grade_exam_submission(task, answers)
+        except Exception:
+            grading_details = []
+        grading_by_question = {
+            str(item.get("question_id")): item
+            for item in grading_details
+            if item.get("question_id") is not None
+        }
     return render_template(
         "projects_review_detail.html",
         submission=submission,
@@ -3651,6 +3653,8 @@ def projects_review_detail(submission_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
+        grading_by_question=grading_by_question,
+        code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
     )

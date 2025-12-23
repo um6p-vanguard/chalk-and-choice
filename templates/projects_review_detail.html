@@ -18,7 +18,7 @@
 </div>
 <div class="sp"></div>
 <div class="card">
-  {{ task_answers.render(questions, answers, logs_by_question) }}
+  {{ task_answers.render(questions, answers, logs_by_question, grading_by_question=grading_by_question, show_meta=True, task_auto_grade=(task.auto_grade if task else True), code_runs_enabled=code_runs_enabled) }}
 </div>
 <div class="sp"></div>
 <div class="card">
