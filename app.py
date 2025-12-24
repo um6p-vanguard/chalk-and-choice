@@ -47,6 +47,8 @@ UPLOAD_ROOT = os.path.join(os.path.dirname(__file__), "uploads")
 UPLOAD_MAX_MB = 5
 UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
+TASK_RESOURCE_MAX_MB = 10
+TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
 
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
@@ -189,6 +191,48 @@ def _save_task_upload(submission, question, qid, file_storage, existing_info=Non
         "path": rel_path,
         "size": size or os.path.getsize(full_path),
         "uploaded_at": datetime.utcnow().isoformat() + "Z",
+    }
+    if existing_info:
+        _remove_uploaded_file(existing_info)
+    return file_info, None
+
+def _save_task_resource(task, file_storage, existing_info=None):
+    if not task or not file_storage:
+        return None, "Missing task or file."
+    filename = file_storage.filename or ""
+    if not filename:
+        return None, "No file selected."
+    original_name = os.path.basename(filename)
+    try:
+        file_storage.stream.seek(0, os.SEEK_END)
+        size = file_storage.stream.tell()
+        file_storage.stream.seek(0)
+    except Exception:
+        size = None
+    if size is not None and size > TASK_RESOURCE_MAX_BYTES:
+        return None, f"File must be {TASK_RESOURCE_MAX_MB} MB or smaller."
+    safe_name = secure_filename(original_name) or "task_resource"
+    stored_name = f"{uuid.uuid4().hex}_{safe_name}"
+    upload_dir = os.path.join(
+        UPLOAD_ROOT,
+        "task_resources",
+        str(task.project_id),
+        str(task.id),
+    )
+    os.makedirs(upload_dir, exist_ok=True)
+    full_path = os.path.join(upload_dir, stored_name)
+    try:
+        file_storage.save(full_path)
+    except Exception:
+        return None, "Unable to save file."
+    rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
+    file_info = {
+        "original_name": original_name or safe_name,
+        "stored_name": stored_name,
+        "path": rel_path,
+        "size": size or os.path.getsize(full_path),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "content_type": file_storage.mimetype or "",
     }
     if existing_info:
         _remove_uploaded_file(existing_info)
@@ -2993,6 +3037,7 @@ def projects_task_new(code):
     req_flag = request.form.get("required")
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
+    resource_upload = request.files.get("resource_file")
     form_data = {
         "title": request.form.get("title") or "",
         "description": request.form.get("description") or "",
@@ -3035,8 +3080,17 @@ def projects_task_new(code):
                 order_index=order_index,
             )
             db.session.add(task)
-            db.session.commit()
-            return redirect(url_for("projects_show", code=project.code))
+            db.session.flush()
+            if resource_upload and resource_upload.filename:
+                file_info, upload_error = _save_task_resource(task, resource_upload)
+                if upload_error:
+                    db.session.rollback()
+                    error = upload_error
+                else:
+                    task.resource_file = file_info
+            if not error:
+                db.session.commit()
+                return redirect(url_for("projects_show", code=project.code))
     return render_template(
         "projects_task_new.html",
         project=project,
@@ -3091,6 +3145,7 @@ def projects_task_edit(code, task_id):
     req_flag = request.form.get("required")
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
+    resource_upload = request.files.get("resource_file")
     if request.method == "POST":
         form_data = {
             "title": request.form.get("title") or "",
@@ -3143,8 +3198,16 @@ def projects_task_edit(code, task_id):
             task.required = form_data["required"]
             task.auto_grade = form_data["auto_grade"]
             task.requires_review = form_data["requires_review"]
-            db.session.commit()
-            return redirect(url_for("projects_show", code=project.code))
+            if resource_upload and resource_upload.filename:
+                existing_info = _extract_file_info(task.resource_file)
+                file_info, upload_error = _save_task_resource(task, resource_upload, existing_info)
+                if upload_error:
+                    error = upload_error
+                else:
+                    task.resource_file = file_info
+            if not error:
+                db.session.commit()
+                return redirect(url_for("projects_show", code=project.code))
     return render_template(
         "projects_task_new.html",
         project=project,
@@ -3163,6 +3226,7 @@ def projects_task_delete(code, task_id):
     project = Project.query.filter_by(code=code).first_or_404()
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first()
     if task:
+        _remove_uploaded_file(task.resource_file)
         db.session.delete(task)
         db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
@@ -3288,6 +3352,8 @@ def _task_exam_view(project, task):
         "code": f"{project.code}-{task.id}",
         "kind": "project_task",
         "project_code": project.code,
+        "task_id": task.id,
+        "resource_file": task.resource_file if isinstance(task.resource_file, dict) else None,
     }
     return type("TaskExamView", (), data)()
 
@@ -3546,6 +3612,28 @@ def project_task_submission_self_view(code, task_id):
         user=current_user(),
         student_name=student.name,
     )
+
+@app.route("/projects/tasks/<int:task_id>/resource")
+def project_task_resource_download(task_id):
+    task = ProjectTask.query.get_or_404(task_id)
+    project = task.project
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if not _project_visible_to_student(project, student):
+            abort(403)
+        if not _project_dependencies_met(project, student):
+            abort(403)
+    file_info = _extract_file_info(task.resource_file)
+    if not file_info:
+        abort(404)
+    full_path = _safe_upload_path(file_info.get("path"))
+    if not full_path or not os.path.isfile(full_path):
+        abort(404)
+    download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "resource") or "resource"
+    return send_file(full_path, as_attachment=True, download_name=download_name)
 
 @app.route("/projects/submissions/<int:submission_id>/files/<question_id>")
 def project_task_file_download(submission_id, question_id):

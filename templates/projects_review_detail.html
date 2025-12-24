@@ -7,6 +7,12 @@
       <h3 style="margin:0;">{{ project.title if project else "Project" }} — {{ task.title if task else "Task" }}</h3>
       <p class="muted" style="margin-top:4px;">Student: {{ submission.student_name or "Unknown" }}</p>
       <p class="muted" style="margin-top:4px;">Submitted: {{ submission.submitted_at.strftime("%b %d %H:%M") if submission.submitted_at else "—" }}</p>
+      {% if task and task.resource_file %}
+        <div style="margin-top:8px;">
+          <span class="muted">Task resource:</span>
+          <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+        </div>
+      {% endif %}
     </div>
     <div class="row" style="gap:8px;">
       <a class="btn" href="{{ url_for('projects_reviews') }}">Back to review list</a>

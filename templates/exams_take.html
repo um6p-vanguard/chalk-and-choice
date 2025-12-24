@@ -19,6 +19,18 @@
       <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-instructions>{{ exam.instructions }}</div>
     </div>
   {% endif %}
+  {% if exam.kind == "project_task" and exam.resource_file %}
+    <div style="margin-top:12px; padding:12px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Task resource</strong>
+        <a class="btn" href="{{ url_for('project_task_resource_download', task_id=exam.task_id) }}">Download</a>
+      </div>
+      <div class="muted" style="margin-top:6px;">
+        {{ exam.resource_file.original_name or exam.resource_file.stored_name or "resource" }}
+        {% if exam.resource_file.size %} • {{ (exam.resource_file.size // 1024) }} KB{% endif %}
+      </div>
+    </div>
+  {% endif %}
 </div>
 <div class="sp"></div>
 <div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}">

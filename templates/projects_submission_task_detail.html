@@ -24,6 +24,12 @@
         Submitted: {{ submission.submitted_at.strftime("%b %d %H:%M") if submission.submitted_at else "—" }} •
         Last activity: {{ submission.last_activity_at.strftime("%b %d %H:%M") if submission.last_activity_at else "—" }}
       </p>
+      {% if task and task.resource_file %}
+        <div style="margin-top:8px;">
+          <span class="muted">Task resource:</span>
+          <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+        </div>
+      {% endif %}
       {% if submission.review_notes %}
         <div style="margin-top:6px; padding:10px; border:1px dashed #334155; border-radius:10px;">
           <strong>Reviewer notes</strong>

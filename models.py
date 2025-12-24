@@ -300,6 +300,7 @@ class ProjectTask(db.Model):
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)
     questions_json = db.Column(JSONText, nullable=False)
+    resource_file = db.Column(JSONText, nullable=True)
     required = db.Column(db.Boolean, nullable=False, default=True)
     auto_grade = db.Column(db.Boolean, nullable=False, default=True)
     requires_review = db.Column(db.Boolean, nullable=False, default=False)
