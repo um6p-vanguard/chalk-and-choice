@@ -16,6 +16,9 @@
           <p class="muted" style="margin:4px 0 0 0;">
             {{ metrics[lb.metric].label if lb.metric in metrics else lb.metric }} • {{ lb.group.name if lb.group else "All students" }}
           </p>
+          {% if lb.metric == "logtime" and logtime_summaries.get(lb.id) %}
+            <p class="muted" style="margin:4px 0 0 0;">{{ logtime_summaries.get(lb.id) }}</p>
+          {% endif %}
         </div>
         <a class="btn" href="{{ url_for('leaderboard_view', leaderboard_id=lb.id) }}">View full board</a>
       </div>
@@ -36,7 +39,7 @@
                 <td>{{ row.student.name if row.student else "Student removed" }}</td>
                 <td style="text-align:right;">
                   {% if lb.metric == "logtime" %}
-                    {{ "%.1f"|format((row.value or 0) / 60) }} min
+                    {{ row.display if row.display is defined else ("%.1f"|format((row.value or 0) / 60) ~ " min") }}
                   {% elif lb.metric == "total_points" %}
                     {{ "%.2f"|format(row.value or 0) }}
                   {% else %}

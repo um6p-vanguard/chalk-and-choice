@@ -43,6 +43,13 @@
   <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_minutes }} min</strong></p>
 </div>
 
+{% if status_message %}
+  <div class="sp"></div>
+  <div class="card" style="border-color:#334155; background:#0b1220;">
+    <p class="muted" style="margin:0;">{{ status_message }}</p>
+  </div>
+{% endif %}
+
 <div class="sp"></div>
 
 <div class="card">
@@ -62,6 +69,15 @@
       <button class="btn btn-primary" type="submit">Save</button>
     </div>
   </form>
+  <div class="sp"></div>
+  <div style="padding:10px; border:1px dashed #334155; border-radius:10px;">
+    <strong>Recalculate project points</strong>
+    <p class="muted" style="margin:6px 0 0 0;">Remove previous project grade entries and re-award points for students who have accepted submissions.</p>
+    <form method="post" action="{{ url_for('projects_recalculate_points', code=project.code) }}" style="margin-top:10px;" onsubmit="return confirm('Remove previous project points and re-award based on current points?');">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button class="btn" type="submit">Recalculate points</button>
+    </form>
+  </div>
 </div>
 
 <div class="sp"></div>

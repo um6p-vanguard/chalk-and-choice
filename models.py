@@ -95,6 +95,7 @@ class Leaderboard(db.Model):
     title = db.Column(db.String(255), nullable=False)
     metric = db.Column(db.String(64), nullable=False)  # total_points | projects_done | logtime
     group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True)
+    params_json = db.Column(JSONText, nullable=True)
     is_published = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -200,6 +201,17 @@ class StudentStats(db.Model):
     times_spoken = db.Column(db.Integer, default=0, nullable=False)
     last_spoken_at = db.Column(db.DateTime)
     current_round_done = db.Column(db.Boolean, default=False, nullable=False)
+
+class StudentLogSession(db.Model):
+    __tablename__ = "student_log_sessions"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_activity_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    ended_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    student = db.relationship('Student')
 
 class Intervention(db.Model):
     __tablename__ = "interventions"

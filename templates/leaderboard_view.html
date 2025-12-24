@@ -10,6 +10,9 @@
   {% if leaderboard.metric in metrics and metrics[leaderboard.metric].description %}
     <p class="muted" style="margin:6px 0 0 0;">{{ metrics[leaderboard.metric].description }}</p>
   {% endif %}
+  {% if leaderboard.metric == "logtime" and logtime_summary %}
+    <p class="muted" style="margin:6px 0 0 0;">{{ logtime_summary }}</p>
+  {% endif %}
   <div class="row" style="gap:10px; margin-top:10px;">
     <a class="btn" href="{{ url_for('leaderboards_public') }}">Back to leaderboards</a>
     {% if user %}
@@ -37,7 +40,7 @@
             <td>{{ row.student.name if row.student else "Student removed" }}</td>
             <td style="text-align:right;">
               {% if leaderboard.metric == "logtime" %}
-                {{ "%.1f"|format((row.value or 0) / 60) }} min
+                {{ row.display if row.display is defined else ("%.1f"|format((row.value or 0) / 60) ~ " min") }}
               {% elif leaderboard.metric == "total_points" %}
                 {{ "%.2f"|format(row.value or 0) }}
               {% else %}

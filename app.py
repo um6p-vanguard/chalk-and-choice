@@ -15,6 +15,7 @@ from models import (db, Student, User, Form,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
+                    StudentLogSession,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func
@@ -49,6 +50,8 @@ UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
 TASK_RESOURCE_MAX_MB = 10
 TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
+LOG_SESSION_GAP_SEC = 10 * 60
+LOG_ACTIVITY_UPDATE_SEC = 60
 
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
@@ -84,7 +87,7 @@ PROJECT_TASKS_SCHEMA = {
 LEADERBOARD_METRICS = {
     "total_points": {"label": "Total points", "description": "Sum of all recorded grade scores."},
     "projects_done": {"label": "Projects done", "description": "Count of projects with required tasks accepted."},
-    "logtime": {"label": "Log time", "description": "Total spotlight time (minutes)."},
+    "logtime": {"label": "Log time", "description": "Student activity time based on online sessions."},
 }
 
 def create_app(db_path=DB_URI):
@@ -238,6 +241,26 @@ def _save_task_resource(task, file_storage, existing_info=None):
         _remove_uploaded_file(existing_info)
     return file_info, None
 
+def _touch_student_log_session(student, now):
+    if not student:
+        return
+    session_row = StudentLogSession.query.filter_by(student_id=student.id).order_by(
+        StudentLogSession.last_activity_at.desc()
+    ).first()
+    if session_row and session_row.last_activity_at:
+        delta = (now - session_row.last_activity_at).total_seconds()
+        if delta <= LOG_SESSION_GAP_SEC:
+            session_row.last_activity_at = now
+            session_row.ended_at = now
+            return
+    new_session = StudentLogSession(
+        student_id=student.id,
+        started_at=now,
+        last_activity_at=now,
+        ended_at=now,
+    )
+    db.session.add(new_session)
+
 # --------------------------------------------------------------------
 # CSRF helpers (form + JSON header)
 # --------------------------------------------------------------------
@@ -347,8 +370,9 @@ def update_student_last_seen():
     if not s:
         return
     now = datetime.utcnow()
-    if not s.last_seen_at or (now - s.last_seen_at).total_seconds() > 60:
+    if not s.last_seen_at or (now - s.last_seen_at).total_seconds() >= LOG_ACTIVITY_UPDATE_SEC:
         s.last_seen_at = now
+        _touch_student_log_session(s, now)
         try:
             db.session.commit()
         except Exception:
@@ -438,6 +462,23 @@ def try_restore_student_from_cookie():
 @app.before_request
 def _restore_student():
     try_restore_student_from_cookie()
+
+@app.post("/api/student/ping")
+def student_ping():
+    student = current_student()
+    if not student:
+        abort(401)
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    now = datetime.utcnow()
+    student.last_seen_at = now
+    _touch_student_log_session(student, now)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Login / Logout / First-login password set
@@ -1491,12 +1532,179 @@ def _project_completion_counts(student_ids):
                 counts[sid] = counts.get(sid, 0) + 1
     return counts
 
-def _compute_leaderboard_rows(metric, group_id=None):
+def _format_duration(seconds):
+    try:
+        total = float(seconds or 0)
+    except Exception:
+        total = 0.0
+    if total >= 3600:
+        return f"{total / 3600:.2f} hr"
+    return f"{total / 60:.1f} min"
+
+def _parse_iso_datetime(val):
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    try:
+        return datetime.fromisoformat(str(val))
+    except Exception:
+        return None
+
+def _logtime_range_from_params(params):
+    now = datetime.utcnow()
+    params = params if isinstance(params, dict) else {}
+    range_type = params.get("range") or "all_time"
+    start = None
+    end = None
+    if range_type == "last_7_days":
+        start = now - timedelta(days=7)
+        end = now
+    elif range_type == "last_30_days":
+        start = now - timedelta(days=30)
+        end = now
+    elif range_type == "last_90_days":
+        start = now - timedelta(days=90)
+        end = now
+    elif range_type == "custom":
+        start = _parse_iso_datetime(params.get("start"))
+        end = _parse_iso_datetime(params.get("end"))
+        if start and end and end < start:
+            start, end = end, start
+    return start, end, range_type
+
+def _compute_logtime_values(student_ids, params=None):
+    values = {sid: 0 for sid in student_ids}
+    display = {sid: "0.0 min" for sid in student_ids}
+    if not student_ids:
+        return values, display
+    params = params if isinstance(params, dict) else {}
+    start, end, _ = _logtime_range_from_params(params)
+    try:
+        min_minutes = int(params.get("min_minutes")) if params.get("min_minutes") not in (None, "") else None
+    except Exception:
+        min_minutes = None
+    try:
+        max_minutes = int(params.get("max_minutes")) if params.get("max_minutes") not in (None, "") else None
+    except Exception:
+        max_minutes = None
+    try:
+        cap_minutes = int(params.get("cap_minutes")) if params.get("cap_minutes") not in (None, "") else None
+    except Exception:
+        cap_minutes = None
+    mode = params.get("mode") or "total_time"
+    min_seconds = min_minutes * 60 if min_minutes else None
+    max_seconds = max_minutes * 60 if max_minutes else None
+    cap_seconds = cap_minutes * 60 if cap_minutes else None
+
+    query = StudentLogSession.query.filter(StudentLogSession.student_id.in_(student_ids))
+    if start:
+        query = query.filter(StudentLogSession.ended_at >= start)
+    if end:
+        query = query.filter(StudentLogSession.started_at <= end)
+    sessions = query.all()
+
+    session_counts = {sid: 0 for sid in student_ids}
+    active_days = {sid: set() for sid in student_ids}
+    longest = {sid: 0 for sid in student_ids}
+
+    for sess in sessions:
+        sid = sess.student_id
+        if sid not in values:
+            continue
+        session_start = sess.started_at or sess.created_at
+        session_end = sess.ended_at or sess.last_activity_at or session_start
+        if not session_start or not session_end:
+            continue
+        overlap_start = max(session_start, start) if start else session_start
+        overlap_end = min(session_end, end) if end else session_end
+        if overlap_end < overlap_start:
+            continue
+        duration = (overlap_end - overlap_start).total_seconds()
+        if min_seconds is not None and duration < min_seconds:
+            continue
+        if max_seconds is not None and duration > max_seconds:
+            continue
+        if cap_seconds is not None and duration > cap_seconds:
+            duration = cap_seconds
+        if mode == "session_count":
+            session_counts[sid] += 1
+        elif mode == "active_days":
+            day_cursor = overlap_start.date()
+            end_date = overlap_end.date()
+            while day_cursor <= end_date:
+                active_days[sid].add(day_cursor)
+                day_cursor += timedelta(days=1)
+        else:
+            values[sid] += duration
+            if duration > longest[sid]:
+                longest[sid] = duration
+            session_counts[sid] += 1
+
+    if mode == "session_count":
+        for sid in values:
+            values[sid] = session_counts[sid]
+            display[sid] = f"{values[sid]} sessions"
+    elif mode == "avg_session":
+        for sid in values:
+            total = values[sid]
+            count = session_counts[sid]
+            avg = total / count if count else 0
+            values[sid] = avg
+            display[sid] = _format_duration(avg)
+    elif mode == "longest_session":
+        for sid in values:
+            values[sid] = longest[sid]
+            display[sid] = _format_duration(values[sid])
+    elif mode == "active_days":
+        for sid in values:
+            values[sid] = len(active_days[sid])
+            display[sid] = f"{values[sid]} days"
+    else:
+        for sid in values:
+            display[sid] = _format_duration(values[sid])
+    return values, display
+
+def _summarize_logtime_params(params):
+    params = params if isinstance(params, dict) else {}
+    parts = []
+    range_type = params.get("range") or "all_time"
+    if range_type == "last_7_days":
+        parts.append("Range: last 7 days")
+    elif range_type == "last_30_days":
+        parts.append("Range: last 30 days")
+    elif range_type == "last_90_days":
+        parts.append("Range: last 90 days")
+    elif range_type == "custom":
+        start = params.get("start") or "?"
+        end = params.get("end") or "?"
+        parts.append(f"Range: {start} to {end}")
+    else:
+        parts.append("Range: all time")
+    mode = params.get("mode") or "total_time"
+    mode_labels = {
+        "total_time": "Total time",
+        "session_count": "Session count",
+        "avg_session": "Average session",
+        "longest_session": "Longest session",
+        "active_days": "Active days",
+    }
+    parts.append(f"Mode: {mode_labels.get(mode, mode)}")
+    if params.get("min_minutes"):
+        parts.append(f"Min session: {params.get('min_minutes')}m")
+    if params.get("max_minutes"):
+        parts.append(f"Max session: {params.get('max_minutes')}m")
+    if params.get("cap_minutes"):
+        parts.append(f"Cap session: {params.get('cap_minutes')}m")
+    return " • ".join(parts)
+
+def _compute_leaderboard_rows(metric, group_id=None, params=None):
     students = _leaderboard_students(group_id=group_id)
     student_ids = [s.id for s in students]
     if not student_ids:
         return []
     values = {sid: 0 for sid in student_ids}
+    display = {}
     if metric == "total_points":
         totals = db.session.query(
             Grade.student_id,
@@ -1507,20 +1715,15 @@ def _compute_leaderboard_rows(metric, group_id=None):
     elif metric == "projects_done":
         values.update(_project_completion_counts(student_ids))
     elif metric == "logtime":
-        totals = db.session.query(
-            Intervention.student_id,
-            func.coalesce(func.sum(Intervention.duration_sec), 0),
-        ).filter(
-            Intervention.status == "completed",
-            Intervention.student_id.in_(student_ids),
-        ).group_by(Intervention.student_id).all()
-        for sid, total in totals:
-            values[sid] = float(total or 0)
+        values, display = _compute_logtime_values(student_ids, params=params)
     else:
         return []
     rows = []
     for st in students:
-        rows.append({"student": st, "value": values.get(st.id, 0)})
+        entry = {"student": st, "value": values.get(st.id, 0)}
+        if display:
+            entry["display"] = display.get(st.id)
+        rows.append(entry)
     rows.sort(key=lambda row: row["value"], reverse=True)
     for idx, row in enumerate(rows):
         row["rank"] = idx + 1
@@ -2709,6 +2912,13 @@ def leaderboards_admin():
         "title": request.form.get("title") or "",
         "metric": request.form.get("metric") or "total_points",
         "group_id": request.form.get("group_id") or "all",
+        "log_range": request.form.get("log_range") or "all_time",
+        "log_start": request.form.get("log_start") or "",
+        "log_end": request.form.get("log_end") or "",
+        "log_min_minutes": request.form.get("log_min_minutes") or "",
+        "log_max_minutes": request.form.get("log_max_minutes") or "",
+        "log_cap_minutes": request.form.get("log_cap_minutes") or "",
+        "log_mode": request.form.get("log_mode") or "total_time",
     }
     error = None
     if request.method == "POST":
@@ -2736,11 +2946,30 @@ def leaderboards_admin():
                     error = "Invalid group selection."
             if not title and not error:
                 error = "Title is required."
+            params = None
+            if not error and metric == "logtime":
+                def _parse_int(val):
+                    try:
+                        return int(val)
+                    except Exception:
+                        return None
+                params = {
+                    "range": form_data["log_range"] or "all_time",
+                    "start": (parse_dt_local(form_data["log_start"]).isoformat()
+                              if form_data["log_start"] else None),
+                    "end": (parse_dt_local(form_data["log_end"]).isoformat()
+                            if form_data["log_end"] else None),
+                    "min_minutes": _parse_int(form_data["log_min_minutes"]),
+                    "max_minutes": _parse_int(form_data["log_max_minutes"]),
+                    "cap_minutes": _parse_int(form_data["log_cap_minutes"]),
+                    "mode": form_data["log_mode"] or "total_time",
+                }
             if not error:
                 lb = Leaderboard(
                     title=title,
                     metric=metric,
                     group_id=group_id,
+                    params_json=params,
                     is_published=False,
                 )
                 db.session.add(lb)
@@ -2765,13 +2994,17 @@ def leaderboards_admin():
 
     leaderboards = Leaderboard.query.order_by(Leaderboard.created_at.desc()).all()
     leaderboard_rows = {}
+    logtime_summaries = {}
     for lb in leaderboards:
-        rows = _compute_leaderboard_rows(lb.metric, lb.group_id)
+        rows = _compute_leaderboard_rows(lb.metric, lb.group_id, params=lb.params_json)
         leaderboard_rows[lb.id] = rows[:5]
+        if lb.metric == "logtime":
+            logtime_summaries[lb.id] = _summarize_logtime_params(lb.params_json)
     return render_template(
         "leaderboards_admin.html",
         leaderboards=leaderboards,
         leaderboard_rows=leaderboard_rows,
+        logtime_summaries=logtime_summaries,
         groups=groups,
         metrics=LEADERBOARD_METRICS,
         form_data=form_data,
@@ -2788,13 +3021,17 @@ def leaderboards_public():
         return redirect(url_for("login", next=request.path))
     boards = Leaderboard.query.filter_by(is_published=True).order_by(Leaderboard.created_at.desc()).all()
     leaderboard_rows = {}
+    logtime_summaries = {}
     for lb in boards:
-        leaderboard_rows[lb.id] = _compute_leaderboard_rows(lb.metric, lb.group_id)
+        leaderboard_rows[lb.id] = _compute_leaderboard_rows(lb.metric, lb.group_id, params=lb.params_json)
+        if lb.metric == "logtime":
+            logtime_summaries[lb.id] = _summarize_logtime_params(lb.params_json)
     viewer_name = student.name if student else session.get("student_name")
     return render_template(
         "leaderboards_public.html",
         leaderboards=boards,
         leaderboard_rows=leaderboard_rows,
+        logtime_summaries=logtime_summaries,
         metrics=LEADERBOARD_METRICS,
         user=user,
         student_name=viewer_name,
@@ -2809,12 +3046,14 @@ def leaderboard_view(leaderboard_id):
     lb = Leaderboard.query.get_or_404(leaderboard_id)
     if not lb.is_published and not _is_staff(user):
         abort(403)
-    rows = _compute_leaderboard_rows(lb.metric, lb.group_id)
+    rows = _compute_leaderboard_rows(lb.metric, lb.group_id, params=lb.params_json)
+    logtime_summary = _summarize_logtime_params(lb.params_json) if lb.metric == "logtime" else ""
     viewer_name = student.name if student else session.get("student_name")
     return render_template(
         "leaderboard_view.html",
         leaderboard=lb,
         rows=rows,
+        logtime_summary=logtime_summary,
         metrics=LEADERBOARD_METRICS,
         user=user,
         student_name=viewer_name,
@@ -2914,6 +3153,7 @@ def projects_show(code):
     other_projects = Project.query.filter(Project.id != project.id).order_by(Project.title.asc()).all()
     assignments = ProjectGroupAssignment.query.filter_by(project_id=project.id).order_by(ProjectGroupAssignment.applies_to_all.desc(), ProjectGroupAssignment.created_at.asc()).all()
     student_groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    status_message = session.pop("projects_status", None)
     return render_template(
         "projects_show.html",
         project=project,
@@ -2922,6 +3162,7 @@ def projects_show(code):
         other_projects=other_projects,
         group_assignments=assignments,
         student_groups=student_groups,
+        status_message=status_message,
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -2942,6 +3183,44 @@ def projects_update_meta(code):
     project.points = max(0, points_val)
     project.retry_cooldown_minutes = max(0, retry_val)
     db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
+
+@app.post("/projects/<code>/recalculate-points")
+@require_user()
+def projects_recalculate_points(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    assignment_name = f"Project: {project.title}"
+    deleted = Grade.query.filter_by(assignment=assignment_name).delete(synchronize_session=False)
+    awarded = 0
+    if project.points and project.points > 0:
+        student_ids = [
+            row[0]
+            for row in db.session.query(ProjectTaskSubmission.student_id)
+            .filter(
+                ProjectTaskSubmission.project_id == project.id,
+                ProjectTaskSubmission.student_id != None,
+            )
+            .distinct()
+            .all()
+        ]
+        if student_ids:
+            students = Student.query.filter(Student.id.in_(student_ids)).all()
+            for student in students:
+                if _project_completed(project, student):
+                    _create_grade_entry(
+                        student,
+                        assignment_name,
+                        float(project.points),
+                        float(project.points),
+                        remarks=f"Auto-awarded for completing project '{project.title}'.",
+                    )
+                    awarded += 1
+    db.session.commit()
+    session["projects_status"] = (
+        f"Reassigned project points: removed {deleted} grade(s), awarded {awarded}."
+    )
     return redirect(url_for("projects_show", code=project.code))
 
 @app.post("/projects/<code>/publish")

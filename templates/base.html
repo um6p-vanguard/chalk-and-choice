@@ -127,5 +127,21 @@
     <div class="muted">SASE Portal</div>
     {% block scripts %}{% endblock %}
   </div>
+  {% if student_name %}
+  <script>
+    (function () {
+      const csrf = "{{ csrf_token() }}";
+      const endpoint = "{{ url_for('student_ping') }}";
+      const ping = () => {
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "X-CSRF": csrf },
+        }).catch(() => {});
+      };
+      ping();
+      setInterval(ping, 5 * 60 * 1000);
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>

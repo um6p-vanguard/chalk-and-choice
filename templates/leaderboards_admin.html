@@ -19,7 +19,7 @@
             <option value="{{ key }}" {% if form_data.metric == key %}selected{% endif %}>{{ meta.label }}</option>
           {% endfor %}
         </select>
-        <p class="muted" style="margin:6px 0 0 0;">Total points uses grade scores, projects done counts accepted projects, and log time uses completed spotlight minutes.</p>
+        <p class="muted" style="margin:6px 0 0 0;">Total points uses grade scores, projects done counts accepted projects, and log time uses student activity sessions.</p>
       </div>
       <div style="flex:1; min-width:220px;">
         <label>Students included</label>
@@ -31,6 +31,55 @@
         </select>
         <p class="muted" style="margin:6px 0 0 0;">Pick a cohort or leave as all students.</p>
       </div>
+    </div>
+    <div data-logtime-params style="margin-top:12px; display:none;">
+      <div class="row" style="gap:12px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:220px;">
+          <label>Log time range</label>
+          <select name="log_range" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); background:#0b1220; color:var(--text);">
+            <option value="all_time" {% if form_data.log_range == "all_time" %}selected{% endif %}>All time</option>
+            <option value="last_7_days" {% if form_data.log_range == "last_7_days" %}selected{% endif %}>Last 7 days</option>
+            <option value="last_30_days" {% if form_data.log_range == "last_30_days" %}selected{% endif %}>Last 30 days</option>
+            <option value="last_90_days" {% if form_data.log_range == "last_90_days" %}selected{% endif %}>Last 90 days</option>
+            <option value="custom" {% if form_data.log_range == "custom" %}selected{% endif %}>Custom range</option>
+          </select>
+        </div>
+        <div style="flex:1; min-width:220px;">
+          <label>Log time mode</label>
+          <select name="log_mode" style="width:100%; padding:10px; border-radius:8px; border:1px solid var(--border); background:#0b1220; color:var(--text);">
+            <option value="total_time" {% if form_data.log_mode == "total_time" %}selected{% endif %}>Total time</option>
+            <option value="session_count" {% if form_data.log_mode == "session_count" %}selected{% endif %}>Session count</option>
+            <option value="avg_session" {% if form_data.log_mode == "avg_session" %}selected{% endif %}>Average session</option>
+            <option value="longest_session" {% if form_data.log_mode == "longest_session" %}selected{% endif %}>Longest session</option>
+            <option value="active_days" {% if form_data.log_mode == "active_days" %}selected{% endif %}>Active days</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:10px;" data-logtime-custom>
+        <div style="flex:1; min-width:220px;">
+          <label>Custom start (UTC)</label>
+          <input type="datetime-local" name="log_start" value="{{ form_data.log_start }}">
+        </div>
+        <div style="flex:1; min-width:220px;">
+          <label>Custom end (UTC)</label>
+          <input type="datetime-local" name="log_end" value="{{ form_data.log_end }}">
+        </div>
+      </div>
+      <div class="row" style="gap:12px; flex-wrap:wrap; margin-top:10px;">
+        <div style="flex:1; min-width:180px;">
+          <label>Min session minutes</label>
+          <input type="number" min="0" name="log_min_minutes" value="{{ form_data.log_min_minutes }}">
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <label>Max session minutes</label>
+          <input type="number" min="0" name="log_max_minutes" value="{{ form_data.log_max_minutes }}">
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <label>Cap session minutes</label>
+          <input type="number" min="0" name="log_cap_minutes" value="{{ form_data.log_cap_minutes }}">
+        </div>
+      </div>
+      <p class="muted" style="margin:6px 0 0 0;">Custom range uses the start/end fields. Min/Max filter sessions; Cap limits each session’s counted length.</p>
     </div>
     <div class="row" style="justify-content:flex-end; margin-top:14px;">
       <button class="btn btn-primary" type="submit">Create leaderboard</button>
@@ -50,6 +99,9 @@
             {{ metrics[lb.metric].label if lb.metric in metrics else lb.metric }} •
             {{ lb.group.name if lb.group else "All students" }}
           </p>
+          {% if lb.metric == "logtime" and logtime_summaries.get(lb.id) %}
+            <p class="muted" style="margin:4px 0 0 0;">{{ logtime_summaries.get(lb.id) }}</p>
+          {% endif %}
           <p class="muted" style="margin:4px 0 0 0;">Status: {{ "Published" if lb.is_published else "Draft" }} • Updated {{ lb.updated_at.strftime("%b %d %H:%M") if lb.updated_at else "—" }}</p>
         </div>
         <div class="row" style="gap:8px;">
@@ -92,12 +144,12 @@
               <tr>
                 <td>#{{ row.rank }}</td>
                 <td>{{ row.student.name if row.student else "Student removed" }}</td>
-                <td style="text-align:right;">
-                  {% if lb.metric == "logtime" %}
-                    {{ "%.1f"|format((row.value or 0) / 60) }} min
-                  {% elif lb.metric == "total_points" %}
+                  <td style="text-align:right;">
+                    {% if lb.metric == "logtime" %}
+                    {{ row.display if row.display is defined else ("%.1f"|format((row.value or 0) / 60) ~ " min") }}
+                    {% elif lb.metric == "total_points" %}
                     {{ "%.2f"|format(row.value or 0) }}
-                  {% else %}
+                    {% else %}
                     {{ row.value|int }}
                   {% endif %}
                 </td>
@@ -115,4 +167,25 @@
     <p class="muted" style="margin:0;">No leaderboards created yet. Use the form above to start one.</p>
   </div>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    const metricSelect = document.querySelector('select[name="metric"]');
+    const logParams = document.querySelector("[data-logtime-params]");
+    const rangeSelect = document.querySelector('select[name="log_range"]');
+    const customRange = document.querySelector("[data-logtime-custom]");
+    if (!metricSelect || !logParams) return;
+    const update = () => {
+      const isLog = metricSelect.value === "logtime";
+      logParams.style.display = isLog ? "block" : "none";
+      if (customRange && rangeSelect) {
+        customRange.style.display = isLog && rangeSelect.value === "custom" ? "flex" : "none";
+      }
+    };
+    metricSelect.addEventListener("change", update);
+    if (rangeSelect) rangeSelect.addEventListener("change", update);
+    update();
+  })();
+</script>
 {% endblock %}
