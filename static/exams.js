@@ -438,6 +438,11 @@
       caseWrap.appendChild(caseInput);
       caseWrap.append("Case sensitive?");
       card.appendChild(caseWrap);
+    } else if (type === "file") {
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = "Students upload a .zip file (max 5 MB).";
+      card.appendChild(info);
     }
 
     return card;

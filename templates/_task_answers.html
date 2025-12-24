@@ -1,4 +1,4 @@
-{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True) %}
+{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True, submission_id=None) %}
   {% set logs_by_question = logs_by_question or {} %}
   {% set grading_by_question = grading_by_question or {} %}
   {% if not questions %}
@@ -90,6 +90,24 @@
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
           {% elif qtype == "code" %}
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "# no submission" }}</pre>
+          {% elif qtype == "file" %}
+            {% set file_info = answer if answer is mapping else None %}
+            {% if file_info %}
+              <div style="margin-top:6px; display:flex; flex-direction:column; gap:6px;">
+                <div><strong>{{ file_info.original_name or file_info.stored_name or "uploaded.zip" }}</strong></div>
+                {% if file_info.size %}
+                  <div class="muted" style="font-size:0.9rem;">Size: {{ (file_info.size // 1024) }} KB</div>
+                {% endif %}
+                {% if file_info.uploaded_at %}
+                  <div class="muted" style="font-size:0.9rem;">Uploaded: {{ file_info.uploaded_at }}</div>
+                {% endif %}
+                {% if submission_id %}
+                  <a class="btn" href="{{ url_for('project_task_file_download', submission_id=submission_id, question_id=qid) }}">Download file</a>
+                {% endif %}
+              </div>
+            {% else %}
+              <p class="muted" style="margin-top:6px;">No file uploaded.</p>
+            {% endif %}
           {% elif qtype == "tokens" %}
             {% set tpl = q.template or "" %}
             {% set segments = tpl.split("[[blank]]") %}
@@ -171,6 +189,8 @@
               {% else %}
                 <p class="muted" style="margin:6px 0 0 0;">No tests configured for this code question.</p>
               {% endif %}
+            {% elif qtype == "file" %}
+              <p class="muted" style="margin:6px 0 0 0;">Upload a {{ q.accept or ".zip" }} file (max {{ q.max_mb or 5 }} MB).</p>
             {% else %}
               <p class="muted" style="margin:6px 0 0 0;">Manual review required.</p>
             {% endif %}

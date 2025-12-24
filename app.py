@@ -1,10 +1,11 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, make_response, jsonify, abort, Response, send_file
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 from markupsafe import Markup, escape
@@ -42,6 +43,10 @@ SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR 
 ALLOW_MULTI_ATTEMPTS = os.environ.get("ALLOW_MULTI_ATTEMPTS", "0") == "1"
 ENABLE_BACKEND_CODE_RUNS = os.environ.get("ENABLE_BACKEND_CODE_RUNS", "1") == "1"
 CODE_RUN_TIME_LIMIT_SEC = float(os.environ.get("CODE_RUN_TIME_LIMIT_SEC", "3.0"))
+UPLOAD_ROOT = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_MAX_MB = 5
+UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
+UPLOAD_DEFAULT_ACCEPT = ".zip"
 
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
@@ -94,6 +99,100 @@ def create_app(db_path=DB_URI):
     return app
 
 app = create_app()
+
+# --------------------------------------------------------------------
+# Upload helpers
+# --------------------------------------------------------------------
+def _parse_accept_extensions(accept_value):
+    tokens = []
+    for raw in (accept_value or "").split(","):
+        token = raw.strip().lower()
+        if token.startswith("."):
+            tokens.append(token)
+    return tokens or [UPLOAD_DEFAULT_ACCEPT]
+
+def _question_upload_limits(question):
+    accept_value = (question.get("accept") or UPLOAD_DEFAULT_ACCEPT) if isinstance(question, dict) else UPLOAD_DEFAULT_ACCEPT
+    extensions = set(_parse_accept_extensions(accept_value))
+    try:
+        max_mb = int(question.get("max_mb") or UPLOAD_MAX_MB) if isinstance(question, dict) else UPLOAD_MAX_MB
+    except Exception:
+        max_mb = UPLOAD_MAX_MB
+    max_mb = max(1, min(max_mb, UPLOAD_MAX_MB))
+    return extensions, max_mb * 1024 * 1024, max_mb
+
+def _safe_upload_path(rel_path):
+    if not rel_path:
+        return None
+    base = os.path.abspath(UPLOAD_ROOT)
+    target = os.path.abspath(os.path.join(base, rel_path))
+    if not target.startswith(base + os.sep):
+        return None
+    return target
+
+def _extract_file_info(answer):
+    if isinstance(answer, dict) and answer.get("path"):
+        return answer
+    return None
+
+def _remove_uploaded_file(file_info):
+    info = _extract_file_info(file_info)
+    if not info:
+        return
+    full_path = _safe_upload_path(info.get("path"))
+    if full_path and os.path.isfile(full_path):
+        try:
+            os.remove(full_path)
+        except Exception:
+            pass
+
+def _save_task_upload(submission, question, qid, file_storage, existing_info=None):
+    if not submission or not file_storage:
+        return None, "Missing submission or file."
+    filename = file_storage.filename or ""
+    if not filename:
+        return None, "No file selected."
+    original_name = os.path.basename(filename)
+    extension = os.path.splitext(original_name)[1].lower()
+    allowed_exts, max_bytes, max_mb = _question_upload_limits(question)
+    if extension not in allowed_exts:
+        allowed_str = ", ".join(sorted(allowed_exts))
+        return None, f"Only {allowed_str} files are allowed."
+    try:
+        file_storage.stream.seek(0, os.SEEK_END)
+        size = file_storage.stream.tell()
+        file_storage.stream.seek(0)
+    except Exception:
+        size = None
+    if size is not None and size > max_bytes:
+        return None, f"File must be {max_mb} MB or smaller."
+    safe_name = secure_filename(original_name) or "submission.zip"
+    stored_name = f"{uuid.uuid4().hex}_{safe_name}"
+    upload_dir = os.path.join(
+        UPLOAD_ROOT,
+        "project_tasks",
+        str(submission.project_id),
+        str(submission.task_id),
+        str(submission.id),
+        str(qid),
+    )
+    os.makedirs(upload_dir, exist_ok=True)
+    full_path = os.path.join(upload_dir, stored_name)
+    try:
+        file_storage.save(full_path)
+    except Exception:
+        return None, "Unable to save file."
+    rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
+    file_info = {
+        "original_name": original_name or safe_name,
+        "stored_name": stored_name,
+        "path": rel_path,
+        "size": size or os.path.getsize(full_path),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+    }
+    if existing_info:
+        _remove_uploaded_file(existing_info)
+    return file_info, None
 
 # --------------------------------------------------------------------
 # CSRF helpers (form + JSON header)
@@ -962,7 +1061,7 @@ def _normalize_exam_questions(payload):
         if not isinstance(raw, dict):
             raise ValueError("Question payload must be objects.")
         q_type = (raw.get("type") or "").strip().lower()
-        if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill"):
+        if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill", "file"):
             raise ValueError(f"Unsupported question type '{q_type}'.")
         prompt = (raw.get("prompt") or "").strip()
         if not prompt:
@@ -1067,6 +1166,14 @@ def _normalize_exam_questions(payload):
             normalized["template"] = template
             normalized["answers"] = answers
             normalized["case_sensitive"] = bool(raw.get("case_sensitive"))
+        elif q_type == "file":
+            accept = (raw.get("accept") or ".zip").strip() or ".zip"
+            try:
+                max_mb = int(raw.get("max_mb") or 5)
+            except Exception:
+                max_mb = 5
+            normalized["accept"] = accept
+            normalized["max_mb"] = max(1, min(max_mb, UPLOAD_MAX_MB))
         else:  # code
             statement = (raw.get("statement") or "").strip()
             if not statement:
@@ -1497,6 +1604,8 @@ def _grade_exam_submission(exam, answers):
                         break
             if matches and answers_expected:
                 res["earned"] = points
+        elif qtype == "file":
+            res["manual_review"] = True
         elif qtype == "code":
             samples = q.get("samples") or []
             mode = q.get("mode") or "script"
@@ -3243,15 +3352,50 @@ def project_task_take(code, task_id):
         post_q_index = clamp_q(request.form.get("q_index", q_index))
         q_index = post_q_index
         current_question = questions[q_index] if total_questions else None
+        upload_error = None
         if current_question:
             qid = current_question.get("id")
             if qid:
                 field = f"answer_{qid}"
-                if current_question.get("type") == "multi":
+                qtype = current_question.get("type")
+                if qtype == "multi":
                     vals = request.form.getlist(field)
                     val = "||".join(vals)
+                elif qtype == "file":
+                    uploaded = request.files.get(field)
+                    existing_info = _extract_file_info(previous_answers.get(qid))
+                    if uploaded and uploaded.filename:
+                        file_info, error = _save_task_upload(submission, current_question, qid, uploaded, existing_info)
+                        if error:
+                            upload_error = error
+                            val = existing_info or ""
+                        else:
+                            val = file_info
+                    else:
+                        val = existing_info or ""
                 else:
                     val = request.form.get(field, "")
+                if upload_error:
+                    return render_template(
+                        "exams_take.html",
+                        exam=_task_exam_view(project, task),
+                        question=current_question,
+                        total_questions=total_questions,
+                        current_index=q_index,
+                        has_prev=(q_index > 0),
+                        has_next=(q_index + 1 < total_questions),
+                        can_submit=can_submit,
+                        preview=preview,
+                        already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                        previous_answers=previous_answers,
+                        time_remaining_seconds=None,
+                        user=current_user(),
+                        student_name=student.name,
+                        run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                        cooldown_seconds_remaining=cooldown_seconds_remaining,
+                        submission_id=submission.id,
+                        upload_error=upload_error,
+                    ), 400
                 draft_answers[qid] = val
                 previous_answers[qid] = val
                 _save_task_draft(task.id, draft_answers)
@@ -3287,6 +3431,7 @@ def project_task_take(code, task_id):
                     student_name=student.name,
                     run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
                     cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
@@ -3370,6 +3515,7 @@ def project_task_take(code, task_id):
         student_name=student.name,
         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
         cooldown_seconds_remaining=cooldown_seconds_remaining,
+        submission_id=submission.id,
     )
 
 @app.route("/student/projects/<code>/tasks/<int:task_id>/submission")
@@ -3400,6 +3546,32 @@ def project_task_submission_self_view(code, task_id):
         user=current_user(),
         student_name=student.name,
     )
+
+@app.route("/projects/submissions/<int:submission_id>/files/<question_id>")
+def project_task_file_download(submission_id, question_id):
+    submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if submission.student_id != student.id:
+            abort(403)
+        if submission.project and not _project_visible_to_student(submission.project, student):
+            abort(403)
+    questions = submission.task.questions_json if submission.task and isinstance(submission.task.questions_json, list) else []
+    question = next((q for q in questions if str(q.get("id")) == str(question_id)), None)
+    if not question or question.get("type") != "file":
+        abort(404)
+    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    file_info = _extract_file_info(answers.get(str(question_id)))
+    if not file_info:
+        abort(404)
+    full_path = _safe_upload_path(file_info.get("path"))
+    if not full_path or not os.path.isfile(full_path):
+        abort(404)
+    download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "submission.zip") or "submission.zip"
+    return send_file(full_path, as_attachment=True, download_name=download_name)
 
 @app.post("/projects/<code>/students/<int:student_id>/reset")
 @require_user()

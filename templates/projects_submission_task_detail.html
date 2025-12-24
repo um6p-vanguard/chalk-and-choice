@@ -46,6 +46,6 @@
 <div class="sp"></div>
 <div class="card">
   <h3 style="margin-top:0;">Student responses</h3>
-  {{ task_answers.render(questions, answers, logs_by_question) }}
+  {{ task_answers.render(questions, answers, logs_by_question, submission_id=submission.id) }}
 </div>
 {% endblock %}

@@ -29,6 +29,9 @@
   {% elif not can_submit %}
     <p class="text-danger">This exam is not currently accepting submissions.</p>
   {% endif %}
+  {% if upload_error %}
+    <p class="text-danger" style="margin-top:6px;">{{ upload_error }}</p>
+  {% endif %}
   {% if cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and exam.kind == "project_task" and not can_submit %}
     {% set hrs = cooldown_seconds_remaining // 3600 %}
     {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
@@ -43,7 +46,7 @@
     <div class="muted" data-timer-warning style="display:none;">Submitting...</div>
   </div>
   {% endif %}
-  <form method="post" data-exam-form>
+  <form method="post" data-exam-form enctype="multipart/form-data">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="q_index" value="{{ current_index }}">
     <input type="hidden" name="nav_action_auto" value="">
@@ -80,6 +83,31 @@
             <textarea name="answer_{{ q.id }}" data-markdown-answer="{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" style="width:100%; min-height:120px; max-height:240px;" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
             <div class="markdown-preview-header muted" style="font-size:0.9rem;">Preview (Markdown)</div>
             <div class="markdown-preview-body" data-markdown-preview="{{ q.id }}" style="white-space:pre-wrap; min-height:60px; padding:8px; border:1px solid #1f2937; border-radius:8px; background:#0b1220;"></div>
+          </div>
+        {% elif q.type == "file" %}
+          {% set existing_file = previous_answers.get(q.id) %}
+          {% set has_file = existing_file is mapping %}
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <div>
+              <input type="file" name="answer_{{ q.id }}" accept="{{ q.accept or '.zip' }}" {% if not can_submit %}disabled{% endif %}>
+              <div class="muted" style="margin-top:6px;">Accepted: {{ q.accept or '.zip' }} • Max size: {{ q.max_mb or 5 }} MB</div>
+            </div>
+            {% if has_file %}
+              <div style="padding:10px; border-radius:10px; border:1px solid #334155; background:#0b1220;">
+                <div class="muted" style="font-size:0.85rem;">Uploaded file</div>
+                <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <strong>{{ existing_file.original_name or existing_file.stored_name or "uploaded.zip" }}</strong>
+                  {% if existing_file.size %}
+                    <span class="muted">({{ (existing_file.size // 1024) }} KB)</span>
+                  {% endif %}
+                  {% if submission_id is defined %}
+                    <a class="btn" href="{{ url_for('project_task_file_download', submission_id=submission_id, question_id=q.id) }}">Download</a>
+                  {% endif %}
+                </div>
+              </div>
+            {% else %}
+              <p class="muted" style="margin:0;">No file uploaded yet.</p>
+            {% endif %}
           </div>
         {% elif q.type == "code" %}
           {% set raw_samples = q.samples or [] %}
