@@ -338,6 +338,82 @@ def _check_project_deadline_status(project):
     
     return result
 
+def _check_time_window_availability(project, now=None):
+    """Check if current time falls within project's allowed time windows."""
+    if not project.availability_enabled:
+        return {"available": True, "in_window": True}
+    
+    if now is None:
+        now = datetime.utcnow()
+    
+    # Parse availability rules
+    try:
+        rules = json.loads(project.availability_rules) if project.availability_rules else {}
+    except (json.JSONDecodeError, TypeError):
+        rules = {}
+    
+    if not rules:
+        return {"available": True, "in_window": True}
+    
+    # Get current day of week (lowercase): monday, tuesday, etc.
+    current_day = now.strftime("%A").lower()
+    current_time = now.strftime("%H:%M")
+    
+    day_rules = rules.get(current_day, [])
+    
+    if not day_rules:
+        # No rules for this day = not available
+        return {
+            "available": False,
+            "in_window": False,
+            "reason": f"Not available on {current_day.capitalize()}",
+            "next_window": _find_next_time_window(rules, now)
+        }
+    
+    # Check if current time is within any of the day's time windows
+    for window in day_rules:
+        start_time = window.get("start", "00:00")
+        end_time = window.get("end", "23:59")
+        
+        if start_time <= current_time <= end_time:
+            return {
+                "available": True,
+                "in_window": True,
+                "current_window": f"{start_time} - {end_time}"
+            }
+    
+    # Not in any window for today
+    return {
+        "available": False,
+        "in_window": False,
+        "reason": f"Outside available hours for {current_day.capitalize()}",
+        "day_windows": day_rules,
+        "next_window": _find_next_time_window(rules, now)
+    }
+
+def _find_next_time_window(rules, now):
+    """Find the next available time window."""
+    days_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    current_day_idx = (now.weekday()) % 7  # Monday = 0
+    current_time = now.strftime("%H:%M")
+    
+    # Check remaining windows today
+    current_day_name = days_order[current_day_idx]
+    if current_day_name in rules:
+        for window in rules[current_day_name]:
+            if window.get("start", "00:00") > current_time:
+                return f"{current_day_name.capitalize()} at {window['start']}"
+    
+    # Check next 7 days
+    for i in range(1, 8):
+        next_day_idx = (current_day_idx + i) % 7
+        next_day_name = days_order[next_day_idx]
+        if next_day_name in rules and rules[next_day_name]:
+            first_window = rules[next_day_name][0]
+            return f"{next_day_name.capitalize()} at {first_window.get('start', '00:00')}"
+    
+    return None
+
 def _detect_speed_anomaly(student, submission, task_duration_sec):
     """Detect if submission was completed suspiciously fast."""
     if task_duration_sec < WARNING_SPEED_THRESHOLD_SEC:
@@ -591,6 +667,14 @@ def render_md(text):
 @app.template_filter("markdown")
 def markdown_filter(text):
     return render_md(text)
+
+@app.template_filter("from_json")
+def from_json_filter(text):
+    """Parse JSON string to Python object for use in templates."""
+    try:
+        return json.loads(text) if text else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 @app.before_request
 def update_student_last_seen():
@@ -3389,6 +3473,22 @@ def projects_new():
             except Exception:
                 error = "Late penalty must be a number (0-100)."
         
+        # Parse time window availability
+        availability_enabled = request.form.get("availability_enabled") == "1"
+        availability_rules_json = None
+        
+        if availability_enabled and not error:
+            rules = {}
+            days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for day in days:
+                if request.form.get(f"day_{day}") == "1":
+                    start_time = request.form.get(f"time_{day}_start", "09:00")
+                    end_time = request.form.get(f"time_{day}_end", "17:00")
+                    rules[day] = [{"start": start_time, "end": end_time}]
+            
+            if rules:
+                availability_rules_json = json.dumps(rules)
+        
         if not error:
             code = gen_code(8)
             while Project.query.filter_by(code=code).first() is not None:
@@ -3406,6 +3506,8 @@ def projects_new():
                 due_at=due_at_val,
                 hard_deadline_at=hard_deadline_at_val,
                 late_penalty_percent=late_penalty_val,
+                availability_enabled=availability_enabled,
+                availability_rules=availability_rules_json,
             )
             db.session.add(project)
             db.session.commit()
@@ -3467,6 +3569,23 @@ def projects_update_meta(code):
     project.due_at = datetime.strptime(due_at_raw, "%Y-%m-%dT%H:%M") if due_at_raw else None
     project.hard_deadline_at = datetime.strptime(hard_deadline_raw, "%Y-%m-%dT%H:%M") if hard_deadline_raw else None
     project.late_penalty_percent = max(0.0, min(100.0, float(late_penalty_raw))) if late_penalty_raw else 0.0
+    
+    # Update time window availability
+    availability_enabled = request.form.get("availability_enabled") == "1"
+    project.availability_enabled = availability_enabled
+    
+    if availability_enabled:
+        rules = {}
+        days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        for day in days:
+            if request.form.get(f"day_{day}") == "1":
+                start_time = request.form.get(f"time_{day}_start", "09:00")
+                end_time = request.form.get(f"time_{day}_end", "17:00")
+                rules[day] = [{"start": start_time, "end": end_time}]
+        
+        project.availability_rules = json.dumps(rules) if rules else None
+    else:
+        project.availability_rules = None
     
     db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
@@ -3811,7 +3930,20 @@ def student_projects():
         # Check deadline status
         deadline_status = _check_project_deadline_status(project)
         
-        unlocked = _project_dependencies_met(project, student) and deadline_status["available"]
+        # Check time window availability
+        time_window_status = _check_time_window_availability(project)
+        
+        # Check if student has any submissions for this project
+        has_submissions = ProjectTaskSubmission.query.filter_by(
+            project_id=project.id,
+            student_id=student.id
+        ).first() is not None
+        
+        # If time windows are enabled and student has no submissions, hide project outside windows
+        if project.availability_enabled and not has_submissions and not time_window_status["available"]:
+            continue
+        
+        unlocked = _project_dependencies_met(project, student) and deadline_status["available"] and time_window_status["available"]
         completed = _project_completed(project, student) if unlocked else False
         tasks = []
         completed_count = 0
@@ -3850,6 +3982,7 @@ def student_projects():
             "required": _project_required_for_student(project, student),
             "dependencies": [dep.prerequisite.title for dep in (project.dependencies or []) if dep.prerequisite],
             "deadline_status": deadline_status,
+            "time_window_status": time_window_status,
         }
         if completed:
             completed_rows.append(row)
@@ -3944,6 +4077,12 @@ def project_task_take(code, task_id):
         # Redirect to projects page - the project will appear in locked section
         return redirect(url_for("student_projects"))
     
+    # Check time window availability
+    time_window_status = _check_time_window_availability(project)
+    if not time_window_status["available"]:
+        # Redirect to projects page - the project will appear in locked section
+        return redirect(url_for("student_projects"))
+    
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(
@@ -3996,6 +4135,35 @@ def project_task_take(code, task_id):
         # Check deadline before allowing submission
         deadline_status = _check_project_deadline_status(project)
         if not deadline_status["available"]:
+            return render_template(
+                "projects_take.html",
+                project=project,
+                task=task,
+                question=questions[q_index] if total_questions else None,
+                total_questions=total_questions,
+                current_index=q_index,
+                has_prev=(q_index > 0),
+                has_next=(q_index + 1 < total_questions),
+                can_submit=False,
+                preview=False,
+                already_submitted=False,
+                previous_answers=previous_answers,
+                time_remaining_seconds=None,
+                user=current_user(),
+                student_name=student.name,
+                run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                cooldown_seconds_remaining=0,
+                submission_id=submission.id,
+                upload_error=f"Cannot submit: {deadline_status['status_message']}",
+            ), 403
+        
+        # Check time window availability before allowing submission
+        time_window_status = _check_time_window_availability(project)
+        if not time_window_status["available"]:
+            error_message = time_window_status.get("reason", "Not available at this time")
+            if time_window_status.get("next_window"):
+                error_message += f". Next available: {time_window_status['next_window']}"
+            
             return render_template(
                 "projects_take.html",
                 project=project,

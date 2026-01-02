@@ -102,6 +102,9 @@
               {% else %}
                 <span style="color:#fde047;">In progress</span>
               {% endif %}
+              {% if row.time_window_status and not row.time_window_status.in_window %}
+                • <span style="color:#637FBE;">🕒 Time window: {{ row.time_window_status.reason }}</span>
+              {% endif %}
               {% if row.deadline_status.is_late %}
                 • <span style="color:#f87171;">⚠️ Late ({{ row.project.late_penalty_percent }}% penalty)</span>
               {% elif row.deadline_status.time_until_due %}
@@ -128,6 +131,13 @@
           {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project is optional for your group.</span></p>
+          {% endif %}
+          
+          {% if row.time_window_status and row.time_window_status.in_window and row.time_window_status.current_window %}
+            <div style="padding:10px; background:rgba(99, 127, 190, 0.1); border-left:3px solid #637FBE; border-radius:6px; margin:10px 0;">
+              <strong style="color:#637FBE;">🕒 Active Time Window</strong>
+              <p class="muted" style="margin:4px 0 0;">Available today: {{ row.time_window_status.current_window }}</p>
+            </div>
           {% endif %}
           
           {% if row.deadline_status %}
@@ -259,6 +269,20 @@
               {% else %}
                 <p class="muted" style="margin:4px 0;">
                   <span style="color:#f87171;">Locked — finish prerequisites.</span>
+                </p>
+              {% endif %}
+            {% elif row.time_window_status and not row.time_window_status.available %}
+              <p style="margin:4px 0;">
+                <span style="color:#637FBE;">🕒 {{ row.time_window_status.reason }}</span>
+              </p>
+              {% if row.time_window_status.next_window %}
+                <p class="muted" style="margin:4px 0 0;">Next available: {{ row.time_window_status.next_window }}</p>
+              {% elif row.time_window_status.day_windows %}
+                <p class="muted" style="margin:4px 0 0;">
+                  Available today: 
+                  {% for window in row.time_window_status.day_windows %}
+                    {{ window.start }} - {{ window.end }}{% if not loop.last %}, {% endif %}
+                  {% endfor %}
                 </p>
               {% endif %}
             {% else %}

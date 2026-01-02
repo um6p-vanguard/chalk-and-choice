@@ -260,6 +260,9 @@ class Project(db.Model):
     due_at = db.Column(db.DateTime, nullable=True)  # Soft deadline - late penalty applies after
     hard_deadline_at = db.Column(db.DateTime, nullable=True)  # Hard cutoff - no submissions after
     late_penalty_percent = db.Column(db.Float, nullable=False, default=0.0)  # Percentage deduction for late work
+    # Time window availability (recurring weekly schedule)
+    availability_enabled = db.Column(db.Boolean, nullable=False, default=False)  # Whether to enforce time windows
+    availability_rules = db.Column(db.Text, nullable=True)  # JSON: weekly schedule {day: [{start, end}]}
 
 # --------------------------
 # Blog
