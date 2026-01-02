@@ -255,6 +255,11 @@ class Project(db.Model):
     # Points awarded once upon first project completion; retry cooldown (minutes) applies after rejected submissions.
     points = db.Column(db.Integer, nullable=False, default=0)
     retry_cooldown_minutes = db.Column(db.Integer, nullable=False, default=0)
+    # Deadline fields
+    starts_at = db.Column(db.DateTime, nullable=True)  # When project becomes available
+    due_at = db.Column(db.DateTime, nullable=True)  # Soft deadline - late penalty applies after
+    hard_deadline_at = db.Column(db.DateTime, nullable=True)  # Hard cutoff - no submissions after
+    late_penalty_percent = db.Column(db.Float, nullable=False, default=0.0)  # Percentage deduction for late work
 
 # --------------------------
 # Blog
