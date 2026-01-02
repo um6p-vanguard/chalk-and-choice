@@ -19,14 +19,29 @@
           <th>Name</th>
           <th>Email</th>
           <th>Last seen</th>
+          <th>Status</th>
         </tr>
       </thead>
       <tbody>
         {% for s in students %}
         <tr>
-          <td>{{ s.name }}</td>
+          <td>
+            {{ s.name }}
+            {% if s.is_flagged %}
+            <span style="background: #637FBE; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px; font-weight: bold;">🚩 FLAGGED</span>
+            {% endif %}
+          </td>
           <td>{{ s.email }}</td>
           <td>{{ s.last_seen_at.strftime("%b %d %H:%M:%S") if s.last_seen_at else "—" }}</td>
+          <td>
+            {% if s.warnings_json and s.warnings_json|length > 0 %}
+            <a href="{{ url_for('warnings_student_detail', student_id=s.id) }}" style="color: #5775B8; text-decoration: none;">
+              ⚠️ {{ s.warnings_json|length }} warning(s)
+            </a>
+            {% else %}
+            <span style="color: #94a3b8;">✓ Clean</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

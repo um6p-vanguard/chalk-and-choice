@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Warning Details - {{ student.name }}{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 1200px; margin: 40px auto; padding: 0 20px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+    <div>
+      <h1 style="margin: 0;">{{ student.name }}</h1>
+      <p style="margin: 5px 0 0; color: #94a3b8;">{{ student.email }}</p>
+    </div>
+    {% if student.is_flagged %}
+    <span style="background: #637FBE; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
+      🚩 FLAGGED
+    </span>
+    {% endif %}
+  </div>
+
+  <!-- Flag Actions -->
+  <div class="card" style="margin-bottom: 30px;">
+    <h3 style="margin-top: 0;">Actions</h3>
+    
+    {% if student.is_flagged %}
+    <form method="post" action="{{ url_for('warnings_unflag_student', student_id=student.id) }}" style="display: inline-block; margin-right: 10px;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn" style="background: #637FBE; color: white; border: none;">
+        ✓ Remove Flag
+      </button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('warnings_flag_student', student_id=student.id) }}" style="display: inline-block; margin-right: 10px;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="text" name="notes" placeholder="Reason for flagging..." style="padding: 10px; width: 300px; margin-right: 10px;">
+      <button type="submit" class="btn" style="background: #637FBE; color: white; border: none;">
+        🚩 Flag Student
+      </button>
+    </form>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('warnings_clear_all', student_id=student.id) }}" 
+          style="display: inline-block;"
+          onsubmit="return confirm('Clear all warnings for this student?');">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <button type="submit" class="btn">
+        Clear All Warnings
+      </button>
+    </form>
+  </div>
+
+  <!-- Flag Notes -->
+  {% if student.flag_notes %}
+  <div style="background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; padding: 15px; margin-bottom: 30px; border-radius: 6px;">
+    <strong>Flag Notes:</strong> {{ student.flag_notes }}
+  </div>
+  {% endif %}
+
+  <!-- Add Manual Warning -->
+  <details class="card" style="margin-bottom: 30px;">
+    <summary style="cursor: pointer; font-weight: bold; user-select: none;">➕ Add Manual Warning</summary>
+    <form method="post" action="{{ url_for('warnings_add_manual', student_id=student.id) }}" style="margin-top: 15px;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      
+      <div style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 5px; font-weight: 500;">Type:</label>
+        <select name="type" style="padding: 8px; width: 100%;">
+          <option value="manual">Manual Review</option>
+          <option value="plagiarism">Plagiarism</option>
+          <option value="collaboration">Unauthorized Collaboration</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 5px; font-weight: 500;">Severity:</label>
+        <select name="severity" style="padding: 8px; width: 100%;">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom: 15px;">
+        <label style="display: block; margin-bottom: 5px; font-weight: 500;">Description:</label>
+        <textarea name="description" rows="3" required 
+                  style="padding: 8px; width: 100%; font-family: inherit;"
+                  placeholder="Describe the issue..."></textarea>
+      </div>
+
+      <button type="submit" class="btn btn-primary">
+        Add Warning
+      </button>
+    </form>
+  </details>
+
+  <!-- Warnings List -->
+  <div style="margin-bottom: 30px;">
+    <h2 style="margin-bottom: 20px;">⚠️ Warnings ({{ warnings|length }})</h2>
+    
+    {% if warnings %}
+    <div style="display: grid; gap: 15px;">
+      {% for warning in warnings|reverse %}
+      <div class="card" style="border-left: 4px solid {% if warning.severity == 'high' %}#637FBE{% elif warning.severity == 'medium' %}#5775B8{% else %}#94a3b8{% endif %};">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+          <div>
+            <strong style="font-size: 16px;">{{ warning.type|replace("_", " ")|title }}</strong>
+            {% if warning.auto_detected %}
+            <span style="background: rgba(99, 127, 190, 0.2); color: #637FBE; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">AUTO</span>
+            {% else %}
+            <span style="background: rgba(99, 127, 190, 0.1); color: #94a3b8; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">MANUAL</span>
+            {% endif %}
+          </div>
+          <span style="background: {% if warning.severity == 'high' %}rgba(99, 127, 190, 0.2){% elif warning.severity == 'medium' %}rgba(87, 117, 184, 0.2){% else %}rgba(148, 163, 184, 0.2){% endif %}; color: {% if warning.severity == 'high' %}#637FBE{% elif warning.severity == 'medium' %}#5775B8{% else %}#94a3b8{% endif %}; padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; text-transform: uppercase;">
+            {{ warning.severity }}
+          </span>
+        </div>
+        <p style="margin: 0 0 10px; color: #e5e7eb;">{{ warning.description }}</p>
+        <small style="color: #94a3b8;">{{ warning.timestamp[:19] if warning.timestamp else "N/A" }}</small>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="card">
+      <p style="margin: 0; color: #94a3b8; text-align: center;">
+        No warnings recorded for this student.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Submissions -->
+  <div style="margin-bottom: 30px;">
+    <h2 style="margin-bottom: 20px;">📝 Recent Exam Submissions</h2>
+    {% if exam_submissions %}
+    <div class="card">
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th style="text-align: left;">Exam</th>
+            <th style="text-align: center;">Score</th>
+            <th style="text-align: center;">Duration</th>
+            <th style="text-align: left;">Submitted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sub in exam_submissions %}
+          <tr>
+            <td>{{ sub.exam.title if sub.exam else "N/A" }}</td>
+            <td style="text-align: center;">{{ "%.1f"|format(sub.score) }} / {{ "%.1f"|format(sub.max_score) }}</td>
+            <td style="text-align: center;">
+              {% if sub.started_at and sub.submitted_at %}
+              {{ ((sub.submitted_at - sub.started_at).total_seconds() / 60)|round|int }} min
+              {% else %}
+              N/A
+              {% endif %}
+            </td>
+            <td>{{ sub.submitted_at.strftime("%Y-%m-%d %H:%M") if sub.submitted_at else "N/A" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card">
+      <p style="margin: 0; color: #94a3b8; text-align: center;">
+        No exam submissions found.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Project Task Submissions -->
+  <div style="margin-bottom: 30px;">
+    <h2 style="margin-bottom: 20px;">🎯 Recent Project Task Submissions</h2>
+    {% if task_submissions %}
+    <div class="card">
+      <table style="width: 100%;">
+        <thead>
+          <tr>
+            <th style="text-align: left;">Task</th>
+            <th style="text-align: center;">Status</th>
+            <th style="text-align: center;">Duration</th>
+            <th style="text-align: left;">Submitted</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sub in task_submissions %}
+          <tr>
+            <td>{{ sub.task.title if sub.task else "N/A" }}</td>
+            <td style="text-align: center;">
+              <span style="padding: 4px 10px; border-radius: 4px; font-size: 12px; font-weight: 500; background: rgba(99, 127, 190, 0.15); color: #637FBE;">
+                {{ sub.status|replace("_", " ")|title }}
+              </span>
+            </td>
+            <td style="text-align: center;">
+              {% if sub.started_at and sub.submitted_at %}
+              {{ ((sub.submitted_at - sub.started_at).total_seconds() / 60)|round|int }} min
+              {% else %}
+              N/A
+              {% endif %}
+            </td>
+            <td>{{ sub.submitted_at.strftime("%Y-%m-%d %H:%M") if sub.submitted_at else "N/A" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="card">
+      <p style="margin: 0; color: #94a3b8; text-align: center;">
+        No project task submissions found.
+      </p>
+    </div>
+    {% endif %}
+  </div>
+
+  <div style="margin-top: 30px;">
+    <a href="{{ url_for('warnings_list') }}" style="color: #94a3b8; text-decoration: none;">← Back to Warnings</a>
+  </div>
+</div>
+{% endblock %}

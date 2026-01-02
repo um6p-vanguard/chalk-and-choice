@@ -44,6 +44,10 @@ class Student(db.Model):
     last_login  = db.Column(db.DateTime, nullable=True)
     # Last activity timestamp (updated on each student request)
     last_seen_at = db.Column(db.DateTime, nullable=True)
+    # Warning system fields
+    warnings_json = db.Column(JSONText, nullable=True, default=list)  # List of warning records
+    is_flagged = db.Column(db.Boolean, nullable=False, default=False)  # Quick flag for cheater tag
+    flag_notes = db.Column(db.Text, nullable=True)  # Admin notes about the flag
 
     def set_password(self, pw): self.password_hash = generate_password_hash(pw)
     def check_password(self, pw): return check_password_hash(self.password_hash, pw)

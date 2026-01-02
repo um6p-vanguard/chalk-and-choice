@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Academic Integrity Warnings{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 1200px; margin: 40px auto; padding: 0 20px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+    <h1 style="margin: 0;">⚠️ Academic Integrity Warnings</h1>
+    <span style="color: #94a3b8; font-size: 14px;">
+      Access: Admins, Mentors, Instructors
+    </span>
+  </div>
+  <p style="color: #94a3b8; margin-bottom: 30px;">
+    Monitor and manage students with suspicious activity or academic integrity concerns.
+  </p>
+
+  {% if flagged_students %}
+  <div style="background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; padding: 20px; margin-bottom: 30px; border-radius: 6px;">
+    <h2 style="color: #e5e7eb; margin-top: 0;">🚩 Flagged Students ({{ flagged_students|length }})</h2>
+    <p style="margin-bottom: 15px; color: #94a3b8;">Students marked as potentially violating academic integrity policies.</p>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="background: rgba(99, 127, 190, 0.15); border-bottom: 2px solid #637FBE;">
+          <th style="padding: 10px; text-align: left;">Student</th>
+          <th style="padding: 10px; text-align: left;">Email</th>
+          <th style="padding: 10px; text-align: center;">Warnings</th>
+          <th style="padding: 10px; text-align: left;">Flag Notes</th>
+          <th style="padding: 10px; text-align: center;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in flagged_students %}
+        <tr style="border-bottom: 1px solid #334155;">
+          <td style="padding: 10px;">
+            <strong>{{ student.name }}</strong>
+          </td>
+          <td style="padding: 10px;">{{ student.email }}</td>
+          <td style="padding: 10px; text-align: center;">
+            <span style="background: #637FBE; color: white; padding: 4px 10px; border-radius: 12px; font-weight: bold;">
+              {{ (student.warnings_json|length) if student.warnings_json else 0 }}
+            </span>
+          </td>
+          <td style="padding: 10px;">
+            <small style="color: #94a3b8;">{{ student.flag_notes or "No notes" }}</small>
+          </td>
+          <td style="padding: 10px; text-align: center;">
+            <a href="{{ url_for('warnings_student_detail', student_id=student.id) }}" 
+               style="color: #637FBE; text-decoration: none; font-weight: 500;">View Details →</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if warned_students %}
+  <div style="background: rgba(99, 127, 190, 0.05); border-left: 4px solid #5775B8; padding: 20px; margin-bottom: 30px; border-radius: 6px;">
+    <h2 style="color: #e5e7eb; margin-top: 0;">⚡ Students with Warnings ({{ warned_students|length }})</h2>
+    <p style="margin-bottom: 15px; color: #94a3b8;">Students with suspicious activity detected but not yet flagged.</p>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="background: rgba(99, 127, 190, 0.08); border-bottom: 2px solid #5775B8;">
+          <th style="padding: 10px; text-align: left;">Student</th>
+          <th style="padding: 10px; text-align: left;">Email</th>
+          <th style="padding: 10px; text-align: center;">Warnings</th>
+          <th style="padding: 10px; text-align: left;">Most Recent</th>
+          <th style="padding: 10px; text-align: center;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in warned_students %}
+        {% set latest = student.warnings_json[-1] if student.warnings_json else {} %}
+        <tr style="border-bottom: 1px solid #334155;">
+          <td style="padding: 10px;">{{ student.name }}</td>
+          <td style="padding: 10px;">{{ student.email }}</td>
+          <td style="padding: 10px; text-align: center;">
+            <span style="background: #5775B8; color: white; padding: 4px 10px; border-radius: 12px; font-weight: bold;">
+              {{ student.warnings_json|length }}
+            </span>
+          </td>
+          <td style="padding: 10px;">
+            <small style="color: #94a3b8;">
+              {{ latest.type|replace("_", " ")|title if latest.type else "N/A" }}
+              {% if latest.timestamp %}
+                - {{ latest.timestamp[:10] }}
+              {% endif %}
+            </small>
+          </td>
+          <td style="padding: 10px; text-align: center;">
+            <a href="{{ url_for('warnings_student_detail', student_id=student.id) }}" 
+               style="color: #637FBE; text-decoration: none; font-weight: 500;">View Details →</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if not flagged_students and not warned_students %}
+  <div style="background: rgba(99, 127, 190, 0.05); border-left: 4px solid #637FBE; padding: 20px; border-radius: 6px;">
+    <p style="margin: 0; color: #94a3b8;">
+      ✓ No warnings or flags detected. All students are in good standing.
+    </p>
+  </div>
+  {% endif %}
+
+  <div style="margin-top: 30px;">
+    <a href="{{ url_for('index') }}" style="color: #94a3b8; text-decoration: none;">← Back to Dashboard</a>
+  </div>
+</div>
+{% endblock %}

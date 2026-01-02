@@ -3,6 +3,19 @@
 <div class="card">
   <h3 style="margin:0;">Pending task reviews</h3>
   <p class="muted" style="margin-top:6px;">Approve or reject submissions for tasks that require mentor feedback.</p>
+  
+  {% if flagged_count > 0 or warned_count > 0 %}
+  <div style="margin-top: 15px; padding: 10px; background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; border-radius: 6px;">
+    <strong>⚠️ Academic Integrity Alerts:</strong>
+    {% if flagged_count > 0 %}
+    <span style="color: #637FBE;">{{ flagged_count }} flagged student(s)</span>
+    {% endif %}
+    {% if warned_count > 0 %}
+    {% if flagged_count > 0 %} • {% endif %}
+    <span style="color: #5775B8;">{{ warned_count }} warned student(s)</span>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 <div class="sp"></div>
 <div class="card">
@@ -14,6 +27,15 @@
         {% for project in projects %}
           <option value="{{ project.id }}" {% if filter_project_id == project.id %}selected{% endif %}>{{ project.title }}</option>
         {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Warning filter</label>
+      <select name="warning_filter">
+        <option value="all" {% if filter_warning == 'all' %}selected{% endif %}>All students</option>
+        <option value="flagged" {% if filter_warning == 'flagged' %}selected{% endif %}>🚩 Flagged only ({{ flagged_count }})</option>
+        <option value="warned" {% if filter_warning == 'warned' %}selected{% endif %}>⚠️ Warned only ({{ warned_count }})</option>
+        <option value="clean" {% if filter_warning == 'clean' %}selected{% endif %}>✓ Clean only</option>
       </select>
     </div>
     <div>
@@ -31,6 +53,7 @@
         <tr>
           <th>Student</th>
           <th>Groups</th>
+          <th>Status</th>
           <th>Project</th>
           <th>Task</th>
           <th>Submitted</th>
@@ -39,13 +62,44 @@
       </thead>
       <tbody>
         {% for sub in submissions %}
-        <tr>
-          <td>{{ sub.student_name or "Unknown" }}</td>
+        <tr {% if sub.student and sub.student.is_flagged %}style="background: rgba(99, 127, 190, 0.05);"{% endif %}>
+          <td>
+            <strong>{{ sub.student_name or "Unknown" }}</strong>
+            {% if sub.student %}
+              {% if sub.student.is_flagged %}
+              <br><span style="background: #637FBE; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold;">🚩 FLAGGED</span>
+              {% elif sub.student.warnings_json and sub.student.warnings_json|length > 0 %}
+              <br><a href="{{ url_for('warnings_student_detail', student_id=sub.student.id) }}" 
+                     style="background: #5775B8; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; text-decoration: none; font-weight: bold;">
+                ⚠️ {{ sub.student.warnings_json|length }} warning(s)
+              </a>
+              {% endif %}
+            {% endif %}
+          </td>
           <td>
             {% if sub.student and sub.student.group_memberships %}
               {% for membership in sub.student.group_memberships %}
                 {{ membership.group.name if membership.group else "(deleted)" }}{% if not loop.last %}, {% endif %}
               {% endfor %}
+            {% else %}
+              <span class="muted">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if sub.student %}
+              {% if sub.student.is_flagged %}
+              <a href="{{ url_for('warnings_student_detail', student_id=sub.student.id) }}" 
+                 style="color: #d33; text-decoration: none; font-weight: bold;" title="View warning details">
+                🚩 Flagged
+              </a>
+              {% elif sub.student.warnings_json and sub.student.warnings_json|length > 0 %}
+              <a href="{{ url_for('warnings_student_detail', student_id=sub.student.id) }}" 
+                 style="color: #f59e0b; text-decoration: none; font-weight: bold;" title="View warning details">
+                ⚠️ Warned
+              </a>
+              {% else %}
+              <span style="color: #10b981;">✓ Clean</span>
+              {% endif %}
             {% else %}
               <span class="muted">—</span>
             {% endif %}
@@ -69,7 +123,17 @@
       </tbody>
     </table>
   {% else %}
-    <p class="muted" style="margin-top:12px;">No submissions need review.</p>
+    <p class="muted" style="margin-top:12px;">
+      {% if filter_warning == 'flagged' %}
+        No submissions from flagged students need review.
+      {% elif filter_warning == 'warned' %}
+        No submissions from warned students need review.
+      {% elif filter_warning == 'clean' %}
+        No submissions from clean students need review.
+      {% else %}
+        No submissions need review.
+      {% endif %}
+    </p>
   {% endif %}
 </div>
 {% endblock %}

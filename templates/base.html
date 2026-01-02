@@ -96,7 +96,7 @@
       <div><a href="{{ url_for('index') }}"><strong>SASE COMP101</strong></a></div>
       <div class="row">
         {% if user %}
-          <span>Instructor{% if user.role == 'admin' %}/Admin{% endif %}: <strong>{{ user.name }}</strong></span>
+          <span>{% if user.role == 'admin' %}Admin{% elif user.role == 'mentor' %}Mentor{% else %}Instructor{% endif %}: <strong>{{ user.name }}</strong></span>
           <a href="{{ url_for('blog_list') }}" style="margin-left:10px;">Blog</a>
           <a href="{{ url_for('forms_list') }}" style="margin-left:10px;">Forms</a>
           <a href="{{ url_for('exams_list') }}" style="margin-left:10px;">Exams</a>

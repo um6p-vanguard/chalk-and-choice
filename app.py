@@ -53,6 +53,12 @@ TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
 LOG_SESSION_GAP_SEC = 10 * 60
 LOG_ACTIVITY_UPDATE_SEC = 60
 
+# Warning system configuration
+WARNING_SPEED_THRESHOLD_SEC = 60  # Completing task in less than this triggers warning
+WARNING_IP_CHANGE_ENABLED = True  # Detect IP changes during exam/project
+WARNING_SIMILARITY_THRESHOLD = 0.90  # Code similarity threshold (0-1)
+WARNING_AUTO_FLAG_COUNT = 3  # Auto-flag student after this many warnings
+
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
     "required": ["tasks"],
@@ -260,6 +266,184 @@ def _touch_student_log_session(student, now):
         ended_at=now,
     )
     db.session.add(new_session)
+
+# --------------------------------------------------------------------
+# Warning System Helpers
+# --------------------------------------------------------------------
+
+def _add_warning(student, warning_type, description, severity="medium", auto_detected=True):
+    """Add a warning to a student's record."""
+    if not student:
+        return
+    warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    warning = {
+        "type": warning_type,
+        "description": description,
+        "severity": severity,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "auto_detected": auto_detected,
+    }
+    warnings.append(warning)
+    student.warnings_json = warnings
+    
+    # Auto-flag if threshold reached
+    if len(warnings) >= WARNING_AUTO_FLAG_COUNT and not student.is_flagged:
+        student.is_flagged = True
+        student.flag_notes = f"Auto-flagged after {len(warnings)} warnings"
+
+def _detect_speed_anomaly(student, submission, task_duration_sec):
+    """Detect if submission was completed suspiciously fast."""
+    if task_duration_sec < WARNING_SPEED_THRESHOLD_SEC:
+        _add_warning(
+            student,
+            "speed_anomaly",
+            f"Completed in {task_duration_sec:.1f} seconds (threshold: {WARNING_SPEED_THRESHOLD_SEC}s)",
+            severity="high"
+        )
+        return True
+    return False
+
+def _detect_ip_change(student, submission, current_ip):
+    """Detect IP address changes during exam/project."""
+    if not WARNING_IP_CHANGE_ENABLED or not current_ip:
+        return False
+    
+    if hasattr(submission, 'ip_address') and submission.ip_address:
+        if submission.ip_address != current_ip:
+            _add_warning(
+                student,
+                "ip_change",
+                f"IP changed from {submission.ip_address} to {current_ip}",
+                severity="medium"
+            )
+            return True
+    return False
+
+def _calculate_code_similarity(code1, code2):
+    """Simple token-based code similarity (Jaccard similarity)."""
+    if not code1 or not code2:
+        return 0.0
+    
+    # Normalize whitespace and tokenize
+    tokens1 = set(re.findall(r'\w+', str(code1).lower()))
+    tokens2 = set(re.findall(r'\w+', str(code2).lower()))
+    
+    if not tokens1 or not tokens2:
+        return 0.0
+    
+    intersection = len(tokens1.intersection(tokens2))
+    union = len(tokens1.union(tokens2))
+    
+    return intersection / union if union > 0 else 0.0
+
+def _detect_code_similarity(student, submission, question_id, submitted_code):
+    """Detect similar code submissions from other students."""
+    if not submitted_code or len(str(submitted_code).strip()) < 20:
+        return False
+    
+    # Get other students' submissions for same task/exam
+    similar_found = False
+    
+    if hasattr(submission, 'exam_id'):  # Exam submission
+        other_submissions = ExamSubmission.query.filter(
+            ExamSubmission.exam_id == submission.exam_id,
+            ExamSubmission.student_id != student.id,
+            ExamSubmission.status == "submitted"
+        ).all()
+        
+        for other_sub in other_submissions:
+            if not isinstance(other_sub.answers_json, dict):
+                continue
+            other_code = other_sub.answers_json.get(question_id)
+            if not other_code:
+                continue
+            
+            similarity = _calculate_code_similarity(submitted_code, other_code)
+            if similarity >= WARNING_SIMILARITY_THRESHOLD:
+                other_student = Student.query.get(other_sub.student_id)
+                other_name = other_student.name if other_student else "Unknown"
+                _add_warning(
+                    student,
+                    "code_similarity",
+                    f"Code {similarity*100:.0f}% similar to {other_name} (Question: {question_id})",
+                    severity="high"
+                )
+                similar_found = True
+                break
+    
+    elif hasattr(submission, 'task_id'):  # Project task submission
+        other_submissions = ProjectTaskSubmission.query.filter(
+            ProjectTaskSubmission.task_id == submission.task_id,
+            ProjectTaskSubmission.student_id != student.id,
+            ProjectTaskSubmission.status.in_(["submitted", "accepted", "pending_review"])
+        ).all()
+        
+        for other_sub in other_submissions:
+            if not isinstance(other_sub.answers_json, dict):
+                continue
+            other_code = other_sub.answers_json.get(question_id)
+            if not other_code:
+                continue
+            
+            similarity = _calculate_code_similarity(submitted_code, other_code)
+            if similarity >= WARNING_SIMILARITY_THRESHOLD:
+                other_student = Student.query.get(other_sub.student_id)
+                other_name = other_student.name if other_student else "Unknown"
+                _add_warning(
+                    student,
+                    "code_similarity",
+                    f"Code {similarity*100:.0f}% similar to {other_name} (Question: {question_id})",
+                    severity="high"
+                )
+                similar_found = True
+                break
+    
+    return similar_found
+
+def _detect_paste_pattern(student, answers_data):
+    """Detect if large amounts of code were likely pasted (heuristic: very long answers)."""
+    if not isinstance(answers_data, dict):
+        return False
+    
+    for qid, answer in answers_data.items():
+        if isinstance(answer, str) and len(answer) > 500:
+            # Very long answer - possible paste
+            lines = answer.count('\n')
+            if lines > 20:  # More than 20 lines
+                _add_warning(
+                    student,
+                    "paste_pattern",
+                    f"Large code block detected ({lines} lines, {len(answer)} chars) in question {qid}",
+                    severity="low"
+                )
+                return True
+    return False
+
+def _run_cheating_detection(student, submission, current_ip=None):
+    """Run all cheating detection algorithms on a submission."""
+    if not student or not submission:
+        return
+    
+    # Speed detection
+    if hasattr(submission, 'started_at') and hasattr(submission, 'submitted_at'):
+        if submission.started_at and submission.submitted_at:
+            duration = (submission.submitted_at - submission.started_at).total_seconds()
+            _detect_speed_anomaly(student, submission, duration)
+    
+    # IP change detection
+    if current_ip:
+        _detect_ip_change(student, submission, current_ip)
+    
+    # Paste pattern detection
+    if hasattr(submission, 'answers_json'):
+        _detect_paste_pattern(student, submission.answers_json)
+    
+    # Code similarity detection (for code questions)
+    if hasattr(submission, 'answers_json') and isinstance(submission.answers_json, dict):
+        for qid, answer in submission.answers_json.items():
+            if isinstance(answer, str) and len(answer) > 50:
+                # Likely code answer
+                _detect_code_similarity(student, submission, qid, answer)
 
 # --------------------------------------------------------------------
 # CSRF helpers (form + JSON header)
@@ -2474,6 +2658,8 @@ def exam_take(code):
             submission.score = grade_score
             submission.max_score = grade_total
             submission.grading_json = grade_details
+            # Run cheating detection
+            _run_cheating_detection(student, submission, request.remote_addr)
             db.session.commit()
             _clear_exam_draft(exam.id)
             return render_template(
@@ -2558,6 +2744,8 @@ def exam_take(code):
             submission.score = grade_score
             submission.max_score = grade_total
             submission.grading_json = grade_details
+            # Run cheating detection
+            _run_cheating_detection(student, submission, request.remote_addr)
             db.session.commit()
             _clear_exam_draft(exam.id)
             return render_template(
@@ -3816,6 +4004,8 @@ def project_task_take(code, task_id):
                         submission.status = "rejected"
                 else:
                     submission.status = "submitted"
+            # Run cheating detection
+            _run_cheating_detection(student, submission, request.remote_addr)
             if submission.status == "accepted":
                 if _project_completed(project, student):
                     _award_project_points_if_needed(project, student)
@@ -4138,19 +4328,56 @@ def projects_reviews():
     user = current_user()
     sort_mode = request.args.get("sort", "newest")
     project_filter = request.args.get("project_id")
+    warning_filter = request.args.get("warning_filter", "all")  # all, flagged, warned, clean
+    
     try:
         project_filter_id = int(project_filter) if project_filter else None
     except ValueError:
         project_filter_id = None
+    
     query = ProjectTaskSubmission.query.filter_by(status="pending_review")
+    
     if project_filter_id:
         query = query.filter_by(project_id=project_filter_id)
+    
+    # Apply warning filter
+    if warning_filter == "flagged":
+        # Only flagged students
+        flagged_ids = [s.id for s in Student.query.filter_by(is_flagged=True).all()]
+        if flagged_ids:
+            query = query.filter(ProjectTaskSubmission.student_id.in_(flagged_ids))
+        else:
+            query = query.filter(ProjectTaskSubmission.student_id == -1)  # No results
+    elif warning_filter == "warned":
+        # Students with warnings but not flagged
+        warned_students = Student.query.filter(Student.warnings_json != None).all()
+        warned_ids = [s.id for s in warned_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0]
+        if warned_ids:
+            query = query.filter(ProjectTaskSubmission.student_id.in_(warned_ids))
+        else:
+            query = query.filter(ProjectTaskSubmission.student_id == -1)  # No results
+    elif warning_filter == "clean":
+        # Only students with no warnings and not flagged
+        warned_or_flagged = Student.query.filter(
+            db.or_(Student.is_flagged == True, Student.warnings_json != None)
+        ).all()
+        problematic_ids = [s.id for s in warned_or_flagged if s.is_flagged or (s.warnings_json and len(s.warnings_json) > 0)]
+        if problematic_ids:
+            query = query.filter(~ProjectTaskSubmission.student_id.in_(problematic_ids))
+    
     if sort_mode == "oldest":
         query = query.order_by(ProjectTaskSubmission.submitted_at.asc())
     else:
         sort_mode = "newest"
         query = query.order_by(ProjectTaskSubmission.submitted_at.desc())
+    
     submissions = query.all()
+    
+    # Get warning counts for statistics
+    flagged_count = Student.query.filter_by(is_flagged=True).count()
+    warned_students = Student.query.filter(Student.warnings_json != None).all()
+    warned_count = sum(1 for s in warned_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0)
+    
     # Mentors can see all pending reviews, regardless of group assignments.
     projects = Project.query.order_by(Project.title.asc()).all()
     return render_template(
@@ -4158,6 +4385,9 @@ def projects_reviews():
         submissions=submissions,
         filter_sort=sort_mode,
         filter_project_id=project_filter_id,
+        filter_warning=warning_filter,
+        flagged_count=flagged_count,
+        warned_count=warned_count,
         projects=projects,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -4364,6 +4594,115 @@ def student_grades():
         user=current_user(),
         student_name=student.name,
     )
+
+# --------------------------------------------------------------------
+# Warning System / Academic Integrity
+# --------------------------------------------------------------------
+
+@app.route("/warnings")
+@require_user()
+def warnings_list():
+    """View all students with warnings or flags."""
+    # Get all flagged students
+    flagged = Student.query.filter_by(is_flagged=True).order_by(Student.name.asc()).all()
+    
+    # Get students with warnings but not flagged
+    all_students = Student.query.filter(Student.warnings_json != None).order_by(Student.name.asc()).all()
+    warned = [s for s in all_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0]
+    
+    return render_template(
+        "warnings_list.html",
+        flagged_students=flagged,
+        warned_students=warned,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/warnings/student/<int:student_id>")
+@require_user()
+def warnings_student_detail(student_id):
+    """View detailed warnings for a specific student."""
+    student = Student.query.get_or_404(student_id)
+    warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    
+    # Get student's submissions for context
+    exam_submissions = ExamSubmission.query.filter_by(student_id=student.id).order_by(ExamSubmission.submitted_at.desc()).limit(20).all()
+    task_submissions = ProjectTaskSubmission.query.filter_by(student_id=student.id).order_by(ProjectTaskSubmission.submitted_at.desc()).limit(20).all()
+    
+    return render_template(
+        "warnings_detail.html",
+        student=student,
+        warnings=warnings,
+        exam_submissions=exam_submissions,
+        task_submissions=task_submissions,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/warnings/student/<int:student_id>/flag")
+@require_user()
+def warnings_flag_student(student_id):
+    """Manually flag a student."""
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    student = Student.query.get_or_404(student_id)
+    notes = (request.form.get("notes") or "").strip()
+    
+    student.is_flagged = True
+    student.flag_notes = notes or "Manually flagged by instructor"
+    db.session.commit()
+    
+    return redirect(url_for("warnings_student_detail", student_id=student.id))
+
+@app.post("/warnings/student/<int:student_id>/unflag")
+@require_user()
+def warnings_unflag_student(student_id):
+    """Remove flag from a student."""
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    student = Student.query.get_or_404(student_id)
+    student.is_flagged = False
+    student.flag_notes = None
+    db.session.commit()
+    
+    return redirect(url_for("warnings_student_detail", student_id=student.id))
+
+@app.post("/warnings/student/<int:student_id>/add")
+@require_user()
+def warnings_add_manual(student_id):
+    """Manually add a warning to a student."""
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    student = Student.query.get_or_404(student_id)
+    warning_type = (request.form.get("type") or "manual").strip()
+    description = (request.form.get("description") or "").strip()
+    severity = (request.form.get("severity") or "medium").strip()
+    
+    if not description:
+        abort(400, "Description is required")
+    
+    _add_warning(student, warning_type, description, severity=severity, auto_detected=False)
+    db.session.commit()
+    
+    return redirect(url_for("warnings_student_detail", student_id=student.id))
+
+@app.post("/warnings/student/<int:student_id>/clear")
+@require_user()
+def warnings_clear_all(student_id):
+    """Clear all warnings for a student."""
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    student = Student.query.get_or_404(student_id)
+    student.warnings_json = []
+    student.is_flagged = False
+    student.flag_notes = None
+    db.session.commit()
+    
+    return redirect(url_for("warnings_student_detail", student_id=student.id))
 
 @app.route("/thanks")
 def thanks():
