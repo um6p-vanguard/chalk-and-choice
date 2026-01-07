@@ -66,8 +66,8 @@
       <input type="number" min="0" name="retry_cooldown_minutes" value="{{ project.retry_cooldown_minutes }}" style="flex:1; min-width:160px;">
     </div>
     
-    <div style="margin-top: 15px; padding: 15px; background: rgba(99, 127, 190, 0.05); border-radius: 6px;">
-      <h4 style="margin: 0 0 10px;">⏰ Project Deadlines</h4>
+    <div style="margin-top: 15px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <h4 style="margin: 0 0 10px;">Project Deadlines</h4>
       
       <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
         <label style="min-width:140px;">Starts at</label>
@@ -94,9 +94,9 @@
       <small class="muted" style="display:block; margin-left:150px;">Percentage deducted for late submissions (0-100)</small>
     </div>
     
-    <div style="margin-top: 15px; padding: 15px; background: rgba(99, 127, 190, 0.05); border-radius: 6px;">
+    <div style="margin-top: 15px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
-        <h4 style="margin: 0;">🕒 Time Window Availability</h4>
+        <h4 style="margin: 0;">Time Window Availability</h4>
         <label style="display: flex; align-items: center; gap: 6px; margin: 0;">
           <input type="checkbox" name="availability_enabled" value="1" id="availability-enabled" {% if project.availability_enabled %}checked{% endif %}>
           <span style="font-weight: normal;">Enable time restrictions</span>

@@ -29,8 +29,8 @@
     <label>Retry cooldown (minutes) after rejection</label>
     <input type="number" min="0" name="retry_cooldown_minutes" placeholder="0 = no cooldown" value="{{ form_data.retry_cooldown_minutes }}">
 
-    <div style="margin-top: 20px; padding: 15px; background: rgba(99, 127, 190, 0.05); border-radius: 6px;">
-      <h4 style="margin: 0 0 15px;">⏰ Project Deadlines (Optional)</h4>
+    <div style="margin-top: 20px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <h4 style="margin: 0 0 15px;">Project Deadlines (Optional)</h4>
       
       <label>Starts at</label>
       <input type="datetime-local" name="starts_at" value="{{ form_data.starts_at }}">
@@ -49,9 +49,9 @@
       <small class="muted">Percentage deducted from score for late submissions (0-100)</small>
     </div>
 
-    <div style="margin-top: 20px; padding: 15px; background: rgba(99, 127, 190, 0.05); border-radius: 6px;">
+    <div style="margin-top: 20px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
       <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
-        <h4 style="margin: 0;">🕒 Time Window Availability</h4>
+        <h4 style="margin: 0;">Time Window Availability</h4>
         <label style="display: flex; align-items: center; gap: 6px; margin: 0;">
           <input type="checkbox" name="availability_enabled" value="1" {% if form_data.availability_enabled %}checked{% endif %}>
           <span style="font-weight: normal;">Enable time restrictions</span>

@@ -20,6 +20,7 @@ from models import (db, Student, User, Form,
 import qrcode
 from sqlalchemy import func
 from sqlalchemy.orm import subqueryload
+from sqlalchemy.orm.attributes import flag_modified
 
 # --------------------------------------------------------------------
 # Utils
@@ -285,6 +286,7 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
     }
     warnings.append(warning)
     student.warnings_json = warnings
+    flag_modified(student, 'warnings_json')
     
     # Auto-flag if threshold reached
     if len(warnings) >= WARNING_AUTO_FLAG_COUNT and not student.is_flagged:
@@ -4327,6 +4329,8 @@ def project_task_take(code, task_id):
                     submission.status = "submitted"
             # Run cheating detection
             _run_cheating_detection(student, submission, request.remote_addr)
+            print("----------- Checking request data:", request)
+            print("------------ Request ip:", request.remote_addr)
             if submission.status == "accepted":
                 if _project_completed(project, student):
                     _award_project_points_if_needed(project, student)
