@@ -213,11 +213,17 @@ def _save_task_resource(task, file_storage, existing_info=None):
     if not filename:
         return None, "No file selected."
     original_name = os.path.basename(filename)
+    
+    # Log file details for debugging
+    print(f"DEBUG: Uploading task resource - Task ID: {task.id}, File: {original_name}")
+    
     try:
         file_storage.stream.seek(0, os.SEEK_END)
         size = file_storage.stream.tell()
         file_storage.stream.seek(0)
-    except Exception:
+        print(f"DEBUG: File size: {size} bytes")
+    except Exception as e:
+        print(f"DEBUG: Error reading file size: {e}")
         size = None
     if size is not None and size > TASK_RESOURCE_MAX_BYTES:
         return None, f"File must be {TASK_RESOURCE_MAX_MB} MB or smaller."
@@ -233,8 +239,12 @@ def _save_task_resource(task, file_storage, existing_info=None):
     full_path = os.path.join(upload_dir, stored_name)
     try:
         file_storage.save(full_path)
-    except Exception:
-        return None, "Unable to save file."
+    except PermissionError:
+        return None, "Unable to save file: Permission denied. Check server permissions."
+    except OSError as e:
+        return None, f"Unable to save file: {str(e)}"
+    except Exception as e:
+        return None, f"Unable to save file: {str(e)}"
     rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
     file_info = {
         "original_name": original_name or safe_name,
@@ -3832,6 +3842,7 @@ def projects_task_edit(code, task_id):
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     resource_upload = request.files.get("resource_file")
+    remove_resource = request.form.get("remove_resource") == "1"
     if request.method == "POST":
         form_data = {
             "title": request.form.get("title") or "",
@@ -3884,10 +3895,18 @@ def projects_task_edit(code, task_id):
             task.required = form_data["required"]
             task.auto_grade = form_data["auto_grade"]
             task.requires_review = form_data["requires_review"]
-            if resource_upload and resource_upload.filename:
+            
+            # Handle resource file removal
+            if remove_resource:
+                if task.resource_file:
+                    _remove_uploaded_file(task.resource_file)
+                    task.resource_file = None
+            # Handle resource file upload (only if not removing and file provided)
+            elif resource_upload and resource_upload.filename:
                 existing_info = _extract_file_info(task.resource_file)
                 file_info, upload_error = _save_task_resource(task, resource_upload, existing_info)
                 if upload_error:
+                    db.session.rollback()
                     error = upload_error
                 else:
                     task.resource_file = file_info
