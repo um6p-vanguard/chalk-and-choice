@@ -2083,10 +2083,17 @@ UNSAFE_BUILTINS = {
     "breakpoint",
 }
 
+# Essential dunder methods needed for Python to function properly
+REQUIRED_DUNDER_BUILTINS = {
+    "__build_class__",  # Required for class definitions
+    "__name__",         # Module name
+}
+
 def build_safe_builtins():
     safe = {}
     for name in dir(builtins):
-        if name.startswith("_"):
+        # Skip private methods except those explicitly required
+        if name.startswith("_") and name not in REQUIRED_DUNDER_BUILTINS:
             continue
         if name in UNSAFE_BUILTINS:
             continue
