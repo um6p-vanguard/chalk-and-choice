@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Attendance</h3>
+      <p class="muted" style="margin-top:6px;">Browse and update attendance sheets.</p>
+    </div>
+    <a class="btn btn-primary" href="{{ url_for('attendance_new') }}">New sheet</a>
+  </div>
+  {% if message %}
+    <p class="muted" style="margin-top:8px;">{{ message }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="text-danger" style="margin-top:8px;">{{ error }}</p>
+  {% endif %}
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <form method="get" action="{{ url_for('attendance_list') }}">
+    <label>Group</label>
+    <select name="group_id">
+      <option value="all" {% if filter_group == "all" %}selected{% endif %}>All groups</option>
+      {% for group in groups %}
+        <option value="{{ group.id }}" {% if filter_group and filter_group|int == group.id %}selected{% endif %}>
+          {{ group.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <label>Date</label>
+    <input type="date" name="date" value="{{ filter_date }}">
+    <div class="row" style="justify-content:flex-end; margin-top:12px;">
+      <button class="btn" type="submit">Filter</button>
+      <a class="btn" href="{{ url_for('attendance_list') }}">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  {% if sheet_rows %}
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Group</th>
+          <th>Recorded by</th>
+          <th>Summary</th>
+          <th style="width:120px;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in sheet_rows %}
+        <tr>
+          <td>{{ row.sheet.date.strftime("%Y-%m-%d") }}</td>
+          <td>{{ row.group_label }}</td>
+          <td>{{ row.sheet.creator.name if row.sheet.creator else "N/A" }}</td>
+          <td>
+            {{ row.counts.present }} present,
+            {{ row.counts.late }} late,
+            {{ row.counts.absent }} absent
+            <span class="muted">/ {{ row.counts.total }} total</span>
+          </td>
+          <td style="text-align:right;">
+            <a class="btn" href="{{ url_for('attendance_sheet', sheet_id=row.sheet.id) }}">Open</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:0;">No attendance sheets yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">New attendance sheet</h3>
+      <p class="muted" style="margin-top:6px;">Pick a group and date to start taking attendance.</p>
+    </div>
+    <a class="btn" href="{{ url_for('attendance_list') }}">Browse attendance</a>
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  {% if error %}
+    <p class="text-danger" style="margin-top:0;">{{ error }}</p>
+  {% endif %}
+  {% if groups %}
+    <form method="post" action="{{ url_for('attendance_new') }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Group</label>
+      <select name="group_id" required>
+        <option value="">Select a group</option>
+        {% for group in groups %}
+          <option value="{{ group.id }}" {% if form_data.group_id and form_data.group_id|int == group.id %}selected{% endif %}>
+            {{ group.name }}
+          </option>
+        {% endfor %}
+      </select>
+      <label>Date</label>
+      <input type="date" name="date" value="{{ form_data.date }}" required>
+      <div class="row" style="justify-content:flex-end; margin-top:12px;">
+        <button class="btn btn-primary" type="submit">Start sheet</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="muted" style="margin:0;">No groups found. Create a group first.</p>
+  {% endif %}
+</div>
+{% endblock %}

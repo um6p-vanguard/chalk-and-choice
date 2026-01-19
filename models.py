@@ -93,6 +93,36 @@ class StudentGroupReviewer(db.Model):
         UniqueConstraint('user_id', 'group_id', name='uq_group_reviewer'),
     )
 
+class AttendanceSheet(db.Model):
+    __tablename__ = "attendance_sheets"
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True)
+    group_name = db.Column(db.String(120), nullable=True)
+    date = db.Column(db.Date, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+
+    group = db.relationship('StudentGroup')
+    creator = db.relationship('User')
+
+class AttendanceEntry(db.Model):
+    __tablename__ = "attendance_entries"
+    id = db.Column(db.Integer, primary_key=True)
+    sheet_id = db.Column(db.Integer, db.ForeignKey('attendance_sheets.id', ondelete="CASCADE"), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), nullable=True)
+    student_name = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(16), nullable=False, default="present")
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    sheet = db.relationship('AttendanceSheet', backref=db.backref('entries', cascade="all,delete-orphan"))
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        UniqueConstraint('sheet_id', 'student_id', name='uq_attendance_sheet_student'),
+    )
+
 class Leaderboard(db.Model):
     __tablename__ = "leaderboards"
     id = db.Column(db.Integer, primary_key=True)

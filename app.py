@@ -10,12 +10,12 @@ from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 from markupsafe import Markup, escape
 
-from models import (db, Student, User, Form, 
+from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
-                    StudentLogSession,
+                    AttendanceSheet, AttendanceEntry, StudentLogSession,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func
@@ -31,6 +31,14 @@ def parse_dt_local(s):
     # Expect 'YYYY-MM-DDTHH:MM' (no timezone). Treat as UTC.
     try:
         return datetime.strptime(s.strip(), "%Y-%m-%dT%H:%M")
+    except Exception:
+        return None
+
+def _parse_date_only(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
     except Exception:
         return None
 
@@ -58,6 +66,13 @@ WARNING_SPEED_THRESHOLD_SEC = 60  # Completing task in less than this triggers w
 WARNING_IP_CHANGE_ENABLED = True  # Detect IP changes during exam/project
 WARNING_SIMILARITY_THRESHOLD = 0.90  # Code similarity threshold (0-1)
 WARNING_AUTO_FLAG_COUNT = 3  # Auto-flag student after this many warnings
+
+ATTENDANCE_STATUS_OPTIONS = [
+    ("present", "Present"),
+    ("late", "Late"),
+    ("absent", "Absent"),
+]
+ATTENDANCE_STATUS_VALUES = {value for value, _ in ATTENDANCE_STATUS_OPTIONS}
 
 PROJECT_TASKS_SCHEMA = {
     "type": "object",
@@ -3091,6 +3106,198 @@ def groups_list():
         students=students,
         mentors=mentors,
         form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+# --------------------------------------------------------------------
+# Attendance
+# --------------------------------------------------------------------
+
+def _attendance_group_label(sheet):
+    if sheet.group and sheet.group.name:
+        return sheet.group.name
+    if sheet.group_name:
+        return sheet.group_name
+    return "Unknown group"
+
+def _attendance_counts(entries):
+    counts = {"present": 0, "late": 0, "absent": 0, "total": len(entries)}
+    for entry in entries:
+        status = entry.status or "present"
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+@app.route("/attendance")
+@require_user()
+def attendance_list():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    message = session.pop("attendance_status", None)
+    error = session.pop("attendance_error", None)
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    filter_group = request.args.get("group_id") or "all"
+    filter_date = request.args.get("date") or ""
+    query = AttendanceSheet.query.options(
+        subqueryload(AttendanceSheet.entries),
+        subqueryload(AttendanceSheet.group),
+        subqueryload(AttendanceSheet.creator),
+    )
+    if filter_group and filter_group != "all":
+        try:
+            group_id = int(filter_group)
+        except ValueError:
+            group_id = None
+        if group_id:
+            query = query.filter_by(group_id=group_id)
+    if filter_date:
+        date_value = _parse_date_only(filter_date)
+        if date_value:
+            query = query.filter_by(date=date_value)
+    sheets = query.order_by(AttendanceSheet.date.desc(), AttendanceSheet.id.desc()).all()
+    sheet_rows = []
+    for sheet in sheets:
+        entries = sheet.entries or []
+        counts = _attendance_counts(entries)
+        sheet_rows.append({
+            "sheet": sheet,
+            "group_label": _attendance_group_label(sheet),
+            "counts": counts,
+        })
+    return render_template(
+        "attendance_list.html",
+        sheet_rows=sheet_rows,
+        groups=groups,
+        filter_group=filter_group,
+        filter_date=filter_date,
+        message=message,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/attendance/new", methods=["GET", "POST"])
+@require_user()
+def attendance_new():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    default_date = datetime.utcnow().date().isoformat()
+    form_data = {
+        "group_id": request.form.get("group_id") or "",
+        "date": request.form.get("date") or default_date,
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        try:
+            group_id = int(form_data["group_id"])
+        except Exception:
+            group_id = 0
+        if not group_id:
+            error = "Group selection is required."
+        date_value = _parse_date_only(form_data["date"])
+        if not date_value and not error:
+            error = "Valid date is required."
+        group = StudentGroup.query.get(group_id) if group_id else None
+        if not error and not group:
+            error = "Selected group was not found."
+        if not error:
+            existing = AttendanceSheet.query.filter_by(group_id=group.id, date=date_value).first()
+            if existing:
+                session["attendance_status"] = "Attendance sheet already exists. You can edit it below."
+                return redirect(url_for("attendance_sheet", sheet_id=existing.id))
+            memberships = sorted(
+                group.memberships,
+                key=lambda m: (m.student.name.lower() if m.student and m.student.name else ""),
+            )
+            students = [m.student for m in memberships if m.student]
+            if not students:
+                error = "Selected group has no students."
+            else:
+                sheet = AttendanceSheet(
+                    group_id=group.id,
+                    group_name=group.name,
+                    date=date_value,
+                    created_by_user_id=user.id if user else None,
+                )
+                db.session.add(sheet)
+                db.session.flush()
+                for student in students:
+                    entry = AttendanceEntry(
+                        sheet_id=sheet.id,
+                        student_id=student.id,
+                        student_name=student.name,
+                        status="present",
+                    )
+                    db.session.add(entry)
+                db.session.commit()
+                session["attendance_status"] = f"Attendance sheet created for {group.name} on {date_value.isoformat()}."
+                return redirect(url_for("attendance_sheet", sheet_id=sheet.id))
+    return render_template(
+        "attendance_new.html",
+        groups=groups,
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/attendance/sheets/<int:sheet_id>", methods=["GET", "POST"])
+@require_user()
+def attendance_sheet(sheet_id):
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    sheet = AttendanceSheet.query.options(
+        subqueryload(AttendanceSheet.entries),
+        subqueryload(AttendanceSheet.group),
+        subqueryload(AttendanceSheet.creator),
+    ).get_or_404(sheet_id)
+    message = session.pop("attendance_status", None)
+    error = session.pop("attendance_error", None)
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        updated = 0
+        invalid = False
+        for entry in sheet.entries or []:
+            status = request.form.get(f"status_{entry.id}") or entry.status
+            if status not in ATTENDANCE_STATUS_VALUES:
+                invalid = True
+                continue
+            notes_raw = (request.form.get(f"notes_{entry.id}") or "").strip()
+            notes = notes_raw or None
+            if status != entry.status or notes != entry.notes:
+                entry.status = status
+                entry.notes = notes
+                updated += 1
+        db.session.commit()
+        if invalid:
+            session["attendance_error"] = "Some status values were invalid and ignored."
+        if updated:
+            session["attendance_status"] = f"Attendance updated ({updated} change(s))."
+        else:
+            session["attendance_status"] = "Attendance saved."
+        return redirect(url_for("attendance_sheet", sheet_id=sheet.id))
+    entries = sorted(
+        sheet.entries or [],
+        key=lambda e: (e.student_name or (e.student.name if e.student else "")),
+    )
+    counts = _attendance_counts(entries)
+    return render_template(
+        "attendance_sheet.html",
+        sheet=sheet,
+        entries=entries,
+        counts=counts,
+        status_options=ATTENDANCE_STATUS_OPTIONS,
+        group_label=_attendance_group_label(sheet),
+        message=message,
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),
