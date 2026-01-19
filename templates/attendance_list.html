@@ -47,6 +47,7 @@
         <tr>
           <th>Date</th>
           <th>Group</th>
+          <th>Title</th>
           <th>Recorded by</th>
           <th>Summary</th>
           <th style="width:120px;"></th>
@@ -57,6 +58,7 @@
         <tr>
           <td>{{ row.sheet.date.strftime("%Y-%m-%d") }}</td>
           <td>{{ row.group_label }}</td>
+          <td>{{ row.title_label }}</td>
           <td>{{ row.sheet.creator.name if row.sheet.creator else "N/A" }}</td>
           <td>
             {{ row.counts.present }} present,

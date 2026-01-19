@@ -98,6 +98,7 @@ class AttendanceSheet(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True)
     group_name = db.Column(db.String(120), nullable=True)
+    title = db.Column(db.String(120), nullable=False, default="Session")
     date = db.Column(db.Date, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)

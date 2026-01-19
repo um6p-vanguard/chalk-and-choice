@@ -3122,6 +3122,10 @@ def _attendance_group_label(sheet):
         return sheet.group_name
     return "Unknown group"
 
+def _attendance_title(sheet):
+    title = (sheet.title or "").strip()
+    return title or "Session"
+
 def _attendance_counts(entries):
     counts = {"present": 0, "late": 0, "absent": 0, "total": len(entries)}
     for entry in entries:
@@ -3165,6 +3169,7 @@ def attendance_list():
         sheet_rows.append({
             "sheet": sheet,
             "group_label": _attendance_group_label(sheet),
+            "title_label": _attendance_title(sheet),
             "counts": counts,
         })
     return render_template(
@@ -3190,16 +3195,20 @@ def attendance_new():
     form_data = {
         "group_id": request.form.get("group_id") or "",
         "date": request.form.get("date") or default_date,
+        "title": request.form.get("title") or "",
     }
     error = None
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        if not title:
+            error = "Session title is required."
         try:
             group_id = int(form_data["group_id"])
         except Exception:
             group_id = 0
-        if not group_id:
+        if not group_id and not error:
             error = "Group selection is required."
         date_value = _parse_date_only(form_data["date"])
         if not date_value and not error:
@@ -3208,9 +3217,13 @@ def attendance_new():
         if not error and not group:
             error = "Selected group was not found."
         if not error:
-            existing = AttendanceSheet.query.filter_by(group_id=group.id, date=date_value).first()
+            existing = AttendanceSheet.query.filter_by(
+                group_id=group.id,
+                date=date_value,
+                title=title,
+            ).first()
             if existing:
-                session["attendance_status"] = "Attendance sheet already exists. You can edit it below."
+                session["attendance_status"] = "Attendance sheet already exists for that title. You can edit it below."
                 return redirect(url_for("attendance_sheet", sheet_id=existing.id))
             memberships = sorted(
                 group.memberships,
@@ -3223,6 +3236,7 @@ def attendance_new():
                 sheet = AttendanceSheet(
                     group_id=group.id,
                     group_name=group.name,
+                    title=title,
                     date=date_value,
                     created_by_user_id=user.id if user else None,
                 )
@@ -3237,7 +3251,9 @@ def attendance_new():
                     )
                     db.session.add(entry)
                 db.session.commit()
-                session["attendance_status"] = f"Attendance sheet created for {group.name} on {date_value.isoformat()}."
+                session["attendance_status"] = (
+                    f"Attendance sheet created for {group.name} on {date_value.isoformat()} ({title})."
+                )
                 return redirect(url_for("attendance_sheet", sheet_id=sheet.id))
     return render_template(
         "attendance_new.html",
@@ -3264,12 +3280,20 @@ def attendance_sheet(sheet_id):
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
+        title_raw = (request.form.get("sheet_title") or "").strip()
+        title_error = False
         updated = 0
-        invalid = False
+        invalid_status = False
+        if title_raw:
+            if title_raw != sheet.title:
+                sheet.title = title_raw
+                updated += 1
+        else:
+            title_error = True
         for entry in sheet.entries or []:
             status = request.form.get(f"status_{entry.id}") or entry.status
             if status not in ATTENDANCE_STATUS_VALUES:
-                invalid = True
+                invalid_status = True
                 continue
             notes_raw = (request.form.get(f"notes_{entry.id}") or "").strip()
             notes = notes_raw or None
@@ -3278,7 +3302,11 @@ def attendance_sheet(sheet_id):
                 entry.notes = notes
                 updated += 1
         db.session.commit()
-        if invalid:
+        if title_error and invalid_status:
+            session["attendance_error"] = "Session title is required and some status values were invalid."
+        elif title_error:
+            session["attendance_error"] = "Session title is required."
+        elif invalid_status:
             session["attendance_error"] = "Some status values were invalid and ignored."
         if updated:
             session["attendance_status"] = f"Attendance updated ({updated} change(s))."
@@ -3297,6 +3325,7 @@ def attendance_sheet(sheet_id):
         counts=counts,
         status_options=ATTENDANCE_STATUS_OPTIONS,
         group_label=_attendance_group_label(sheet),
+        title_label=_attendance_title(sheet),
         message=message,
         error=error,
         user=current_user(),

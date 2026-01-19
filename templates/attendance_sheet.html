@@ -5,7 +5,7 @@
     <div>
       <h3 style="margin:0;">Attendance sheet</h3>
       <p class="muted" style="margin-top:6px;">
-        {{ group_label }} - {{ sheet.date.strftime("%Y-%m-%d") }}
+        {{ group_label }} - {{ sheet.date.strftime("%Y-%m-%d") }} | {{ title_label }}
         {% if sheet.creator %}| Recorded by {{ sheet.creator.name }}{% endif %}
       </p>
     </div>
@@ -34,6 +34,8 @@
   {% if entries %}
     <form method="post" action="{{ url_for('attendance_sheet', sheet_id=sheet.id) }}">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Session title</label>
+      <input type="text" name="sheet_title" value="{{ sheet.title }}" required>
       <table>
         <thead>
           <tr>
