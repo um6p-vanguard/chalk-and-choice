@@ -3995,6 +3995,15 @@ def student_projects():
         for task in project.tasks:
             submission = _project_task_submission(task, student)
             status = submission.status if submission and submission.status else "not_started"
+            latest_attempt = _latest_task_attempt(submission) if submission else None
+            review_notes = None
+            reviewer_name = None
+            if latest_attempt:
+                review_notes = latest_attempt.review_notes
+                if latest_attempt.reviewer:
+                    reviewer_name = latest_attempt.reviewer.name
+            if not review_notes and submission and submission.review_notes:
+                review_notes = submission.review_notes
             if status in ("submitted", "accepted", "pending_review"):
                 completed_count += 1
             cooldown_seconds = 0
@@ -4014,6 +4023,8 @@ def student_projects():
                 "task": task,
                 "status": status,
                 "submission": submission,
+                "review_notes": review_notes,
+                "reviewer_name": reviewer_name,
                 "can_retry_now": can_retry_now,
                 "cooldown_seconds_remaining": cooldown_seconds,
             })
@@ -4058,6 +4069,15 @@ def student_project_detail(code):
     for task in project.tasks:
         submission = _project_task_submission(task, student)
         status = submission.status if submission and submission.status else "not_started"
+        latest_attempt = _latest_task_attempt(submission) if submission else None
+        review_notes = None
+        reviewer_name = None
+        if latest_attempt:
+            review_notes = latest_attempt.review_notes
+            if latest_attempt.reviewer:
+                reviewer_name = latest_attempt.reviewer.name
+        if not review_notes and submission and submission.review_notes:
+            review_notes = submission.review_notes
         cooldown_seconds = 0
         can_retry_now = True
         if submission:
@@ -4075,6 +4095,8 @@ def student_project_detail(code):
             "task": task,
             "submission": submission,
             "status": status,
+            "review_notes": review_notes,
+            "reviewer_name": reviewer_name,
             "can_retry_now": can_retry_now,
             "cooldown_seconds_remaining": cooldown_seconds,
         })
@@ -4385,6 +4407,7 @@ def project_task_submission_self_view(code, task_id):
         grading_by_question={},
         attempt_rows=[],
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
+        latest_attempt=latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=student.name,
@@ -4658,6 +4681,7 @@ def projects_submission_task_detail(code, student_id, task_id):
         grading_by_question=grading_by_question,
         attempt_rows=attempt_rows,
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
+        latest_attempt=latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -4734,6 +4758,21 @@ def projects_reviews():
         student_name=session.get("student_name"),
     )
 
+@app.route("/projects/reviews/mine")
+@require_user()
+def projects_reviews_mine():
+    user = current_user()
+    attempts = ProjectTaskAttempt.query.filter(
+        ProjectTaskAttempt.reviewed_by_user_id == user.id,
+        ProjectTaskAttempt.reviewed_at != None,
+    ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
+    return render_template(
+        "projects_reviews_mine.html",
+        attempts=attempts,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
 @app.route("/projects/reviews/<int:submission_id>")
 @require_user()
 def projects_review_detail(submission_id):
@@ -4741,14 +4780,25 @@ def projects_review_detail(submission_id):
     task = submission.task
     project = submission.project
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
+    attempt_id = request.args.get("attempt_id")
+    review_attempt = None
+    if attempt_id:
+        try:
+            attempt_id = int(attempt_id)
+        except Exception:
+            attempt_id = None
+    if attempt_id:
+        review_attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
     latest_attempt = _latest_task_attempt(submission)
-    if latest_attempt and isinstance(latest_attempt.answers_json, dict):
-        answers = latest_attempt.answers_json
+    active_attempt = review_attempt or latest_attempt
+    is_latest_attempt = bool(active_attempt and latest_attempt and active_attempt.id == latest_attempt.id)
+    if active_attempt and isinstance(active_attempt.answers_json, dict):
+        answers = active_attempt.answers_json
     else:
         answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
-    logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
+    logs_source = active_attempt.run_logs if active_attempt and hasattr(active_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
-    grading_by_question = _grading_by_question(latest_attempt.grading_json) if latest_attempt else {}
+    grading_by_question = _grading_by_question(active_attempt.grading_json) if active_attempt else {}
     has_code_questions = any((q.get("type") == "code") for q in questions)
     if not grading_by_question and task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
         try:
@@ -4765,7 +4815,10 @@ def projects_review_detail(submission_id):
         answers=answers,
         logs_by_question=logs_by_question,
         grading_by_question=grading_by_question,
-        latest_attempt_id=(latest_attempt.id if latest_attempt else None),
+        latest_attempt_id=(active_attempt.id if active_attempt else None),
+        review_attempt=review_attempt,
+        active_attempt=active_attempt,
+        is_latest_attempt=is_latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -4779,23 +4832,51 @@ def projects_review_decision(submission_id):
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
     action = request.form.get("action")
     notes = (request.form.get("review_notes") or "").strip()
+    attempt_id = request.form.get("attempt_id")
     reviewer = current_user()
     reviewed_status = None
     if action == "accept":
-        submission.status = "accepted"
         reviewed_status = "accepted"
     elif action in ("reject", "need_rework"):
-        submission.status = "rejected"
         reviewed_status = "rejected"
-    if notes:
-        submission.review_notes = notes
-    if reviewed_status:
+    review_attempt = None
+    if attempt_id:
+        try:
+            attempt_id = int(attempt_id)
+        except Exception:
+            attempt_id = None
+    if attempt_id:
+        review_attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
+    if review_attempt:
+        now = datetime.utcnow()
+        if reviewed_status:
+            review_attempt.status = reviewed_status
+        if notes:
+            review_attempt.review_notes = notes
+        review_attempt.reviewed_by_user_id = reviewer.id if reviewer else None
+        review_attempt.reviewed_at = now
+        latest_attempt = _latest_task_attempt(submission)
+        if latest_attempt and latest_attempt.id == review_attempt.id:
+            if reviewed_status:
+                submission.status = reviewed_status
+            if notes:
+                submission.review_notes = notes
+            submission.last_activity_at = now
+            if reviewed_status == "accepted" and submission.student:
+                if _project_completed(submission.project, submission.student):
+                    _award_project_points_if_needed(submission.project, submission.student)
+    elif reviewed_status:
+        submission.status = reviewed_status
+        if notes:
+            submission.review_notes = notes
         _record_task_attempt_review(submission, status=reviewed_status, notes=notes, reviewer=reviewer)
     submission.last_activity_at = datetime.utcnow()
     if submission.status == "accepted" and submission.student:
         if _project_completed(submission.project, submission.student):
             _award_project_points_if_needed(submission.project, submission.student)
     db.session.commit()
+    if review_attempt:
+        return redirect(url_for("projects_reviews_mine"))
     return redirect(url_for("projects_reviews"))
 
 # --------------------------------------------------------------------

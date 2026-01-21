@@ -56,15 +56,18 @@
                       <span style="color:#fde047;">Pending mentor review</span>
                     {% elif entry.status == "in_progress" %}
                       <span class="muted">In progress</span>
-                    {% elif entry.status == "rejected" %}
-                      <span style="color:#f87171;">Needs rework</span>
-                      {% if entry.submission and entry.submission.review_notes %}
-                        <div class="muted" style="margin-top:4px;">{{ entry.submission.review_notes }}</div>
-                      {% endif %}
-                    {% else %}
-                      <span class="muted">Not started</span>
-                    {% endif %}
-                  </td>
+                  {% elif entry.status == "rejected" %}
+                    <span style="color:#f87171;">Needs rework</span>
+                  {% else %}
+                    <span class="muted">Not started</span>
+                  {% endif %}
+                  {% if entry.reviewer_name %}
+                    <div class="muted" style="margin-top:4px;">Reviewed by {{ entry.reviewer_name }}</div>
+                  {% endif %}
+                  {% if entry.review_notes %}
+                    <div class="muted" style="margin-top:4px;">{{ entry.review_notes }}</div>
+                  {% endif %}
+                </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
                       <span class="muted">Tasks available on project page.</span>
@@ -144,15 +147,18 @@
                       <span style="color:#fde047;">Pending mentor review</span>
                     {% elif entry.status == "in_progress" %}
                       <span class="muted">In progress</span>
-                    {% elif entry.status == "rejected" %}
-                      <span style="color:#f87171;">Needs rework</span>
-                      {% if entry.submission and entry.submission.review_notes %}
-                        <div class="muted" style="margin-top:4px;">{{ entry.submission.review_notes }}</div>
-                      {% endif %}
-                    {% else %}
-                      <span class="muted">Not started</span>
-                    {% endif %}
-                  </td>
+                  {% elif entry.status == "rejected" %}
+                    <span style="color:#f87171;">Needs rework</span>
+                  {% else %}
+                    <span class="muted">Not started</span>
+                  {% endif %}
+                  {% if entry.reviewer_name %}
+                    <div class="muted" style="margin-top:4px;">Reviewed by {{ entry.reviewer_name }}</div>
+                  {% endif %}
+                  {% if entry.review_notes %}
+                    <div class="muted" style="margin-top:4px;">{{ entry.review_notes }}</div>
+                  {% endif %}
+                </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
                       <span class="muted">Tasks available on project page.</span>

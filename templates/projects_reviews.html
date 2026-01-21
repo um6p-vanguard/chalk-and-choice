@@ -3,6 +3,9 @@
 <div class="card">
   <h3 style="margin:0;">Pending task reviews</h3>
   <p class="muted" style="margin-top:6px;">Approve or reject submissions for tasks that require mentor feedback.</p>
+  <div style="margin-top:10px;">
+    <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
+  </div>
   
   {% if flagged_count > 0 or warned_count > 0 %}
   <div style="margin-top: 15px; padding: 10px; background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; border-radius: 6px;">

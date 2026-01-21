@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">My reviews</h3>
+      <p class="muted" style="margin-top:6px;">History of task reviews you've completed.</p>
+    </div>
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('projects_reviews') }}">Pending reviews</a>
+    </div>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  {% if attempts %}
+    <table style="margin-top:4px;">
+      <thead>
+        <tr>
+          <th>Reviewed</th>
+          <th>Student</th>
+          <th>Project</th>
+          <th>Task</th>
+          <th>Attempt</th>
+          <th>Status</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for attempt in attempts %}
+          {% set sub = attempt.submission %}
+          <tr>
+            <td>{{ attempt.reviewed_at.strftime("%b %d %H:%M") if attempt.reviewed_at else "—" }}</td>
+            <td>
+              <div><strong>{{ sub.student_name if sub else "Unknown" }}</strong></div>
+              <div class="muted" style="font-size:0.9rem;">{{ sub.student.email if sub and sub.student else "—" }}</div>
+            </td>
+            <td>{{ sub.project.title if sub and sub.project else "—" }}</td>
+            <td>{{ sub.task.title if sub and sub.task else "—" }}</td>
+            <td>#{{ attempt.attempt_number }}</td>
+            <td>{{ attempt.status }}</td>
+            <td>
+              {% if attempt.review_notes %}
+                <div class="muted" style="font-size:0.9rem; white-space:pre-line;">{{ attempt.review_notes }}</div>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;">
+              <div class="row" style="gap:6px; justify-content:flex-end; flex-wrap:wrap;">
+                {% if sub %}
+                  <a class="btn" href="{{ url_for('projects_review_detail', submission_id=sub.id, attempt_id=attempt.id) }}">Rectify</a>
+                {% endif %}
+                {% if sub and sub.project and sub.task and sub.student_id %}
+                  <a class="btn" href="{{ url_for('projects_submission_task_detail', code=sub.project.code, student_id=sub.student_id, task_id=sub.task_id) }}">Open task</a>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:0;">No reviews recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
