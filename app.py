@@ -13,7 +13,7 @@ from markupsafe import Markup, escape
 from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
-                    Project, ProjectTask, ProjectTaskSubmission, ProjectDependency,
+                    Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
                     BlogPost, BlogComment, Leaderboard)
@@ -1612,6 +1612,42 @@ def _project_task_submission(task, student):
     if not student:
         return None
     return ProjectTaskSubmission.query.filter_by(task_id=task.id, student_id=student.id).first()
+
+def _latest_task_attempt(submission):
+    if not submission:
+        return None
+    return ProjectTaskAttempt.query.filter_by(submission_id=submission.id).order_by(ProjectTaskAttempt.attempt_number.desc()).first()
+
+def _next_task_attempt_number(submission_id):
+    if not submission_id:
+        return 1
+    last_number = db.session.query(func.max(ProjectTaskAttempt.attempt_number)).filter(
+        ProjectTaskAttempt.submission_id == submission_id,
+    ).scalar()
+    return int(last_number or 0) + 1
+
+def _grading_by_question(details):
+    if not isinstance(details, list):
+        return {}
+    return {
+        str(item.get("question_id")): item
+        for item in details
+        if item.get("question_id") is not None
+    }
+
+def _record_task_attempt_review(submission, status=None, notes=None, reviewer=None):
+    if not submission:
+        return
+    attempt = _latest_task_attempt(submission)
+    if not attempt:
+        return
+    if status:
+        attempt.status = status
+    if notes:
+        attempt.review_notes = notes
+    if reviewer:
+        attempt.reviewed_by_user_id = reviewer.id
+    attempt.reviewed_at = datetime.utcnow()
 
 def _project_required_count(project):
     required_tasks = [t for t in project.tasks if t.required]
@@ -4247,6 +4283,26 @@ def project_task_take(code, task_id):
                         submission.status = "rejected"
                 else:
                     submission.status = "submitted"
+            grade_details_for_history = grade_details
+            if not grade_details_for_history and ENABLE_BACKEND_CODE_RUNS:
+                has_code_questions = any((q.get("type") == "code") for q in questions)
+                if has_code_questions:
+                    try:
+                        _, _, grade_details_for_history = _grade_exam_submission(task, answers)
+                    except Exception:
+                        grade_details_for_history = []
+            attempt = ProjectTaskAttempt(
+                submission_id=submission.id,
+                attempt_number=_next_task_attempt_number(submission.id),
+                answers_json=answers,
+                run_logs=submission.run_logs if isinstance(submission.run_logs, list) else [],
+                status=submission.status,
+                score=grade_score,
+                max_score=grade_total,
+                grading_json=grade_details_for_history or None,
+                submitted_at=now,
+            )
+            db.session.add(attempt)
             # Run cheating detection
             _run_cheating_detection(student, submission, request.remote_addr)
             if submission.status == "accepted":
@@ -4310,8 +4366,13 @@ def project_task_submission_self_view(code, task_id):
         student_id=student.id,
     ).first_or_404()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
-    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
-    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
+    latest_attempt = _latest_task_attempt(submission)
+    if latest_attempt and isinstance(latest_attempt.answers_json, dict):
+        answers = latest_attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
+    logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
     return render_template(
         "projects_submission_task_detail.html",
         project=project,
@@ -4321,6 +4382,10 @@ def project_task_submission_self_view(code, task_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
+        grading_by_question={},
+        attempt_rows=[],
+        latest_attempt_id=(latest_attempt.id if latest_attempt else None),
+        code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=student.name,
     )
@@ -4359,11 +4424,23 @@ def project_task_file_download(submission_id, question_id):
             abort(403)
         if submission.project and not _project_visible_to_student(submission.project, student):
             abort(403)
+    attempt_id = request.args.get("attempt_id")
+    attempt = None
+    if attempt_id:
+        try:
+            attempt_id = int(attempt_id)
+        except Exception:
+            attempt_id = None
+    if attempt_id:
+        attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
     questions = submission.task.questions_json if submission.task and isinstance(submission.task.questions_json, list) else []
     question = next((q for q in questions if str(q.get("id")) == str(question_id)), None)
     if not question or question.get("type") != "file":
         abort(404)
-    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    if attempt and isinstance(attempt.answers_json, dict):
+        answers = attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
     file_info = _extract_file_info(answers.get(str(question_id)))
     if not file_info:
         abort(404)
@@ -4403,6 +4480,7 @@ def projects_submission_task_validate(code, student_id, task_id):
     if not submission.submitted_at:
         submission.submitted_at = datetime.utcnow()
     submission.last_activity_at = datetime.utcnow()
+    _record_task_attempt_review(submission, status="accepted", reviewer=current_user())
     if submission.student and _project_completed(project, submission.student):
         _award_project_points_if_needed(project, submission.student)
     db.session.commit()
@@ -4419,6 +4497,7 @@ def projects_submission_task_need_rework(code, student_id, task_id):
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "rejected"
     submission.last_activity_at = datetime.utcnow()
+    _record_task_attempt_review(submission, status="rejected", reviewer=current_user())
     db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
 
@@ -4550,8 +4629,23 @@ def projects_submission_task_detail(code, student_id, task_id):
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student_id).first_or_404()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
-    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
-    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
+    latest_attempt = _latest_task_attempt(submission)
+    if latest_attempt and isinstance(latest_attempt.answers_json, dict):
+        answers = latest_attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
+    logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
+    grading_by_question = _grading_by_question(latest_attempt.grading_json) if latest_attempt else {}
+    attempts = ProjectTaskAttempt.query.filter_by(submission_id=submission.id).order_by(ProjectTaskAttempt.attempt_number.desc()).all()
+    attempt_rows = []
+    for attempt in attempts:
+        attempt_rows.append({
+            "attempt": attempt,
+            "answers": attempt.answers_json if isinstance(attempt.answers_json, dict) else {},
+            "logs_by_question": _run_logs_by_question(attempt.run_logs if isinstance(attempt.run_logs, list) else None),
+            "grading_by_question": _grading_by_question(attempt.grading_json),
+        })
     return render_template(
         "projects_submission_task_detail.html",
         project=project,
@@ -4561,6 +4655,10 @@ def projects_submission_task_detail(code, student_id, task_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
+        grading_by_question=grading_by_question,
+        attempt_rows=attempt_rows,
+        latest_attempt_id=(latest_attempt.id if latest_attempt else None),
+        code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -4643,20 +4741,21 @@ def projects_review_detail(submission_id):
     task = submission.task
     project = submission.project
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
-    answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
-    logs_by_question = _run_logs_by_question(submission.run_logs if hasattr(submission, "run_logs") else None)
-    grading_by_question = {}
+    latest_attempt = _latest_task_attempt(submission)
+    if latest_attempt and isinstance(latest_attempt.answers_json, dict):
+        answers = latest_attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
+    logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
+    grading_by_question = _grading_by_question(latest_attempt.grading_json) if latest_attempt else {}
     has_code_questions = any((q.get("type") == "code") for q in questions)
-    if task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
+    if not grading_by_question and task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
         try:
             _, _, grading_details = _grade_exam_submission(task, answers)
         except Exception:
             grading_details = []
-        grading_by_question = {
-            str(item.get("question_id")): item
-            for item in grading_details
-            if item.get("question_id") is not None
-        }
+        grading_by_question = _grading_by_question(grading_details)
     return render_template(
         "projects_review_detail.html",
         submission=submission,
@@ -4666,6 +4765,7 @@ def projects_review_detail(submission_id):
         answers=answers,
         logs_by_question=logs_by_question,
         grading_by_question=grading_by_question,
+        latest_attempt_id=(latest_attempt.id if latest_attempt else None),
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -4679,12 +4779,18 @@ def projects_review_decision(submission_id):
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
     action = request.form.get("action")
     notes = (request.form.get("review_notes") or "").strip()
+    reviewer = current_user()
+    reviewed_status = None
     if action == "accept":
         submission.status = "accepted"
+        reviewed_status = "accepted"
     elif action in ("reject", "need_rework"):
         submission.status = "rejected"
+        reviewed_status = "rejected"
     if notes:
         submission.review_notes = notes
+    if reviewed_status:
+        _record_task_attempt_review(submission, status=reviewed_status, notes=notes, reviewer=reviewer)
     submission.last_activity_at = datetime.utcnow()
     if submission.status == "accepted" and submission.student:
         if _project_completed(submission.project, submission.student):

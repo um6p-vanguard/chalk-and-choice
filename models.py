@@ -380,3 +380,30 @@ class ProjectTaskSubmission(db.Model):
     __table_args__ = (
         UniqueConstraint('task_id', 'student_id', name='uq_project_task_student'),
     )
+
+class ProjectTaskAttempt(db.Model):
+    __tablename__ = "project_task_attempts"
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey('project_task_submissions.id', ondelete="CASCADE"), index=True, nullable=False)
+    attempt_number = db.Column(db.Integer, nullable=False, default=1)
+    answers_json = db.Column(JSONText, nullable=False, default=dict)
+    run_logs = db.Column(JSONText, nullable=False, default=list)
+    status = db.Column(db.String(32), nullable=False, default="submitted")
+    score = db.Column(db.Float, default=0.0, nullable=False)
+    max_score = db.Column(db.Float, default=0.0, nullable=False)
+    grading_json = db.Column(JSONText, nullable=True)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+    review_notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    submission = db.relationship(
+        'ProjectTaskSubmission',
+        backref=db.backref('attempts', cascade="all,delete-orphan", order_by="ProjectTaskAttempt.attempt_number"),
+    )
+    reviewer = db.relationship('User')
+
+    __table_args__ = (
+        UniqueConstraint('submission_id', 'attempt_number', name='uq_project_task_attempt_number'),
+    )

@@ -1,4 +1,4 @@
-{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True, submission_id=None) %}
+{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True, submission_id=None, attempt_id=None) %}
   {% set logs_by_question = logs_by_question or {} %}
   {% set grading_by_question = grading_by_question or {} %}
   {% if not questions %}
@@ -102,7 +102,7 @@
                   <div class="muted" style="font-size:0.9rem;">Uploaded: {{ file_info.uploaded_at }}</div>
                 {% endif %}
                 {% if submission_id %}
-                  <a class="btn" href="{{ url_for('project_task_file_download', submission_id=submission_id, question_id=qid) }}">Download file</a>
+                  <a class="btn" href="{{ url_for('project_task_file_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id) }}">Download file</a>
                 {% endif %}
               </div>
             {% else %}

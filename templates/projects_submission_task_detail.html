@@ -52,6 +52,42 @@
 <div class="sp"></div>
 <div class="card">
   <h3 style="margin-top:0;">Student responses</h3>
-  {{ task_answers.render(questions, answers, logs_by_question, submission_id=submission.id) }}
+  {{ task_answers.render(questions, answers, logs_by_question, grading_by_question=grading_by_question, show_meta=(user is not none), task_auto_grade=(task.auto_grade if task else True), code_runs_enabled=code_runs_enabled, submission_id=submission.id, attempt_id=latest_attempt_id) }}
 </div>
+{% if user and attempt_rows %}
+<div class="sp"></div>
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Attempt history</h3>
+    <span class="muted" style="font-size:0.95rem;">{{ attempt_rows|length }} total</span>
+  </div>
+  <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+    {% for row in attempt_rows %}
+      {% set attempt = row.attempt %}
+      <details style="border:1px solid #1f2937; border-radius:12px; padding:12px; background:#0b1220;">
+        <summary style="cursor:pointer; user-select:none;">
+          <strong>Attempt {{ attempt.attempt_number }}</strong>
+          <span class="muted" style="margin-left:8px;">
+            {{ attempt.submitted_at.strftime("%b %d %H:%M") if attempt.submitted_at else "—" }}
+          </span>
+          <span class="muted" style="margin-left:8px;">Status: {{ attempt.status }}</span>
+          <span class="muted" style="margin-left:8px;">Score: {{ "%.1f"|format(attempt.score or 0) }} / {{ "%.1f"|format(attempt.max_score or 0) }}</span>
+          {% if attempt.reviewer %}
+            <span class="muted" style="margin-left:8px;">Reviewed by {{ attempt.reviewer.name }}</span>
+          {% endif %}
+        </summary>
+        {% if attempt.review_notes %}
+          <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+            <strong>Reviewer notes</strong>
+            <p class="muted" style="margin:6px 0 0 0; white-space:pre-line;">{{ attempt.review_notes }}</p>
+          </div>
+        {% endif %}
+        <div style="margin-top:12px;">
+          {{ task_answers.render(questions, row.answers, row.logs_by_question, grading_by_question=row.grading_by_question, show_meta=True, task_auto_grade=(task.auto_grade if task else True), code_runs_enabled=code_runs_enabled, submission_id=submission.id, attempt_id=attempt.id) }}
+        </div>
+      </details>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 {% endblock %}
