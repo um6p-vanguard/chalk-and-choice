@@ -113,6 +113,21 @@
           </span>
         </div>
         <p style="margin: 0 0 10px; color: #e5e7eb;">{{ warning.description }}</p>
+        
+        {# Show context if available #}
+        {% if warning.exam_code or warning.project_code %}
+        <div style="margin: 10px 0; padding: 8px; background: rgba(99, 127, 190, 0.1); border-radius: 4px;">
+          {% if warning.exam_code %}
+          <span style="color: #94a3b8;">📝 Exam: <strong style="color: #e5e7eb;">{{ warning.exam_code }}</strong></span>
+          {% elif warning.project_code %}
+          <span style="color: #94a3b8;">🎯 Project: <strong style="color: #e5e7eb;">{{ warning.project_code }}</strong></span>
+          {% if warning.task_title %}
+          <span style="color: #94a3b8;"> • Task: <strong style="color: #e5e7eb;">{{ warning.task_title }}</strong></span>
+          {% endif %}
+          {% endif %}
+        </div>
+        {% endif %}
+        
         <small style="color: #94a3b8;">{{ warning.timestamp[:19] if warning.timestamp else "N/A" }}</small>
       </div>
       {% endfor %}

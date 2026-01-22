@@ -21,6 +21,7 @@
       {% endif %}
     </div>
     <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('projects_edit', code=project.code) }}">Edit details</a>
       <form method="post" action="{{ url_for('projects_publish', code=project.code) }}">
         <input type="hidden" name="csrf" value="{{ csrf_token() }}">
         <input type="hidden" name="state" value="{{ 'unpublish' if project.is_active else 'publish' }}">
@@ -188,17 +189,32 @@
     <table style="margin-top:12px;">
       <thead>
         <tr>
+          <th style="width:50px;">Order</th>
           <th>Title</th>
           <th>Required</th>
           <th>Auto grade</th>
           <th>Mentor review</th>
           <th>Created</th>
-          <th style="width:160px;">Actions</th>
+          <th style="width:220px;">Actions</th>
         </tr>
       </thead>
       <tbody>
         {% for task in tasks %}
         <tr>
+          <td>
+            <div class="row" style="gap:4px;">
+              <form method="post" action="{{ url_for('projects_task_move', code=project.code, task_id=task.id) }}" style="display:inline;">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="direction" value="up">
+                <button class="btn" type="submit" style="padding:4px 8px; font-size:0.85rem;" {% if loop.first %}disabled{% endif %} title="Move up">↑</button>
+              </form>
+              <form method="post" action="{{ url_for('projects_task_move', code=project.code, task_id=task.id) }}" style="display:inline;">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <input type="hidden" name="direction" value="down">
+                <button class="btn" type="submit" style="padding:4px 8px; font-size:0.85rem;" {% if loop.last %}disabled{% endif %} title="Move down">↓</button>
+              </form>
+            </div>
+          </td>
           <td>{{ task.title }}</td>
           <td>{{ "Yes" if task.required else "Optional" }}</td>
           <td>{{ "Yes" if task.auto_grade else "No" }}</td>

@@ -369,6 +369,7 @@ class ProjectTaskSubmission(db.Model):
     started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     submitted_at = db.Column(db.DateTime, nullable=True)
     last_activity_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    ip_address = db.Column(db.String(64), nullable=True)
     score = db.Column(db.Float, default=0.0, nullable=False)
     max_score = db.Column(db.Float, default=0.0, nullable=False)
     review_notes = db.Column(db.Text, nullable=True)

@@ -286,8 +286,10 @@ def _touch_student_log_session(student, now):
 # Warning System Helpers
 # --------------------------------------------------------------------
 
-def _add_warning(student, warning_type, description, severity="medium", auto_detected=True):
-    """Add a warning to a student's record."""
+def _add_warning(student, warning_type, description, severity="medium", auto_detected=True, 
+                 exam_id=None, exam_code=None, project_id=None, project_code=None, 
+                 task_id=None, task_title=None, submission_id=None):
+    """Add a warning to a student's record with context about the exam/project."""
     if not student:
         return
     warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
@@ -298,22 +300,123 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "auto_detected": auto_detected,
     }
+    
+    # Add context fields if provided
+    if exam_id:
+        warning["exam_id"] = exam_id
+    if exam_code:
+        warning["exam_code"] = exam_code
+    if project_id:
+        warning["project_id"] = project_id
+    if project_code:
+        warning["project_code"] = project_code
+    if task_id:
+        warning["task_id"] = task_id
+    if task_title:
+        warning["task_title"] = task_title
+    if submission_id:
+        warning["submission_id"] = submission_id
+    
     warnings.append(warning)
     student.warnings_json = warnings
+    
+    # Mark the field as modified so SQLAlchemy knows to commit it
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(student, "warnings_json")
     
     # Auto-flag if threshold reached
     if len(warnings) >= WARNING_AUTO_FLAG_COUNT and not student.is_flagged:
         student.is_flagged = True
         student.flag_notes = f"Auto-flagged after {len(warnings)} warnings"
 
+def _clear_submission_warnings(student, submission):
+    """Clear warnings related to a specific submission when it receives a review."""
+    if not student or not submission:
+        return
+    
+    warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    if not warnings:
+        return
+    
+    # Determine which warnings to remove based on submission type
+    filtered_warnings = []
+    submission_id = submission.id
+    
+    # Check if it's an exam submission or project task submission
+    if hasattr(submission, 'exam_id'):
+        # Remove warnings for this exam
+        exam_id = submission.exam_id
+        filtered_warnings = [w for w in warnings if w.get('exam_id') != exam_id]
+    elif hasattr(submission, 'task_id'):
+        # Remove warnings for this specific submission or task
+        task_id = submission.task_id
+        filtered_warnings = [w for w in warnings 
+                           if not (w.get('task_id') == task_id or w.get('submission_id') == submission_id)]
+    else:
+        # Unknown submission type, keep all warnings
+        return
+    
+    # Update warnings and mark as modified
+    student.warnings_json = filtered_warnings
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(student, "warnings_json")
+    
+    # Re-evaluate flag status based on remaining warnings
+    if student.is_flagged and len(filtered_warnings) < WARNING_AUTO_FLAG_COUNT:
+        # Check if all remaining warnings are low severity
+        high_warnings = [w for w in filtered_warnings if w.get('severity') == 'high']
+        if not high_warnings:
+            student.is_flagged = False
+            student.flag_notes = None
+
+def _submission_has_warnings(student, submission):
+    """Check if a specific submission has associated warnings."""
+    if not student or not submission:
+        return False
+    
+    warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    if not warnings:
+        return False
+    
+    # Check based on submission type
+    if hasattr(submission, 'exam_id'):
+        # Check for exam-specific warnings
+        exam_id = submission.exam_id
+        return any(w.get('exam_id') == exam_id for w in warnings)
+    elif hasattr(submission, 'task_id'):
+        # Check for task-specific warnings
+        task_id = submission.task_id
+        submission_id = submission.id
+        return any(w.get('task_id') == task_id or w.get('submission_id') == submission_id 
+                  for w in warnings)
+    
+    return False
+
 def _detect_speed_anomaly(student, submission, task_duration_sec):
     """Detect if submission was completed suspiciously fast."""
     if task_duration_sec < WARNING_SPEED_THRESHOLD_SEC:
+        # Extract context
+        context = {}
+        if hasattr(submission, 'exam_id'):
+            context['exam_id'] = submission.exam_id
+            if hasattr(submission, 'exam'):
+                context['exam_code'] = submission.exam.code
+        elif hasattr(submission, 'task_id'):
+            context['task_id'] = submission.task_id
+            context['submission_id'] = submission.id
+            if hasattr(submission, 'project_id'):
+                context['project_id'] = submission.project_id
+            if hasattr(submission, 'task') and submission.task:
+                context['task_title'] = submission.task.title
+                if hasattr(submission.task, 'project') and submission.task.project:
+                    context['project_code'] = submission.task.project.code
+        
         _add_warning(
             student,
             "speed_anomaly",
             f"Completed in {task_duration_sec:.1f} seconds (threshold: {WARNING_SPEED_THRESHOLD_SEC}s)",
-            severity="high"
+            severity="high",
+            **context
         )
         return True
     return False
@@ -325,11 +428,28 @@ def _detect_ip_change(student, submission, current_ip):
     
     if hasattr(submission, 'ip_address') and submission.ip_address:
         if submission.ip_address != current_ip:
+            # Extract context
+            context = {}
+            if hasattr(submission, 'exam_id'):
+                context['exam_id'] = submission.exam_id
+                if hasattr(submission, 'exam'):
+                    context['exam_code'] = submission.exam.code
+            elif hasattr(submission, 'task_id'):
+                context['task_id'] = submission.task_id
+                context['submission_id'] = submission.id
+                if hasattr(submission, 'project_id'):
+                    context['project_id'] = submission.project_id
+                if hasattr(submission, 'task') and submission.task:
+                    context['task_title'] = submission.task.title
+                    if hasattr(submission.task, 'project') and submission.task.project:
+                        context['project_code'] = submission.task.project.code
+            
             _add_warning(
                 student,
                 "ip_change",
                 f"IP changed from {submission.ip_address} to {current_ip}",
-                severity="medium"
+                severity="medium",
+                **context
             )
             return True
     return False
@@ -359,7 +479,14 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
     # Get other students' submissions for same task/exam
     similar_found = False
     
+    # Extract context
+    context = {}
+    
     if hasattr(submission, 'exam_id'):  # Exam submission
+        context['exam_id'] = submission.exam_id
+        if hasattr(submission, 'exam'):
+            context['exam_code'] = submission.exam.code
+        
         other_submissions = ExamSubmission.query.filter(
             ExamSubmission.exam_id == submission.exam_id,
             ExamSubmission.student_id != student.id,
@@ -381,12 +508,22 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
                     student,
                     "code_similarity",
                     f"Code {similarity*100:.0f}% similar to {other_name} (Question: {question_id})",
-                    severity="high"
+                    severity="high",
+                    **context
                 )
                 similar_found = True
                 break
     
     elif hasattr(submission, 'task_id'):  # Project task submission
+        context['task_id'] = submission.task_id
+        context['submission_id'] = submission.id
+        if hasattr(submission, 'project_id'):
+            context['project_id'] = submission.project_id
+        if hasattr(submission, 'task') and submission.task:
+            context['task_title'] = submission.task.title
+            if hasattr(submission.task, 'project') and submission.task.project:
+                context['project_code'] = submission.task.project.code
+        
         other_submissions = ProjectTaskSubmission.query.filter(
             ProjectTaskSubmission.task_id == submission.task_id,
             ProjectTaskSubmission.student_id != student.id,
@@ -408,17 +545,34 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
                     student,
                     "code_similarity",
                     f"Code {similarity*100:.0f}% similar to {other_name} (Question: {question_id})",
-                    severity="high"
+                    severity="high",
+                    **context
                 )
                 similar_found = True
                 break
     
     return similar_found
 
-def _detect_paste_pattern(student, answers_data):
+def _detect_paste_pattern(student, submission, answers_data):
     """Detect if large amounts of code were likely pasted (heuristic: very long answers)."""
     if not isinstance(answers_data, dict):
         return False
+    
+    # Extract context
+    context = {}
+    if hasattr(submission, 'exam_id'):
+        context['exam_id'] = submission.exam_id
+        if hasattr(submission, 'exam'):
+            context['exam_code'] = submission.exam.code
+    elif hasattr(submission, 'task_id'):
+        context['task_id'] = submission.task_id
+        context['submission_id'] = submission.id
+        if hasattr(submission, 'project_id'):
+            context['project_id'] = submission.project_id
+        if hasattr(submission, 'task') and submission.task:
+            context['task_title'] = submission.task.title
+            if hasattr(submission.task, 'project') and submission.task.project:
+                context['project_code'] = submission.task.project.code
     
     for qid, answer in answers_data.items():
         if isinstance(answer, str) and len(answer) > 500:
@@ -429,7 +583,8 @@ def _detect_paste_pattern(student, answers_data):
                     student,
                     "paste_pattern",
                     f"Large code block detected ({lines} lines, {len(answer)} chars) in question {qid}",
-                    severity="low"
+                    severity="low",
+                    **context
                 )
                 return True
     return False
@@ -451,7 +606,7 @@ def _run_cheating_detection(student, submission, current_ip=None):
     
     # Paste pattern detection
     if hasattr(submission, 'answers_json'):
-        _detect_paste_pattern(student, submission.answers_json)
+        _detect_paste_pattern(student, submission, submission.answers_json)
     
     # Code similarity detection (for code questions)
     if hasattr(submission, 'answers_json') and isinstance(submission.answers_json, dict):
@@ -3634,6 +3789,57 @@ def projects_show(code):
         student_name=session.get("student_name"),
     )
 
+@app.route("/projects/<code>/edit", methods=["GET", "POST"])
+@require_user()
+def projects_edit(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    error = None
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        title = (request.form.get("title") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        instructions = (request.form.get("instructions") or "").strip()
+        required_task_count = (request.form.get("required_task_count") or "").strip()
+        
+        if not title:
+            error = "Project title is required."
+        
+        if not error:
+            project.title = title
+            project.description = description or None
+            project.instructions = instructions or None
+            
+            if required_task_count:
+                try:
+                    project.required_task_count = max(0, int(required_task_count))
+                except Exception:
+                    error = "Required task count must be a number."
+            else:
+                project.required_task_count = None
+            
+            if not error:
+                db.session.commit()
+                return redirect(url_for("projects_show", code=project.code))
+    
+    form_data = {
+        "title": project.title,
+        "description": project.description or "",
+        "instructions": project.instructions or "",
+        "required_task_count": str(project.required_task_count) if project.required_task_count else "",
+    }
+    
+    return render_template(
+        "projects_edit.html",
+        project=project,
+        form_data=form_data,
+        error=error,
+        user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
 @app.post("/projects/<code>/update-meta")
 @require_user()
 def projects_update_meta(code):
@@ -3699,6 +3905,40 @@ def projects_publish(code):
     state = request.form.get("state") or "publish"
     project.is_active = (state == "publish")
     db.session.commit()
+    return redirect(url_for("projects_show", code=project.code))
+
+@app.post("/projects/<code>/tasks/<int:task_id>/move")
+@require_user()
+def projects_task_move(code, task_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    direction = request.form.get("direction") or "up"
+    
+    # Get all tasks ordered by order_index
+    tasks = ProjectTask.query.filter_by(project_id=project.id).order_by(
+        ProjectTask.order_index.asc(), ProjectTask.id.asc()
+    ).all()
+    
+    current_idx = None
+    for idx, t in enumerate(tasks):
+        if t.id == task.id:
+            current_idx = idx
+            break
+    
+    if current_idx is not None:
+        if direction == "up" and current_idx > 0:
+            tasks[current_idx], tasks[current_idx - 1] = tasks[current_idx - 1], tasks[current_idx]
+        elif direction == "down" and current_idx < len(tasks) - 1:
+            tasks[current_idx], tasks[current_idx + 1] = tasks[current_idx + 1], tasks[current_idx]
+        
+        for idx, t in enumerate(tasks):
+            t.order_index = idx
+        
+        db.session.commit()
+    
     return redirect(url_for("projects_show", code=project.code))
 
 @app.post("/projects/<code>/dependencies")
@@ -4738,6 +4978,10 @@ def projects_reviews():
     
     submissions = query.all()
     
+    # Add warning information for each submission
+    for sub in submissions:
+        sub.has_warnings_for_this_task = _submission_has_warnings(sub.student, sub) if sub.student else False
+    
     # Get warning counts for statistics
     flagged_count = Student.query.filter_by(is_flagged=True).count()
     warned_students = Student.query.filter(Student.warnings_json != None).all()
@@ -4865,11 +5109,17 @@ def projects_review_decision(submission_id):
             if reviewed_status == "accepted" and submission.student:
                 if _project_completed(submission.project, submission.student):
                     _award_project_points_if_needed(submission.project, submission.student)
+        # Clear warnings for this submission since it has been reviewed
+        if submission.student and notes:
+            _clear_submission_warnings(submission.student, submission)
     elif reviewed_status:
         submission.status = reviewed_status
         if notes:
             submission.review_notes = notes
         _record_task_attempt_review(submission, status=reviewed_status, notes=notes, reviewer=reviewer)
+        # Clear warnings for this submission since it has been reviewed
+        if submission.student and notes:
+            _clear_submission_warnings(submission.student, submission)
     submission.last_activity_at = datetime.utcnow()
     if submission.status == "accepted" and submission.student:
         if _project_completed(submission.project, submission.student):

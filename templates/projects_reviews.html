@@ -71,10 +71,10 @@
             {% if sub.student %}
               {% if sub.student.is_flagged %}
               <br><span style="background: #637FBE; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: bold;">🚩 FLAGGED</span>
-              {% elif sub.student.warnings_json and sub.student.warnings_json|length > 0 %}
+              {% elif sub.has_warnings_for_this_task %}
               <br><a href="{{ url_for('warnings_student_detail', student_id=sub.student.id) }}" 
                      style="background: #5775B8; color: white; padding: 2px 6px; border-radius: 4px; font-size: 10px; text-decoration: none; font-weight: bold;">
-                ⚠️ {{ sub.student.warnings_json|length }} warning(s)
+                ⚠️ warning(s)
               </a>
               {% endif %}
             {% endif %}
@@ -95,7 +95,7 @@
                  style="color: #d33; text-decoration: none; font-weight: bold;" title="View warning details">
                 🚩 Flagged
               </a>
-              {% elif sub.student.warnings_json and sub.student.warnings_json|length > 0 %}
+              {% elif sub.has_warnings_for_this_task %}
               <a href="{{ url_for('warnings_student_detail', student_id=sub.student.id) }}" 
                  style="color: #f59e0b; text-decoration: none; font-weight: bold;" title="View warning details">
                 ⚠️ Warned
