@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>Proficiency Test Settings</h2>
+  
+  <form method="POST">
+    <label>Test Title</label>
+    <input type="text" name="title" value="{{ config.title }}">
+    <div class="sp"></div>
+
+    <label>Description</label>
+    <textarea name="description" rows="3">{{ config.description or '' }}</textarea>
+    <div class="sp"></div>
+
+    <label>Number of Exercises per Test</label>
+    <input type="number" name="exercise_count" min="1" max="10" value="{{ config.exercise_count }}">
+    <p class="muted">How many random exercises each test will contain.</p>
+    <div class="sp"></div>
+
+    <label>Test Duration (minutes)</label>
+    <input type="number" name="duration_minutes" min="5" max="180" value="{{ config.duration_minutes }}">
+    <p class="muted">Time limit for completing all exercises.</p>
+    <div class="sp"></div>
+
+    <label>Cooldown After Failure (hours)</label>
+    <input type="number" name="cooldown_hours" min="1" max="168" value="{{ config.cooldown_hours }}">
+    <p class="muted">How long a student must wait before retrying after failing.</p>
+    <div class="sp"></div>
+
+    <label>
+      <input type="checkbox" name="is_active" value="1" {% if config.is_active %}checked{% endif %}>
+      Enable Proficiency Tests
+    </label>
+    <p class="muted">When disabled, students cannot start new tests.</p>
+    <div class="sp"></div>
+
+    <hr style="border-color:var(--border); margin:20px 0;">
+
+    <div class="row">
+      <button type="submit" class="btn btn-primary">Save Settings</button>
+      <a href="{{ url_for('proficiency_exercises_list') }}" class="btn">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

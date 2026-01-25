@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>🐍 Proficiency Test</h2>
+  
+  {% if has_tag %}
+  <div style="background:rgba(74,222,128,0.15); border:1px solid #4ade80; padding:20px; border-radius:10px; margin-bottom:20px;">
+    <h3 style="margin:0 0 10px 0; color:#4ade80;">✓ You have passed the proficiency test!</h3>
+    <p class="muted" style="margin:0;">You now have access to all Python projects that require proficiency certification.</p>
+  </div>
+  
+  <div style="display:inline-block; background:var(--brand); color:#0b1120; padding:8px 16px; border-radius:20px; font-weight:600;">
+    🏆 Python Proficiency
+  </div>
+  {% else %}
+  
+  <p>{{ config.description or "Demonstrate your Python skills to unlock advanced projects." }}</p>
+
+  <div style="background:#1f2937; padding:16px; border-radius:10px; margin:20px 0;">
+    <h4 style="margin:0 0 12px 0;">Test Details</h4>
+    <div class="row" style="gap:24px;">
+      <div>
+        <span class="muted">Exercises:</span>
+        <strong>{{ config.exercise_count }}</strong>
+      </div>
+      <div>
+        <span class="muted">Duration:</span>
+        <strong>{{ config.duration_minutes }} minutes</strong>
+      </div>
+      <div>
+        <span class="muted">Retry cooldown:</span>
+        <strong>{{ config.cooldown_hours }} hours</strong>
+      </div>
+    </div>
+  </div>
+
+  {% if in_progress %}
+  <div style="background:rgba(99,127,190,0.2); border:1px solid var(--brand); padding:20px; border-radius:10px; margin-bottom:20px;">
+    <h3 style="margin:0 0 10px 0;">⏱️ Test in Progress</h3>
+    <p class="muted">You have an ongoing test. Time remaining: <strong>{{ (in_progress.time_remaining_sec / 60)|int }} minutes</strong></p>
+    <a href="{{ url_for('student_proficiency_take', attempt_id=in_progress.id) }}" class="btn btn-primary">Continue Test</a>
+  </div>
+  
+  {% elif pending %}
+  <div style="background:rgba(251,191,36,0.15); border:1px solid #fbbf24; padding:20px; border-radius:10px; margin-bottom:20px;">
+    <h3 style="margin:0 0 10px 0;">📋 Awaiting Review</h3>
+    <p class="muted">Your test has been submitted and is pending review by a mentor.</p>
+    <p class="muted">Submitted: {{ pending.submitted_at.strftime('%Y-%m-%d %H:%M') if pending.submitted_at else 'N/A' }}</p>
+  </div>
+  
+  {% elif can_start %}
+    {% if exercise_count < config.exercise_count %}
+    <div style="background:rgba(251,191,36,0.15); border:1px solid #fbbf24; padding:20px; border-radius:10px; margin-bottom:20px;">
+      <p class="muted" style="margin:0;">⚠️ Not enough exercises in the pool yet. Need {{ config.exercise_count }}, have {{ exercise_count }}. Please wait for more exercises to be added.</p>
+    </div>
+    {% else %}
+    <form method="POST" action="{{ url_for('student_proficiency_start') }}">
+      <button type="submit" class="btn btn-primary" style="font-size:1.1rem; padding:14px 28px;" onclick="return confirm('Start the proficiency test now? The timer will begin immediately.');">
+        🚀 Start Proficiency Test
+      </button>
+    </form>
+    {% endif %}
+  
+  {% elif reason == 'cooldown' %}
+  <div style="background:rgba(217,83,52,0.15); border:1px solid var(--danger); padding:20px; border-radius:10px; margin-bottom:20px;">
+    <h3 style="margin:0 0 10px 0; color:var(--danger);">⏳ Cooldown Active</h3>
+    {% if cooldown_remaining %}
+    <p class="muted">You can retry in: <strong>{{ (cooldown_remaining.total_seconds() / 3600)|int }} hours, {{ ((cooldown_remaining.total_seconds() % 3600) / 60)|int }} minutes</strong></p>
+    {% endif %}
+  </div>
+  
+  {% elif not config.is_active %}
+  <div style="background:rgba(148,163,184,0.15); border:1px solid var(--muted); padding:20px; border-radius:10px; margin-bottom:20px;">
+    <p class="muted" style="margin:0;">Proficiency tests are currently disabled.</p>
+  </div>
+  {% endif %}
+
+  {% if past_attempts %}
+  <div class="sp"></div>
+  <h3>Past Attempts</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Status</th>
+        <th>Exercises</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for att in past_attempts %}
+      <tr>
+        <td>{{ att.submitted_at.strftime('%Y-%m-%d %H:%M') if att.submitted_at else att.started_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          {% if att.status == 'passed' %}
+            <span style="color:#4ade80;">✓ Passed</span>
+          {% else %}
+            <span style="color:var(--danger);">✗ Failed</span>
+          {% endif %}
+        </td>
+        <td>
+          {{ att.submissions|length }} exercise{{ 's' if att.submissions|length != 1 else '' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}

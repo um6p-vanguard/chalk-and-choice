@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>{% if exercise %}Edit Exercise{% else %}New Exercise{% endif %}</h2>
+  
+  {% if error %}
+  <div style="background:var(--danger); color:white; padding:10px; border-radius:8px; margin-bottom:16px;">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  <form method="POST">
+    <label>Title *</label>
+    <input type="text" name="title" value="{{ exercise.title if exercise else '' }}" required>
+    <div class="sp"></div>
+
+    <label>Description (problem statement)</label>
+    <textarea name="description" rows="6" placeholder="Describe the problem the student needs to solve...">{{ exercise.description if exercise else '' }}</textarea>
+    <div class="sp"></div>
+
+    <label>Instructions (additional hints)</label>
+    <textarea name="instructions" rows="3" placeholder="Additional instructions or hints...">{{ exercise.instructions if exercise else '' }}</textarea>
+    <div class="sp"></div>
+
+    <label>Starter Code (template for students)</label>
+    <textarea name="starter_code" rows="8" style="font-family:monospace;" placeholder="# Write your solution here&#10;&#10;def solution():&#10;    pass">{{ exercise.starter_code if exercise else '' }}</textarea>
+    <div class="sp"></div>
+
+    <label>Time Limit per Test (seconds)</label>
+    <input type="number" name="time_limit" step="0.5" min="0.5" max="30" value="{{ exercise.time_limit_sec if exercise else 3.0 }}">
+    <div class="sp"></div>
+
+    {% if exercise %}
+    <label>
+      <input type="checkbox" name="is_active" value="1" {% if exercise.is_active %}checked{% endif %}>
+      Active (include in test pool)
+    </label>
+    <div class="sp"></div>
+    {% endif %}
+
+    <hr style="border-color:var(--border); margin:20px 0;">
+
+    <!-- JSON Import Option -->
+    <div style="background:#1e293b; border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:20px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; cursor:pointer;" onclick="toggleJsonImport()">
+        <h3 style="margin:0;">📋 Import from JSON (Optional)</h3>
+        <span id="json-toggle-icon" style="font-size:1.2rem;">▼</span>
+      </div>
+      <div id="json-import-section" style="display:none; margin-top:16px;">
+        <p class="muted">Paste JSON to quickly populate test cases. This will replace existing test cases.</p>
+        <textarea id="json-input" rows="12" style="font-family:monospace; font-size:13px;" placeholder="Paste your JSON here..."></textarea>
+        <div class="sp"></div>
+        <button type="button" class="btn btn-primary" onclick="importFromJson()">Import JSON</button>
+        <button type="button" class="btn" onclick="showJsonExample()">Show Example</button>
+        <div id="json-error" style="color:var(--danger); margin-top:10px; display:none;"></div>
+        
+        <div id="json-example" style="display:none; margin-top:16px; background:#0b1220; padding:14px; border-radius:8px; overflow-x:auto;">
+          <p class="muted" style="margin:0 0 10px 0;"><strong>Example JSON format:</strong></p>
+<pre style="margin:0; font-size:12px; color:var(--text); white-space:pre-wrap;">{
+  "title": "Sum of Two Numbers",
+  "description": "Write a function `add(a, b)` that returns the sum of two numbers.",
+  "instructions": "The function should handle both positive and negative integers.",
+  "starter_code": "def add(a, b):\n    # Your code here\n    pass",
+  "time_limit": 3.0,
+  "test_cases": {
+    "visible": [
+      {
+        "description": "Test with positive numbers",
+        "input": "print(add(2, 3))",
+        "expected_output": "5"
+      },
+      {
+        "description": "Test with zero",
+        "input": "print(add(0, 5))",
+        "expected_output": "5"
+      }
+    ],
+    "hidden": [
+      {
+        "description": "Test with negative numbers",
+        "input": "print(add(-3, -7))",
+        "expected_output": "-10"
+      },
+      {
+        "description": "Test with large numbers",
+        "input": "print(add(1000000, 2000000))",
+        "expected_output": "3000000"
+      }
+    ]
+  }
+}</pre>
+        </div>
+      </div>
+    </div>
+
+    <h3>Visible Test Cases</h3>
+    <p class="muted">Students can run these during the test to check their code.</p>
+    <div style="background:rgba(99,127,190,0.15); border:1px solid var(--brand); padding:12px; border-radius:8px; margin-bottom:16px;">
+      <strong>ℹ️ Important:</strong> For the Input field, enter a <strong>function call expression</strong> like <code>is_balanced("()")</code>. 
+      Do NOT include <code>print()</code> statements. The expected output should be the function's return value (e.g., <code>True</code>, <code>False</code>, <code>5</code>, etc.).
+    </div>
+    
+    <div id="visible-tests">
+      {% if exercise and exercise.visible_test_cases %}
+        {% for tc in exercise.visible_test_cases %}
+        <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+          <label>Description</label>
+          <input type="text" name="visible_desc[]" value="{{ tc.description }}" placeholder="e.g., Test with positive numbers">
+          <div class="sp"></div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label>Input (function call expression)</label>
+              <textarea name="visible_input[]" rows="3" style="font-family:monospace;" placeholder='is_balanced("()")'> {{tc.input }}</textarea>
+              <p class="muted" style="font-size:0.85rem; margin:4px 0 0 0;">Just the function call, no print() needed</p>
+            </div>
+            <div>
+              <label>Expected Output</label>
+              <textarea name="visible_output[]" rows="3" style="font-family:monospace;" placeholder="True">{{ tc.expected_output }}</textarea>
+            </div>
+          </div>
+          <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+          <label>Description</label>
+          <input type="text" name="visible_desc[]" value="" placeholder="e.g., Test with positive numbers">
+          <div class="sp"></div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label>Input (function call expression)</label>
+              <textarea name="visible_input[]" rows="3" style="font-family:monospace;" placeholder='is_balanced("()")'></textarea>
+              <p class="muted" style="font-size:0.85rem; margin:4px 0 0 0;">Just the function call, no print() needed</p>
+            </div>
+            <div>
+              <label>Expected Output</label>
+              <textarea name="visible_output[]" rows="3" style="font-family:monospace;" placeholder="True"></textarea>
+            </div>
+          </div>
+          <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+        </div>
+      {% endif %}
+    </div>
+    <button type="button" class="btn" onclick="addVisibleTest()">+ Add Visible Test</button>
+    
+    <div class="sp"></div>
+    <hr style="border-color:var(--border); margin:20px 0;">
+
+    <h3>Hidden Test Cases</h3>
+    <p class="muted">Students cannot see these. Used for edge cases and final grading.</p>
+    
+    <div id="hidden-tests">
+      {% if exercise and exercise.hidden_test_cases %}
+        {% for tc in exercise.hidden_test_cases %}
+        <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+          <label>Description</label>
+          <input type="text" name="hidden_desc[]" value="{{ tc.description }}" placeholder="e.g., Edge case: empty input">
+          <div class="sp"></div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label>Input (function call expression)</label>
+              <textarea name="hidden_input[]" rows="3" style="font-family:monospace;" placeholder='is_balanced("((")'> {{tc.input }}</textarea>
+              <p class="muted" style="font-size:0.85rem; margin:4px 0 0 0;">Just the function call, no print() needed</p>
+            </div>
+            <div>
+              <label>Expected Output</label>
+              <textarea name="hidden_output[]" rows="3" style="font-family:monospace;" placeholder="False">{{ tc.expected_output }}</textarea>
+            </div>
+          </div>
+          <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+        </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+    <button type="button" class="btn" onclick="addHiddenTest()">+ Add Hidden Test</button>
+
+    <div class="sp"></div>
+    <hr style="border-color:var(--border); margin:20px 0;">
+
+    <div class="row">
+      <button type="submit" class="btn btn-primary">{% if exercise %}Save Changes{% else %}Create Exercise{% endif %}</button>
+      <a href="{{ url_for('proficiency_exercises_list') }}" class="btn">Cancel</a>
+      {% if exercise %}
+      <form method="POST" action="{{ url_for('proficiency_exercises_delete', exercise_id=exercise.id) }}" style="margin-left:auto;" onsubmit="return confirm('Delete this exercise?');">
+        <button type="submit" class="btn btn-danger">Delete Exercise</button>
+      </form>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+<script>
+function addVisibleTest() {
+  const container = document.getElementById('visible-tests');
+  const html = `
+    <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+      <label>Description</label>
+      <input type="text" name="visible_desc[]" value="" placeholder="e.g., Test with valid input">
+      <div class="sp"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label>Input (function call expression)</label>
+          <textarea name="visible_input[]" rows="3" style="font-family:monospace;" placeholder='is_balanced("()")'></textarea>
+          <p class="muted" style="font-size:0.85rem; margin:4px 0 0 0;">Just the function call, no print() needed</p>
+        </div>
+        <div>
+          <label>Expected Output</label>
+          <textarea name="visible_output[]" rows="3" style="font-family:monospace;" placeholder="True"></textarea>
+        </div>
+      </div>
+      <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+    </div>
+  `;
+  container.insertAdjacentHTML('beforeend', html);
+}
+
+function addHiddenTest() {
+  const container = document.getElementById('hidden-tests');
+  const html = `
+    <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+      <label>Description</label>
+      <input type="text" name="hidden_desc[]" value="" placeholder="e.g., Edge case: nested parentheses">
+      <div class="sp"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label>Input (function call expression)</label>
+          <textarea name="hidden_input[]" rows="3" style="font-family:monospace;" placeholder='is_balanced("((()")'></textarea>
+          <p class="muted" style="font-size:0.85rem; margin:4px 0 0 0;">Just the function call, no print() needed</p>
+        </div>
+        <div>
+          <label>Expected Output</label>
+          <textarea name="hidden_output[]" rows="3" style="font-family:monospace;" placeholder="False"></textarea>
+        </div>
+      </div>
+      <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+    </div>
+  `;
+  container.insertAdjacentHTML('beforeend', html);
+}
+
+// JSON Import Functions
+function toggleJsonImport() {
+  const section = document.getElementById('json-import-section');
+  const icon = document.getElementById('json-toggle-icon');
+  if (section.style.display === 'none') {
+    section.style.display = 'block';
+    icon.textContent = '▲';
+  } else {
+    section.style.display = 'none';
+    icon.textContent = '▼';
+  }
+}
+
+function showJsonExample() {
+  const example = document.getElementById('json-example');
+  example.style.display = example.style.display === 'none' ? 'block' : 'none';
+}
+
+function importFromJson() {
+  const jsonInput = document.getElementById('json-input');
+  const errorDiv = document.getElementById('json-error');
+  errorDiv.style.display = 'none';
+  
+  try {
+    const data = JSON.parse(jsonInput.value);
+    
+    // Populate basic fields if present
+    if (data.title) {
+      document.querySelector('input[name="title"]').value = data.title;
+    }
+    if (data.description) {
+      document.querySelector('textarea[name="description"]').value = data.description;
+    }
+    if (data.instructions) {
+      document.querySelector('textarea[name="instructions"]').value = data.instructions;
+    }
+    if (data.starter_code) {
+      document.querySelector('textarea[name="starter_code"]').value = data.starter_code;
+    }
+    if (data.time_limit) {
+      document.querySelector('input[name="time_limit"]').value = data.time_limit;
+    }
+    
+    // Clear existing test cases
+    document.getElementById('visible-tests').innerHTML = '';
+    document.getElementById('hidden-tests').innerHTML = '';
+    
+    // Add visible test cases
+    const visibleTests = data.test_cases?.visible || [];
+    visibleTests.forEach(tc => {
+      addTestCase('visible', tc.description || '', tc.input || '', tc.expected_output || '');
+    });
+    
+    // Add hidden test cases
+    const hiddenTests = data.test_cases?.hidden || [];
+    hiddenTests.forEach(tc => {
+      addTestCase('hidden', tc.description || '', tc.input || '', tc.expected_output || '');
+    });
+    
+    // Add at least one empty row if none exist
+    if (visibleTests.length === 0) {
+      addVisibleTest();
+    }
+    
+    alert(`✓ Imported successfully!\n- ${visibleTests.length} visible test(s)\n- ${hiddenTests.length} hidden test(s)`);
+    
+  } catch (e) {
+    errorDiv.textContent = '✗ Invalid JSON: ' + e.message;
+    errorDiv.style.display = 'block';
+  }
+}
+
+function addTestCase(type, desc, input, output) {
+  const container = document.getElementById(type + '-tests');
+  const html = `
+    <div class="test-case-row" style="background:#1f2937; padding:14px; border-radius:10px; margin-bottom:10px;">
+      <label>Description</label>
+      <input type="text" name="${type}_desc[]" value="${escapeHtml(desc)}" placeholder="e.g., Test description">
+      <div class="sp"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+        <div>
+          <label>Input (code to execute)</label>
+          <textarea name="${type}_input[]" rows="3" style="font-family:monospace;">${escapeHtml(input)}</textarea>
+        </div>
+        <div>
+          <label>Expected Output</label>
+          <textarea name="${type}_output[]" rows="3" style="font-family:monospace;">${escapeHtml(output)}</textarea>
+        </div>
+      </div>
+      <button type="button" class="btn btn-danger" style="margin-top:10px; padding:6px 12px;" onclick="this.closest('.test-case-row').remove()">Remove</button>
+    </div>
+  `;
+  container.insertAdjacentHTML('beforeend', html);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+</script>
+{% endblock %}

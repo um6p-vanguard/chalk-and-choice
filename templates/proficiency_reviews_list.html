@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+    <h2 style="margin:0;">Proficiency Test Reviews</h2>
+    <a href="{{ url_for('proficiency_exercises_list') }}" class="btn">← Back to Exercises</a>
+  </div>
+
+  <h3>Pending Review ({{ pending|length }})</h3>
+  {% if pending %}
+  <table>
+    <thead>
+      <tr>
+        <th>Student</th>
+        <th>Submitted</th>
+        <th>Exercises</th>
+        <th>Auto-Grade</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for att in pending %}
+      <tr>
+        <td><strong>{{ att.student.name }}</strong></td>
+        <td class="muted">{{ att.submitted_at.strftime('%Y-%m-%d %H:%M') if att.submitted_at else 'N/A' }}</td>
+        <td>{{ att.submissions|length }}</td>
+        <td>
+          {% set total_visible = namespace(passed=0, total=0) %}
+          {% set total_hidden = namespace(passed=0, total=0) %}
+          {% for sub in att.submissions %}
+            {% set total_visible.passed = total_visible.passed + sub.visible_passed %}
+            {% set total_visible.total = total_visible.total + sub.visible_total %}
+            {% set total_hidden.passed = total_hidden.passed + sub.hidden_passed %}
+            {% set total_hidden.total = total_hidden.total + sub.hidden_total %}
+          {% endfor %}
+          <span style="color:#4ade80;">{{ total_visible.passed }}/{{ total_visible.total }}</span> visible,
+          <span style="color:#fbbf24;">{{ total_hidden.passed }}/{{ total_hidden.total }}</span> hidden
+        </td>
+        <td>
+          <a href="{{ url_for('proficiency_review_detail', attempt_id=att.id) }}" class="btn btn-primary" style="padding:6px 12px;">Review</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No submissions pending review.</p>
+  {% endif %}
+
+  <div class="sp"></div>
+  <hr style="border-color:var(--border);">
+  <div class="sp"></div>
+
+  <h3>Recently Reviewed</h3>
+  {% if reviewed %}
+  <table>
+    <thead>
+      <tr>
+        <th>Student</th>
+        <th>Result</th>
+        <th>Reviewed</th>
+        <th>Reviewer</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for att in reviewed %}
+      <tr>
+        <td>{{ att.student.name }}</td>
+        <td>
+          {% if att.status == 'passed' %}
+            <span style="color:#4ade80;">✓ Passed</span>
+          {% else %}
+            <span style="color:var(--danger);">✗ Failed</span>
+          {% endif %}
+        </td>
+        <td class="muted">{{ att.reviewed_at.strftime('%Y-%m-%d %H:%M') if att.reviewed_at else 'N/A' }}</td>
+        <td class="muted">{{ att.reviewer.name if att.reviewer else 'N/A' }}</td>
+        <td>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <a href="{{ url_for('proficiency_review_detail', attempt_id=att.id) }}" class="btn" style="padding:6px 12px;">View Details</a>
+            {% if att.status == 'passed' %}
+              <form method="POST" action="{{ url_for('proficiency_change_status', attempt_id=att.id) }}" style="display:inline;" onsubmit="return confirm('Change this student from Passed to Failed?');">
+                <input type="hidden" name="new_status" value="failed">
+                <button type="submit" class="btn btn-danger" style="padding:6px 12px;">Mark as Failed</button>
+              </form>
+            {% else %}
+              <form method="POST" action="{{ url_for('proficiency_change_status', attempt_id=att.id) }}" style="display:inline;" onsubmit="return confirm('Change this student from Failed to Passed?');">
+                <input type="hidden" name="new_status" value="passed">
+                <button type="submit" class="btn" style="padding:6px 12px; background:#4ade80; color:#0b1120; border:none;">Mark as Passed</button>
+              </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No reviewed submissions yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .timer { 
+    position:fixed; 
+    top:80px; 
+    right:20px; 
+    background:var(--panel); 
+    border:2px solid var(--brand); 
+    padding:12px 20px; 
+    border-radius:10px; 
+    font-size:1.3rem;
+    font-weight:600;
+    z-index:100;
+  }
+  .timer.warning { border-color:var(--warn); color:var(--warn); }
+  .timer.danger { border-color:var(--danger); color:var(--danger); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.6;} }
+  .exercise-container.hidden { display: none !important; }
+  .exercise-nav { opacity: 0.6; }
+  .exercise-nav.active { opacity: 1; border-color: var(--brand); }
+</style>
+
+<div class="timer" id="timer">--:--</div>
+
+<div class="card">
+  <h3 style="margin:0;">{{ attempt.student.name }} - Proficiency Test</h3>
+  <p class="muted">Complete all {{ attempt.submissions|length }} exercises before time runs out.</p>
+</div>
+
+<div class="sp"></div>
+
+<!-- Exercise Navigation Tabs -->
+<div class="card" style="margin-bottom:16px;">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    {% for sub in attempt.submissions %}
+    <button type="button" 
+            class="btn exercise-nav {% if loop.first %}active{% endif %}" 
+            data-exercise-index="{{ loop.index0 }}"
+            onclick="showExercise({{ loop.index0 }})">
+      Exercise {{ loop.index }}
+    </button>
+    {% endfor %}
+  </div>
+</div>
+
+<form method="POST" id="test-form" data-exam-take>
+  <input type="hidden" name="action" value="">
+  
+  {% for sub in attempt.submissions %}
+  <div class="card exercise-container {% if not loop.first %}hidden{% endif %}" 
+       style="margin-bottom:16px;" 
+       data-exercise="{{ loop.index0 }}">
+    <div style="border-bottom:1px solid var(--border); padding-bottom:12px; margin-bottom:16px;">
+      <div class="muted" style="font-size:0.9rem;">Exercise {{ loop.index }} of {{ attempt.submissions|length }}</div>
+      <h3 style="margin:8px 0 6px 0;">{{ sub.exercise_title }}</h3>
+      {% if sub.exercise_description %}
+      <div class="muted" style="white-space:pre-wrap; line-height:1.6;">{{ sub.exercise_description }}</div>
+      {% endif %}
+      {% if sub.exercise_instructions %}
+      <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+        <strong>Instructions</strong>
+        <div class="muted" style="margin:6px 0 0 0; font-style:italic;">{{ sub.exercise_instructions }}</div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
+      <div class="code-question-main" style="display:flex; flex-wrap:wrap; gap:12px;">
+        <div class="code-question-description" style="flex:1 1 280px; min-width:260px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+          <strong>Your Solution</strong>
+          <p class="muted" style="margin:6px 0 0 0;">Write your code below. You can run the visible tests to check your solution.</p>
+        </div>
+        <div class="code-question-editor" style="flex:1 1 480px; min-width:400px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+          <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <div class="muted" style="font-size:0.9rem;">Language: Python</div>
+            <button type="button" class="btn" onclick="resetCode({{ sub.id }}, {{ sub.exercise_starter_code|tojson|e }})">Reset code</button>
+          </div>
+          <textarea 
+            name="code_{{ sub.id }}" 
+            id="code-{{ sub.id }}" 
+            rows="18" 
+            data-code-input="ex{{ sub.id }}"
+            data-code-language="python"
+            data-code-initial="{{ (sub.code or sub.exercise_starter_code or '')|e }}"
+            data-submission-id="{{ sub.id }}"
+            style="width:100%; font-family:monospace; font-size:14px;"
+          >{{ sub.code or sub.exercise_starter_code or '' }}</textarea>
+        </div>
+      </div>
+
+      <div class="code-question-tests" style="display:flex; flex-direction:column; gap:10px;">
+        <div class="code-samples-card" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+          <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <strong>Visible tests</strong>
+              <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" id="run-status-{{ sub.id }}">Not run</span>
+            </div>
+            <button type="button" class="btn btn-primary" onclick="runTests({{ sub.id }})">▶ Run visible tests</button>
+          </div>
+          <div id="test-results-{{ sub.id }}" style="margin-top:12px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  <!-- Navigation and Submit Buttons -->
+  <div class="card">
+    <div class="row" style="gap:12px; justify-content:space-between; flex-wrap:wrap;">
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn" id="prev-btn" onclick="previousExercise()" style="display:none;">← Previous</button>
+        <button type="button" class="btn btn-primary" id="next-btn" onclick="nextExercise()">Next →</button>
+      </div>
+      <div class="row" style="gap:8px;">
+        <button type="button" class="btn" onclick="saveProgress()">💾 Save Progress</button>
+        <button type="button" class="btn btn-primary" onclick="submitTest()">✓ Submit Test</button>
+      </div>
+    </div>
+  </div>
+</form>
+
+<script src="{{ url_for('static', filename='exams.js') }}"></script>
+<script>
+const CSRF = "{{ csrf_token() }}";
+const attemptId = {{ attempt.id }};
+const deadline = new Date("{{ deadline.isoformat() }}Z");
+const totalExercises = {{ attempt.submissions|length }};
+let currentExerciseIndex = 0;
+
+// Exercise Navigation
+function showExercise(index) {
+  currentExerciseIndex = index;
+  
+  // Update exercise containers
+  document.querySelectorAll('.exercise-container').forEach((el, i) => {
+    if (i === index) {
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+    }
+  });
+  
+  // Update navigation tabs
+  document.querySelectorAll('.exercise-nav').forEach((btn, i) => {
+    if (i === index) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  
+  // Update prev/next buttons
+  const prevBtn = document.getElementById('prev-btn');
+  const nextBtn = document.getElementById('next-btn');
+  
+  if (index === 0) {
+    prevBtn.style.display = 'none';
+  } else {
+    prevBtn.style.display = 'inline-block';
+  }
+  
+  if (index === totalExercises - 1) {
+    nextBtn.style.display = 'none';
+  } else {
+    nextBtn.style.display = 'inline-block';
+  }
+  
+  // Scroll to top
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function nextExercise() {
+  if (currentExerciseIndex < totalExercises - 1) {
+    showExercise(currentExerciseIndex + 1);
+  }
+}
+
+function previousExercise() {
+  if (currentExerciseIndex > 0) {
+    showExercise(currentExerciseIndex - 1);
+  }
+}
+
+// Timer
+function updateTimer() {
+  const now = new Date();
+  const diff = deadline - now;
+  const timer = document.getElementById('timer');
+  
+  if (diff <= 0) {
+    timer.textContent = "TIME UP!";
+    timer.className = "timer danger";
+    submitTest();
+    return;
+  }
+  
+  const mins = Math.floor(diff / 60000);
+  const secs = Math.floor((diff % 60000) / 1000);
+  timer.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+  
+  if (mins < 5) {
+    timer.className = "timer danger";
+  } else if (mins < 15) {
+    timer.className = "timer warning";
+  } else {
+    timer.className = "timer";
+  }
+}
+updateTimer();
+const timerInterval = setInterval(updateTimer, 1000);
+
+// Auto-save every 30 seconds
+setInterval(() => {
+  document.querySelectorAll('textarea[data-submission-id]').forEach(textarea => {
+    const subId = textarea.dataset.submissionId;
+    // Get code from Monaco or textarea
+    const code = textarea._monacoEditor ? textarea._monacoEditor.getValue() : textarea.value;
+    
+    fetch(`/api/proficiency/test/${attemptId}/save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF': CSRF },
+      body: JSON.stringify({ submission_id: parseInt(subId), code: code })
+    }).catch(() => {});
+  });
+}, 30000);
+
+function resetCode(subId, starterCode) {
+  const textarea = document.getElementById(`code-${subId}`);
+  textarea.value = starterCode || '';
+  // Trigger Monaco editor update if it exists
+  const event = new Event('input', { bubbles: true });
+  textarea.dispatchEvent(event);
+}
+
+// Get code value from Monaco editor or textarea
+function getCodeValue(submissionId) {
+  const textarea = document.getElementById(`code-${submissionId}`);
+  // If Monaco editor is attached, get value from it
+  if (textarea._monacoEditor) {
+    return textarea._monacoEditor.getValue();
+  }
+  // Otherwise use textarea value
+  return textarea.value;
+}
+
+// Run tests
+async function runTests(submissionId) {
+  const textarea = document.getElementById(`code-${submissionId}`);
+  const status = document.getElementById(`run-status-${submissionId}`);
+  const resultsDiv = document.getElementById(`test-results-${submissionId}`);
+  
+  status.textContent = "Running...";
+  status.style.color = "var(--muted)";
+  resultsDiv.innerHTML = "";
+  
+  // Get current code from Monaco or textarea
+  const code = getCodeValue(submissionId);
+  
+  try {
+    const resp = await fetch(`/api/proficiency/test/${attemptId}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF': CSRF },
+      body: JSON.stringify({ 
+        submission_id: submissionId, 
+        code: code 
+      })
+    });
+    
+    const data = await resp.json();
+    
+    if (!data.ok) {
+      status.textContent = data.error || "Error";
+      status.style.color = "var(--danger)";
+      return;
+    }
+    
+    const allPassed = data.passed === data.total && data.total > 0;
+    status.textContent = `${data.passed}/${data.total} passed`;
+    status.style.color = allPassed ? "#4ade80" : (data.passed > 0 ? "#fbbf24" : "var(--danger)");
+    
+    let html = '<ul style="list-style:none; padding:0; margin:0; display:grid; gap:6px;">';
+    for (const r of data.results) {
+      const isPassed = r.status === 'passed';
+      const statusColor = isPassed ? '#4ade80' : (r.status === 'error' ? '#fbbf24' : '#ef4444');
+      const statusIcon = isPassed ? '✓' : '✗';
+      
+      html += `<li style="border:1px solid ${statusColor}; border-radius:6px; padding:8px; background:rgba(${isPassed ? '74,222,128' : '239,68,68'},0.05);">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span style="color:${statusColor}; font-weight:600;">${statusIcon}</span>
+          <strong>${r.name}</strong>
+          <span class="muted" style="font-size:0.85rem;">${r.status}</span>
+        </div>`;
+      
+      if (!isPassed) {
+        if (r.error) html += `<div class="muted" style="font-size:0.85rem; margin-top:4px;">Error: ${escapeHtml(r.error)}</div>`;
+        if (r.expected) html += `<div class="muted" style="font-size:0.85rem; margin-top:4px;">Expected: ${escapeHtml(r.expected)}</div>`;
+        if (r.output) html += `<div class="muted" style="font-size:0.85rem; margin-top:4px;">Got: ${escapeHtml(r.output)}</div>`;
+      }
+      
+      html += '</li>';
+    }
+    html += '</ul>';
+    resultsDiv.innerHTML = html;
+    
+  } catch (e) {
+    status.textContent = "Network error";
+    status.style.color = "var(--danger)";
+  }
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function saveProgress() {
+  const form = document.getElementById('test-form');
+  const actionInput = form.querySelector('input[name="action"]');
+  actionInput.value = 'save';
+  form.submit();
+}
+
+function submitTest() {
+  if (!confirm('Submit your test? You cannot make changes after submission.')) {
+    return;
+  }
+  clearInterval(timerInterval);
+  const form = document.getElementById('test-form');
+  const actionInput = form.querySelector('input[name="action"]');
+  actionInput.value = 'submit';
+  form.submit();
+}
+</script>
+{% endblock %}

@@ -40,6 +40,15 @@
     
     <div class="sp"></div>
     
+    <label>Required proficiency tag</label>
+    <select name="required_proficiency_tag">
+      <option value="">No requirement</option>
+      <option value="python" {% if form_data.required_proficiency_tag == 'python' %}selected{% endif %}>Python Proficiency</option>
+    </select>
+    <p class="muted" style="margin-top:4px; font-size:0.9rem;">Students must pass the proficiency test to access this project.</p>
+    
+    <div class="sp"></div>
+    
     <div class="row" style="gap:10px;">
       <button class="btn btn-primary" type="submit">Save changes</button>
       <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Cancel</a>

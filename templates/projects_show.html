@@ -42,6 +42,13 @@
     {% endif %}
   </p>
   <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_minutes }} min</strong></p>
+  {% if project.required_proficiency_tag %}
+  <p class="muted" style="margin-top:4px;">
+    <span style="background:var(--brand); color:#0b1120; padding:2px 8px; border-radius:4px; font-size:0.85rem; font-weight:600;">
+      🔒 Requires: {{ project.required_proficiency_tag }} proficiency
+    </span>
+  </p>
+  {% endif %}
 </div>
 
 {% if status_message %}

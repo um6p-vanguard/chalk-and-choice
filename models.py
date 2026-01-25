@@ -1,6 +1,6 @@
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator, TEXT
 from sqlalchemy import UniqueConstraint, func
@@ -286,6 +286,8 @@ class Project(db.Model):
     # Points awarded once upon first project completion; retry cooldown (minutes) applies after rejected submissions.
     points = db.Column(db.Integer, nullable=False, default=0)
     retry_cooldown_minutes = db.Column(db.Integer, nullable=False, default=0)
+    # Proficiency gating: if set, student must have this tag to access project
+    required_proficiency_tag = db.Column(db.String(64), nullable=True)
 
 # --------------------------
 # Blog
@@ -407,4 +409,133 @@ class ProjectTaskAttempt(db.Model):
 
     __table_args__ = (
         UniqueConstraint('submission_id', 'attempt_number', name='uq_project_task_attempt_number'),
+    )
+
+# --------------------------
+# Proficiency Test System
+# --------------------------
+
+class ProficiencyExercise(db.Model):
+    """Pool of exercises for proficiency tests."""
+    __tablename__ = "proficiency_exercises"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)  # Problem statement
+    instructions = db.Column(db.Text, nullable=True)  # Additional instructions
+    starter_code = db.Column(db.Text, nullable=True)  # Initial code template
+    # Test cases: {"visible": [...], "hidden": [...]}
+    # Each test case: {"input": "...", "expected_output": "...", "description": "..."}
+    test_cases_json = db.Column(JSONText, nullable=False, default=dict)
+    time_limit_sec = db.Column(db.Float, nullable=False, default=3.0)  # Per test case
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+
+    creator = db.relationship('User')
+
+    @property
+    def visible_test_cases(self):
+        tc = self.test_cases_json or {}
+        return tc.get("visible", [])
+
+    @property
+    def hidden_test_cases(self):
+        tc = self.test_cases_json or {}
+        return tc.get("hidden", [])
+
+
+class ProficiencyTestConfig(db.Model):
+    """Global configuration for proficiency tests."""
+    __tablename__ = "proficiency_test_config"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False, default="Python Proficiency Test")
+    description = db.Column(db.Text, nullable=True)
+    exercise_count = db.Column(db.Integer, nullable=False, default=3)  # Number of exercises per test
+    duration_minutes = db.Column(db.Integer, nullable=False, default=60)  # Test duration
+    cooldown_hours = db.Column(db.Integer, nullable=False, default=48)  # Hours before retry
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class ProficiencyTestAttempt(db.Model):
+    """A student's test attempt with randomly selected exercises."""
+    __tablename__ = "proficiency_test_attempts"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    # Snapshot of config at time of test
+    duration_minutes = db.Column(db.Integer, nullable=False, default=60)
+    # Status: in_progress | submitted | passed | failed
+    status = db.Column(db.String(32), nullable=False, default="in_progress")
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+    ip_address = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    student = db.relationship('Student', backref=db.backref('proficiency_attempts', cascade="all,delete-orphan"))
+    reviewer = db.relationship('User')
+
+    @property
+    def is_expired(self):
+        if self.status != "in_progress":
+            return False
+        deadline = self.started_at + timedelta(minutes=self.duration_minutes)
+        return datetime.utcnow() > deadline
+
+    @property
+    def time_remaining_sec(self):
+        if self.status != "in_progress":
+            return 0
+        deadline = self.started_at + timedelta(minutes=self.duration_minutes)
+        remaining = (deadline - datetime.utcnow()).total_seconds()
+        return max(0, remaining)
+
+
+class ProficiencyExerciseSubmission(db.Model):
+    """Student's submission for one exercise within a test attempt."""
+    __tablename__ = "proficiency_exercise_submissions"
+    id = db.Column(db.Integer, primary_key=True)
+    attempt_id = db.Column(db.Integer, db.ForeignKey('proficiency_test_attempts.id', ondelete="CASCADE"), index=True, nullable=False)
+    exercise_id = db.Column(db.Integer, db.ForeignKey('proficiency_exercises.id', ondelete="SET NULL"), nullable=True)
+    # Snapshot of exercise at submission time
+    exercise_title = db.Column(db.String(255), nullable=False)
+    exercise_description = db.Column(db.Text, nullable=True)
+    exercise_instructions = db.Column(db.Text, nullable=True)
+    exercise_starter_code = db.Column(db.Text, nullable=True)
+    exercise_test_cases_json = db.Column(JSONText, nullable=True)  # Full snapshot
+    # Student's work
+    code = db.Column(db.Text, nullable=True)  # Student's submitted code
+    run_logs = db.Column(JSONText, nullable=False, default=list)  # Test run history
+    # Grading results after submission
+    visible_results_json = db.Column(JSONText, nullable=True)  # Results of visible tests
+    hidden_results_json = db.Column(JSONText, nullable=True)   # Results of hidden tests
+    visible_passed = db.Column(db.Integer, default=0, nullable=False)
+    visible_total = db.Column(db.Integer, default=0, nullable=False)
+    hidden_passed = db.Column(db.Integer, default=0, nullable=False)
+    hidden_total = db.Column(db.Integer, default=0, nullable=False)
+    order_index = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    attempt = db.relationship('ProficiencyTestAttempt', backref=db.backref('submissions', cascade="all,delete-orphan", order_by="ProficiencyExerciseSubmission.order_index"))
+    exercise = db.relationship('ProficiencyExercise')
+
+
+class StudentProficiencyTag(db.Model):
+    """Proficiency tags earned by students upon passing tests."""
+    __tablename__ = "student_proficiency_tags"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    tag_name = db.Column(db.String(64), nullable=False, default="python")  # e.g., "python", "advanced_python"
+    attempt_id = db.Column(db.Integer, db.ForeignKey('proficiency_test_attempts.id', ondelete="SET NULL"), nullable=True)
+    awarded_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    awarded_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+
+    student = db.relationship('Student', backref=db.backref('proficiency_tags', cascade="all,delete-orphan"))
+    attempt = db.relationship('ProficiencyTestAttempt')
+    awarded_by = db.relationship('User')
+
+    __table_args__ = (
+        UniqueConstraint('student_id', 'tag_name', name='uq_student_proficiency_tag'),
     )

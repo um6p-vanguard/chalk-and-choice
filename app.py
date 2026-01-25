@@ -1,5 +1,5 @@
 import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import (
     Flask, render_template, request, redirect, url_for,
     session, make_response, jsonify, abort, Response, send_file
@@ -16,7 +16,9 @@ from models import (db, Student, User, Form,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
-                    BlogPost, BlogComment, Leaderboard)
+                    BlogPost, BlogComment, Leaderboard,
+                    ProficiencyExercise, ProficiencyTestConfig, ProficiencyTestAttempt,
+                    ProficiencyExerciseSubmission, StudentProficiencyTag)
 import qrcode
 from sqlalchemy import func
 from sqlalchemy.orm import subqueryload
@@ -214,7 +216,7 @@ def _save_task_upload(submission, question, qid, file_storage, existing_info=Non
         "stored_name": stored_name,
         "path": rel_path,
         "size": size or os.path.getsize(full_path),
-        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
     }
     if existing_info:
         _remove_uploaded_file(existing_info)
@@ -255,7 +257,7 @@ def _save_task_resource(task, file_storage, existing_info=None):
         "stored_name": stored_name,
         "path": rel_path,
         "size": size or os.path.getsize(full_path),
-        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
         "content_type": file_storage.mimetype or "",
     }
     if existing_info:
@@ -297,7 +299,7 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
         "type": warning_type,
         "description": description,
         "severity": severity,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
         "auto_detected": auto_detected,
     }
     
@@ -502,7 +504,7 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
             
             similarity = _calculate_code_similarity(submitted_code, other_code)
             if similarity >= WARNING_SIMILARITY_THRESHOLD:
-                other_student = Student.query.get(other_sub.student_id)
+                other_student = db.session.get(Student, other_sub.student_id)
                 other_name = other_student.name if other_student else "Unknown"
                 _add_warning(
                     student,
@@ -539,7 +541,7 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
             
             similarity = _calculate_code_similarity(submitted_code, other_code)
             if similarity >= WARNING_SIMILARITY_THRESHOLD:
-                other_student = Student.query.get(other_sub.student_id)
+                other_student = db.session.get(Student, other_sub.student_id)
                 other_name = other_student.name if other_student else "Unknown"
                 _add_warning(
                     student,
@@ -723,7 +725,7 @@ def update_student_last_seen():
         s = None
     if not s:
         return
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if not s.last_seen_at or (now - s.last_seen_at).total_seconds() >= LOG_ACTIVITY_UPDATE_SEC:
         s.last_seen_at = now
         _touch_student_log_session(s, now)
@@ -737,11 +739,11 @@ def update_student_last_seen():
 # --------------------------------------------------------------------
 def current_user():
     uid = session.get("user_id")
-    return User.query.get(uid) if uid else None
+    return db.session.get(User, uid) if uid else None
 
 def current_student():
     sid = session.get("student_id")
-    return Student.query.get(sid) if sid else None
+    return db.session.get(Student, sid) if sid else None
 
 def logout_everyone():
     session.pop("user_id", None)
@@ -806,7 +808,7 @@ def try_restore_student_from_cookie():
     sid, name = data.get("id"), data.get("name")
     if not sid or not name:
         return
-    stu = Student.query.get(sid)
+    stu = db.session.get(Student, sid)
     if not stu or stu.name != name:
         return
     session["student_id"] = stu.id
@@ -825,7 +827,7 @@ def student_ping():
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     student.last_seen_at = now
     _touch_student_log_session(student, now)
     try:
@@ -861,7 +863,7 @@ def login():
                 logout_everyone()
                 session["user_id"] = acct_user.id
                 session["user_role"] = acct_user.role
-                acct_user.last_login = datetime.utcnow()
+                acct_user.last_login = datetime.now(timezone.utc)
                 db.session.commit()
                 if acct_user.first_login:
                     session["must_change_pw"] = {"kind": "user", "id": acct_user.id}
@@ -874,7 +876,7 @@ def login():
                 logout_everyone()
                 session["student_id"] = acct_student.id
                 session["student_name"] = acct_student.name
-                acct_student.last_login = datetime.utcnow()
+                acct_student.last_login = datetime.now(timezone.utc)
                 db.session.commit()
                 if acct_student.first_login:
                     session["must_change_pw"] = {"kind": "student", "id": acct_student.id}
@@ -910,14 +912,14 @@ def password_new():
         else:
             if must:
                 if must["kind"] == "user":
-                    u = User.query.get(must["id"]);  assert u
+                    u = db.session.get(User, must["id"]);  assert u
                     u.set_password(pw1); u.first_login = False
                     db.session.commit()
                     session.pop("must_change_pw", None)
                     session["user_id"] = u.id; session["user_role"] = u.role
                     return redirect(url_for("dashboard_for_role"))
                 else:
-                    s = Student.query.get(must["id"]);  assert s
+                    s = db.session.get(Student, must["id"]);  assert s
                     s.set_password(pw1); s.first_login = False
                     db.session.commit()
                     session.pop("must_change_pw", None)
@@ -947,7 +949,7 @@ def index():
         student_name=session.get("student_name"),
         exams=exams,
         available_exams=available_exams,
-        now_utc=datetime.utcnow(),
+        now_utc=datetime.now(timezone.utc),
     )
 
 def gen_code(n=6):
@@ -1205,7 +1207,7 @@ def students_online():
     except Exception:
         minutes = 10
     minutes = max(1, min(minutes, 120))
-    cutoff = datetime.utcnow() - timedelta(minutes=minutes)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     students = Student.query.filter(Student.last_seen_at != None, Student.last_seen_at >= cutoff).order_by(Student.last_seen_at.desc()).all()
     return render_template(
         "students_online.html",
@@ -1261,7 +1263,7 @@ def spotlight_start():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
     if not iv.started_at:
-        iv.started_at = datetime.utcnow()
+        iv.started_at = datetime.now(timezone.utc)
     iv.status = "running"
     db.session.commit()
     return jsonify({"ok": True})
@@ -1278,7 +1280,7 @@ def spotlight_complete():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
 
-    iv.ended_at = datetime.utcnow()
+    iv.ended_at = datetime.now(timezone.utc)
     iv.status = "completed"
 
     # Update StudentStats
@@ -1287,7 +1289,7 @@ def spotlight_complete():
         ss = StudentStats(student_id=iv.student_id, times_spoken=0, current_round_done=False)
         db.session.add(ss)
     ss.times_spoken += 1
-    ss.last_spoken_at = datetime.utcnow()
+    ss.last_spoken_at = datetime.now(timezone.utc)
     ss.current_round_done = True
 
     db.session.commit()
@@ -1346,7 +1348,7 @@ def forms_new():
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     is_expired = bool(form.closes_at and form.closes_at <= now)
     if not form.is_open or is_expired:
         return render_template("form_closed.html", form=form,
@@ -1418,7 +1420,7 @@ def form_submit(code):
     stu = current_student()
     if not stu:
         abort(401)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if not form.is_open or (form.closes_at and form.closes_at <= now):
         abort(403, description="Form is closed.")
 
@@ -1802,7 +1804,7 @@ def _record_task_attempt_review(submission, status=None, notes=None, reviewer=No
         attempt.review_notes = notes
     if reviewer:
         attempt.reviewed_by_user_id = reviewer.id
-    attempt.reviewed_at = datetime.utcnow()
+    attempt.reviewed_at = datetime.now(timezone.utc)
 
 def _project_required_count(project):
     required_tasks = [t for t in project.tasks if t.required]
@@ -1862,6 +1864,15 @@ def _student_group_ids(student):
     return {m.group_id for m in memberships if m.group_id}
 
 def _project_visible_to_student(project, student):
+    # Check proficiency requirement first
+    if project.required_proficiency_tag:
+        has_tag = StudentProficiencyTag.query.filter_by(
+            student_id=student.id, 
+            tag_name=project.required_proficiency_tag
+        ).first()
+        if not has_tag:
+            return False
+    
     assignments = project.group_assignments or []
     if not assignments:
         return True
@@ -1872,6 +1883,13 @@ def _project_visible_to_student(project, student):
         if assignment.group_id in group_ids:
             return True
     return False
+
+def _student_has_proficiency_tag(student, tag_name):
+    """Check if student has a specific proficiency tag."""
+    return StudentProficiencyTag.query.filter_by(
+        student_id=student.id, 
+        tag_name=tag_name
+    ).first() is not None
 
 def _project_required_for_student(project, student):
     assignments = project.group_assignments or []
@@ -1942,7 +1960,7 @@ def _parse_iso_datetime(val):
         return None
 
 def _logtime_range_from_params(params):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     params = params if isinstance(params, dict) else {}
     range_type = params.get("range") or "all_time"
     start = None
@@ -2388,7 +2406,12 @@ def _run_code_tests_worker(code_text, tests, mode):
                 status = "error"
                 error_text = "Missing call expression."
             else:
-                env = dict(env_base or safe_env())
+                # Create environment for this test, preserving functions from env_base
+                env = {}
+                if env_base:
+                    env.update(env_base)
+                else:
+                    env = safe_env()
                 stdout = io.StringIO()
                 original_stdout = sys.stdout
                 sys.stdout = stdout
@@ -2804,7 +2827,7 @@ def exam_take(code):
             # Start a fresh attempt by resetting the existing row.
             _clear_exam_draft(exam.id)
             submission.status = "in_progress"
-            submission.started_at = datetime.utcnow()
+            submission.started_at = datetime.now(timezone.utc)
             submission.submitted_at = None
             submission.last_activity_at = submission.started_at
             submission.answers_json = {}
@@ -2859,13 +2882,13 @@ def exam_take(code):
     if duration_seconds and submission:
         # started_at is assumed to be set by DB default or earlier commit
         deadline = submission.started_at + timedelta(seconds=duration_seconds)
-        time_remaining = int((deadline - datetime.utcnow()).total_seconds())
+        time_remaining = int((deadline - datetime.now(timezone.utc)).total_seconds())
         if time_remaining <= 0 and submission.status != "submitted":
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
             submission.status = "submitted"
-            submission.submitted_at = datetime.utcnow()
+            submission.submitted_at = datetime.now(timezone.utc)
             submission.last_activity_at = submission.submitted_at
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.score = grade_score
@@ -2952,7 +2975,7 @@ def exam_take(code):
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.answers_json = answers
             submission.status = "submitted"
-            submission.submitted_at = datetime.utcnow()
+            submission.submitted_at = datetime.now(timezone.utc)
             submission.last_activity_at = submission.submitted_at
             submission.score = grade_score
             submission.max_score = grade_total
@@ -2973,7 +2996,7 @@ def exam_take(code):
                 answers = dict(base_answers)
                 answers.update(draft_answers)
                 submission.answers_json = answers
-                submission.last_activity_at = datetime.utcnow()
+                submission.last_activity_at = datetime.now(timezone.utc)
                 db.session.commit()
             target = q_index
             if action == "prev":
@@ -3044,12 +3067,12 @@ def exams_log_run(code):
     summary = {
         "question_id": question_id,
         "samples": samples,
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat() + "Z",
     }
     logs = submission.run_logs if isinstance(submission.run_logs, list) else []
     logs.append(summary)
     submission.run_logs = logs
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
@@ -3100,10 +3123,10 @@ def exams_run_code(code):
         "question_id": qid,
         "tests": visible + hidden,
         "summary": summary,
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat() + "Z",
     })
     submission.run_logs = logs
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
 
@@ -3155,10 +3178,10 @@ def projects_run_code(code, task_id):
         "question_id": qid,
         "tests": visible + hidden,
         "summary": summary,
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat() + "Z",
     })
     submission.run_logs = logs
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
 
@@ -3199,7 +3222,7 @@ def groups_list():
                 db.session.add(group)
                 db.session.flush()
                 for student_id in form_data["student_ids"]:
-                    student = Student.query.get(student_id)
+                    student = db.session.get(Student, student_id)
                     if not student:
                         continue
                     membership = StudentGroupMembership(group_id=group.id, student_id=student.id)
@@ -3214,8 +3237,8 @@ def groups_list():
                 group_id = 0
                 student_id = 0
             if group_id and student_id:
-                group = StudentGroup.query.get(group_id)
-                student = Student.query.get(student_id)
+                group = db.session.get(StudentGroup, group_id)
+                student = db.session.get(Student, student_id)
                 if group and student:
                     exists = StudentGroupMembership.query.filter_by(group_id=group.id, student_id=student.id).first()
                     if not exists:
@@ -3229,7 +3252,7 @@ def groups_list():
             except ValueError:
                 membership_id = 0
             if membership_id:
-                membership = StudentGroupMembership.query.get(membership_id)
+                membership = db.session.get(StudentGroupMembership, membership_id)
                 if membership:
                     db.session.delete(membership)
                     db.session.commit()
@@ -3240,7 +3263,7 @@ def groups_list():
             except ValueError:
                 group_id = 0
             if group_id:
-                group = StudentGroup.query.get(group_id)
+                group = db.session.get(StudentGroup, group_id)
                 if group:
                     db.session.delete(group)
                     db.session.commit()
@@ -3253,8 +3276,8 @@ def groups_list():
                 group_id = 0
                 user_id = 0
             if group_id and user_id:
-                group = StudentGroup.query.get(group_id)
-                mentor = User.query.get(user_id)
+                group = db.session.get(StudentGroup, group_id)
+                mentor = db.session.get(User, user_id)
                 if group and mentor:
                     exists = StudentGroupReviewer.query.filter_by(group_id=group.id, user_id=mentor.id).first()
                     if not exists:
@@ -3268,7 +3291,7 @@ def groups_list():
             except ValueError:
                 reviewer_id = 0
             if reviewer_id:
-                reviewer = StudentGroupReviewer.query.get(reviewer_id)
+                reviewer = db.session.get(StudentGroupReviewer, reviewer_id)
                 if reviewer:
                     db.session.delete(reviewer)
                     db.session.commit()
@@ -3382,7 +3405,7 @@ def attendance_new():
     if not _is_staff(user):
         abort(403)
     groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
-    default_date = datetime.utcnow().date().isoformat()
+    default_date = datetime.now(timezone.utc).date().isoformat()
     form_data = {
         "group_id": request.form.get("group_id") or "",
         "date": request.form.get("date") or default_date,
@@ -3404,7 +3427,7 @@ def attendance_new():
         date_value = _parse_date_only(form_data["date"])
         if not date_value and not error:
             error = "Valid date is required."
-        group = StudentGroup.query.get(group_id) if group_id else None
+        group = db.session.get(StudentGroup, group_id) if group_id else None
         if not error and not group:
             error = "Selected group was not found."
         if not error:
@@ -3559,7 +3582,7 @@ def leaderboards_admin():
             if group_raw and group_raw != "all":
                 try:
                     gid = int(group_raw)
-                    group = StudentGroup.query.get(gid)
+                    group = db.session.get(StudentGroup, gid)
                     if not group:
                         error = "Group not found."
                     else:
@@ -3803,6 +3826,7 @@ def projects_edit(code):
         description = (request.form.get("description") or "").strip()
         instructions = (request.form.get("instructions") or "").strip()
         required_task_count = (request.form.get("required_task_count") or "").strip()
+        required_proficiency_tag = (request.form.get("required_proficiency_tag") or "").strip()
         
         if not title:
             error = "Project title is required."
@@ -3811,6 +3835,7 @@ def projects_edit(code):
             project.title = title
             project.description = description or None
             project.instructions = instructions or None
+            project.required_proficiency_tag = required_proficiency_tag or None
             
             if required_task_count:
                 try:
@@ -3829,6 +3854,7 @@ def projects_edit(code):
         "description": project.description or "",
         "instructions": project.instructions or "",
         "required_task_count": str(project.required_task_count) if project.required_task_count else "",
+        "required_proficiency_tag": project.required_proficiency_tag or "",
     }
     
     return render_template(
@@ -3983,7 +4009,7 @@ def projects_assign_group(code):
         except ValueError:
             group_id = None
         if group_id:
-            group = StudentGroup.query.get(group_id)
+            group = db.session.get(StudentGroup, group_id)
             if group:
                 assignment = ProjectGroupAssignment.query.filter_by(project_id=project.id, group_id=group.id).first()
                 if assignment:
@@ -4254,7 +4280,7 @@ def student_projects():
                 elif status == "rejected":
                     retry_minutes = project.retry_cooldown_minutes or 0
                     if retry_minutes > 0 and submission.submitted_at:
-                        elapsed = (datetime.utcnow() - submission.submitted_at).total_seconds()
+                        elapsed = (datetime.now(timezone.utc) - submission.submitted_at).total_seconds()
                         wait_seconds = int(retry_minutes * 60 - elapsed)
                         if wait_seconds > 0:
                             can_retry_now = False
@@ -4326,7 +4352,7 @@ def student_project_detail(code):
             elif status == "rejected":
                 retry_minutes = project.retry_cooldown_minutes or 0
                 if retry_minutes > 0 and submission.submitted_at:
-                    elapsed = (datetime.utcnow() - submission.submitted_at).total_seconds()
+                    elapsed = (datetime.now(timezone.utc) - submission.submitted_at).total_seconds()
                     wait_seconds = int(retry_minutes * 60 - elapsed)
                     if wait_seconds > 0:
                         can_retry_now = False
@@ -4389,7 +4415,7 @@ def project_task_take(code, task_id):
         db.session.commit()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
     total_questions = len(questions)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cooldown_minutes = project.retry_cooldown_minutes or 0
     cooldown_seconds_remaining = 0
     status = submission.status if submission and submission.status else "in_progress"
@@ -4483,7 +4509,7 @@ def project_task_take(code, task_id):
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
-            submission.last_activity_at = datetime.utcnow()
+            submission.last_activity_at = datetime.now(timezone.utc)
             db.session.commit()
             return redirect(url_for("student_projects"))
         if action == "submit":
@@ -4583,7 +4609,7 @@ def project_task_take(code, task_id):
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
-            submission.last_activity_at = datetime.utcnow()
+            submission.last_activity_at = datetime.now(timezone.utc)
             db.session.commit()
             target = q_index
             if action == "prev":
@@ -4741,8 +4767,8 @@ def projects_submission_task_validate(code, student_id, task_id):
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "accepted"
     if not submission.submitted_at:
-        submission.submitted_at = datetime.utcnow()
-    submission.last_activity_at = datetime.utcnow()
+        submission.submitted_at = datetime.now(timezone.utc)
+    submission.last_activity_at = datetime.now(timezone.utc)
     _record_task_attempt_review(submission, status="accepted", reviewer=current_user())
     if submission.student and _project_completed(project, submission.student):
         _award_project_points_if_needed(project, submission.student)
@@ -4759,7 +4785,7 @@ def projects_submission_task_need_rework(code, student_id, task_id):
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "rejected"
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     _record_task_attempt_review(submission, status="rejected", reviewer=current_user())
     db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
@@ -4806,12 +4832,12 @@ def projects_task_log_run(code, task_id):
     summary = {
         "question_id": data.get("question_id"),
         "samples": data.get("samples") or [],
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat() + "Z",
     }
     logs = submission.run_logs if isinstance(submission.run_logs, list) else []
     logs.append(summary)
     submission.run_logs = logs
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
@@ -5092,7 +5118,7 @@ def projects_review_decision(submission_id):
     if attempt_id:
         review_attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
     if review_attempt:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if reviewed_status:
             review_attempt.status = reviewed_status
         if notes:
@@ -5120,7 +5146,7 @@ def projects_review_decision(submission_id):
         # Clear warnings for this submission since it has been reviewed
         if submission.student and notes:
             _clear_submission_warnings(submission.student, submission)
-    submission.last_activity_at = datetime.utcnow()
+    submission.last_activity_at = datetime.now(timezone.utc)
     if submission.status == "accepted" and submission.student:
         if _project_completed(submission.project, submission.student):
             _award_project_points_if_needed(submission.project, submission.student)
@@ -5397,6 +5423,636 @@ def dashboard_for_role():
 @require_student()
 def student_home():
     return redirect(url_for("index"))
+
+# --------------------------------------------------------------------
+# Proficiency Test System
+# --------------------------------------------------------------------
+
+def _get_proficiency_config():
+    """Get or create the global proficiency test configuration."""
+    config = ProficiencyTestConfig.query.first()
+    if not config:
+        config = ProficiencyTestConfig(
+            title="Python Proficiency Test",
+            description="Demonstrate your Python skills to unlock advanced projects.",
+            exercise_count=3,
+            duration_minutes=60,
+            cooldown_hours=48,
+            is_active=True,
+        )
+        db.session.add(config)
+        db.session.commit()
+    return config
+
+def _student_can_start_proficiency_test(student):
+    """Check if student can start a new proficiency test."""
+    # Already passed?
+    has_tag = StudentProficiencyTag.query.filter_by(student_id=student.id, tag_name="python").first()
+    if has_tag:
+        return False, "already_passed"
+    
+    # Has an in-progress test?
+    in_progress = ProficiencyTestAttempt.query.filter_by(
+        student_id=student.id, status="in_progress"
+    ).first()
+    if in_progress:
+        if not in_progress.is_expired:
+            return False, "in_progress"
+        # Auto-submit expired test
+        in_progress.status = "submitted"
+        in_progress.submitted_at = datetime.now(timezone.utc)
+        db.session.commit()
+    
+    # Has a pending review?
+    pending = ProficiencyTestAttempt.query.filter_by(
+        student_id=student.id, status="submitted"
+    ).first()
+    if pending:
+        return False, "pending_review"
+    
+    # Check cooldown from last failed attempt
+    config = _get_proficiency_config()
+    last_failed = ProficiencyTestAttempt.query.filter_by(
+        student_id=student.id, status="failed"
+    ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).first()
+    
+    if last_failed and last_failed.reviewed_at:
+        cooldown_end = last_failed.reviewed_at + timedelta(hours=config.cooldown_hours)
+        if datetime.now(timezone.utc) < cooldown_end:
+            return False, "cooldown"
+    
+    return True, "ok"
+
+def _run_proficiency_tests(code_text, test_cases, time_limit=3.0):
+    """Run test cases against student code. Returns (visible_results, hidden_results)."""
+    visible_tests = []
+    hidden_tests = []
+    
+    for tc in test_cases.get("visible", []):
+        visible_tests.append({
+            "name": tc.get("description", "Test"),
+            "call": tc.get("input", ""),
+            "expected": tc.get("expected_output", ""),
+            "hidden": False,
+        })
+    
+    for tc in test_cases.get("hidden", []):
+        hidden_tests.append({
+            "name": tc.get("description", "Hidden test"),
+            "call": tc.get("input", ""),
+            "expected": tc.get("expected_output", ""),
+            "hidden": True,
+        })
+    
+    all_tests = visible_tests + hidden_tests
+    if not all_tests:
+        return [], []
+    
+    results, timed_out = _run_code_tests_backend(code_text, all_tests, "function")
+    visible_results = [r for r in results if not r.get("hidden")]
+    hidden_results = [r for r in results if r.get("hidden")]
+    
+    return visible_results, hidden_results
+
+# --- Admin/Mentor: Manage Exercises ---
+
+@app.route("/proficiency/exercises")
+@require_user()
+def proficiency_exercises_list():
+    """List all proficiency exercises."""
+    user = current_user()
+    exercises = ProficiencyExercise.query.order_by(ProficiencyExercise.created_at.desc()).all()
+    config = _get_proficiency_config()
+    return render_template("proficiency_exercises_list.html", 
+                           user=user, exercises=exercises, config=config)
+
+@app.route("/proficiency/exercises/new", methods=["GET", "POST"])
+@require_user()
+def proficiency_exercises_new():
+    """Create a new proficiency exercise."""
+    user = current_user()
+    
+    if request.method == "POST":
+        title = (request.form.get("title") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        instructions = (request.form.get("instructions") or "").strip()
+        starter_code = (request.form.get("starter_code") or "").strip()
+        time_limit = float(request.form.get("time_limit") or 3.0)
+        
+        # Parse test cases
+        visible_tests = []
+        hidden_tests = []
+        
+        # Visible tests
+        visible_inputs = request.form.getlist("visible_input[]")
+        visible_outputs = request.form.getlist("visible_output[]")
+        visible_descs = request.form.getlist("visible_desc[]")
+        for i, inp in enumerate(visible_inputs):
+            if inp.strip() or (i < len(visible_outputs) and visible_outputs[i].strip()):
+                visible_tests.append({
+                    "input": inp,
+                    "expected_output": visible_outputs[i] if i < len(visible_outputs) else "",
+                    "description": visible_descs[i] if i < len(visible_descs) else f"Test {i+1}",
+                })
+        
+        # Hidden tests
+        hidden_inputs = request.form.getlist("hidden_input[]")
+        hidden_outputs = request.form.getlist("hidden_output[]")
+        hidden_descs = request.form.getlist("hidden_desc[]")
+        for i, inp in enumerate(hidden_inputs):
+            if inp.strip() or (i < len(hidden_outputs) and hidden_outputs[i].strip()):
+                hidden_tests.append({
+                    "input": inp,
+                    "expected_output": hidden_outputs[i] if i < len(hidden_outputs) else "",
+                    "description": hidden_descs[i] if i < len(hidden_descs) else f"Hidden test {i+1}",
+                })
+        
+        if not title:
+            return render_template("proficiency_exercise_form.html", 
+                                   user=user, error="Title is required", exercise=None)
+        
+        exercise = ProficiencyExercise(
+            title=title,
+            description=description,
+            instructions=instructions,
+            starter_code=starter_code,
+            test_cases_json={"visible": visible_tests, "hidden": hidden_tests},
+            time_limit_sec=time_limit,
+            is_active=True,
+            created_by_user_id=user.id,
+        )
+        db.session.add(exercise)
+        db.session.commit()
+        
+        return redirect(url_for("proficiency_exercises_list"))
+    
+    return render_template("proficiency_exercise_form.html", user=user, exercise=None)
+
+@app.route("/proficiency/exercises/<int:exercise_id>/edit", methods=["GET", "POST"])
+@require_user()
+def proficiency_exercises_edit(exercise_id):
+    """Edit an existing proficiency exercise."""
+    user = current_user()
+    exercise = ProficiencyExercise.query.get_or_404(exercise_id)
+    
+    if request.method == "POST":
+        exercise.title = (request.form.get("title") or "").strip()
+        exercise.description = (request.form.get("description") or "").strip()
+        exercise.instructions = (request.form.get("instructions") or "").strip()
+        exercise.starter_code = (request.form.get("starter_code") or "").strip()
+        exercise.time_limit_sec = float(request.form.get("time_limit") or 3.0)
+        exercise.is_active = request.form.get("is_active") == "1"
+        
+        # Parse test cases
+        visible_tests = []
+        hidden_tests = []
+        
+        visible_inputs = request.form.getlist("visible_input[]")
+        visible_outputs = request.form.getlist("visible_output[]")
+        visible_descs = request.form.getlist("visible_desc[]")
+        for i, inp in enumerate(visible_inputs):
+            if inp.strip() or (i < len(visible_outputs) and visible_outputs[i].strip()):
+                visible_tests.append({
+                    "input": inp,
+                    "expected_output": visible_outputs[i] if i < len(visible_outputs) else "",
+                    "description": visible_descs[i] if i < len(visible_descs) else f"Test {i+1}",
+                })
+        
+        hidden_inputs = request.form.getlist("hidden_input[]")
+        hidden_outputs = request.form.getlist("hidden_output[]")
+        hidden_descs = request.form.getlist("hidden_desc[]")
+        for i, inp in enumerate(hidden_inputs):
+            if inp.strip() or (i < len(hidden_outputs) and hidden_outputs[i].strip()):
+                hidden_tests.append({
+                    "input": inp,
+                    "expected_output": hidden_outputs[i] if i < len(hidden_outputs) else "",
+                    "description": hidden_descs[i] if i < len(hidden_descs) else f"Hidden test {i+1}",
+                })
+        
+        exercise.test_cases_json = {"visible": visible_tests, "hidden": hidden_tests}
+        
+        if not exercise.title:
+            return render_template("proficiency_exercise_form.html", 
+                                   user=user, error="Title is required", exercise=exercise)
+        
+        db.session.commit()
+        return redirect(url_for("proficiency_exercises_list"))
+    
+    return render_template("proficiency_exercise_form.html", user=user, exercise=exercise)
+
+@app.route("/proficiency/exercises/<int:exercise_id>/delete", methods=["POST"])
+@require_user()
+def proficiency_exercises_delete(exercise_id):
+    """Delete a proficiency exercise."""
+    exercise = ProficiencyExercise.query.get_or_404(exercise_id)
+    db.session.delete(exercise)
+    db.session.commit()
+    return redirect(url_for("proficiency_exercises_list"))
+
+@app.route("/proficiency/config", methods=["GET", "POST"])
+@require_user()
+def proficiency_config():
+    """Configure proficiency test settings."""
+    user = current_user()
+    config = _get_proficiency_config()
+    
+    if request.method == "POST":
+        config.title = (request.form.get("title") or "").strip() or "Python Proficiency Test"
+        config.description = (request.form.get("description") or "").strip()
+        config.exercise_count = int(request.form.get("exercise_count") or 3)
+        config.duration_minutes = int(request.form.get("duration_minutes") or 60)
+        config.cooldown_hours = int(request.form.get("cooldown_hours") or 48)
+        config.is_active = request.form.get("is_active") == "1"
+        db.session.commit()
+        return redirect(url_for("proficiency_exercises_list"))
+    
+    return render_template("proficiency_config.html", user=user, config=config)
+
+# --- Admin/Mentor: Review Submissions ---
+
+@app.route("/proficiency/reviews")
+@require_user()
+def proficiency_reviews():
+    """List all proficiency test submissions pending review."""
+    user = current_user()
+    pending = ProficiencyTestAttempt.query.filter_by(status="submitted").order_by(
+        ProficiencyTestAttempt.submitted_at.asc()
+    ).all()
+    reviewed = ProficiencyTestAttempt.query.filter(
+        ProficiencyTestAttempt.status.in_(["passed", "failed"])
+    ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).limit(50).all()
+    
+    return render_template("proficiency_reviews_list.html", 
+                           user=user, pending=pending, reviewed=reviewed)
+
+@app.route("/proficiency/reviews/<int:attempt_id>", methods=["GET", "POST"])
+@require_user()
+def proficiency_review_detail(attempt_id):
+    """Review a specific proficiency test attempt."""
+    user = current_user()
+    attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
+    
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "pass":
+            attempt.status = "passed"
+            attempt.reviewed_at = datetime.now(timezone.utc)
+            attempt.reviewed_by_user_id = user.id
+            
+            # Award proficiency tag
+            existing_tag = StudentProficiencyTag.query.filter_by(
+                student_id=attempt.student_id, tag_name="python"
+            ).first()
+            if not existing_tag:
+                tag = StudentProficiencyTag(
+                    student_id=attempt.student_id,
+                    tag_name="python",
+                    attempt_id=attempt.id,
+                    awarded_by_user_id=user.id,
+                )
+                db.session.add(tag)
+            
+            db.session.commit()
+        elif action == "fail":
+            attempt.status = "failed"
+            attempt.reviewed_at = datetime.now(timezone.utc)
+            attempt.reviewed_by_user_id = user.id
+            db.session.commit()
+        
+        return redirect(url_for("proficiency_reviews"))
+    
+    return render_template("proficiency_review_detail.html", user=user, attempt=attempt)
+
+@app.route("/proficiency/reviews/<int:attempt_id>/change-status", methods=["POST"])
+@require_user()
+def proficiency_change_status(attempt_id):
+    """Change the status of an already-reviewed proficiency test attempt."""
+    user = current_user()
+    attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
+    
+    # Only allow changing status for already-reviewed attempts
+    if attempt.status not in ["passed", "failed"]:
+        abort(400, "Can only change status of reviewed attempts")
+    
+    new_status = request.form.get("new_status")
+    if new_status not in ["passed", "failed"]:
+        abort(400, "Invalid status")
+    
+    old_status = attempt.status
+    attempt.status = new_status
+    attempt.reviewed_at = datetime.now(timezone.utc)
+    attempt.reviewed_by_user_id = user.id
+    
+    # Handle proficiency tag based on new status
+    if new_status == "passed":
+        # Award proficiency tag if not already present
+        existing_tag = StudentProficiencyTag.query.filter_by(
+            student_id=attempt.student_id, tag_name="python"
+        ).first()
+        if not existing_tag:
+            tag = StudentProficiencyTag(
+                student_id=attempt.student_id,
+                tag_name="python",
+                attempt_id=attempt.id,
+                awarded_by_user_id=user.id,
+            )
+            db.session.add(tag)
+    elif new_status == "failed" and old_status == "passed":
+        # Remove proficiency tag if changing from passed to failed
+        # Only remove if this attempt was the one that awarded the tag
+        tag = StudentProficiencyTag.query.filter_by(
+            student_id=attempt.student_id, 
+            tag_name="python",
+            attempt_id=attempt.id
+        ).first()
+        if tag:
+            db.session.delete(tag)
+    
+    db.session.commit()
+    
+    return redirect(url_for("proficiency_reviews"))
+
+# --- Student: Take Proficiency Test ---
+
+@app.route("/student/proficiency")
+@require_student()
+def student_proficiency():
+    """Student proficiency test hub."""
+    student = current_student()
+    config = _get_proficiency_config()
+    
+    # Check student status
+    has_tag = StudentProficiencyTag.query.filter_by(student_id=student.id, tag_name="python").first()
+    
+    # Check for in-progress test
+    in_progress = ProficiencyTestAttempt.query.filter_by(
+        student_id=student.id, status="in_progress"
+    ).first()
+    
+    if in_progress and in_progress.is_expired:
+        # Auto-submit expired test
+        in_progress.status = "submitted"
+        in_progress.submitted_at = datetime.now(timezone.utc)
+        # Run hidden tests on submission
+        for sub in in_progress.submissions:
+            if sub.exercise:
+                test_cases = sub.exercise_test_cases_json or {}
+                visible_results, hidden_results = _run_proficiency_tests(
+                    sub.code or "", test_cases, sub.exercise.time_limit_sec
+                )
+                sub.visible_results_json = visible_results
+                sub.hidden_results_json = hidden_results
+                sub.visible_passed = sum(1 for r in visible_results if r.get("status") == "passed")
+                sub.visible_total = len(visible_results)
+                sub.hidden_passed = sum(1 for r in hidden_results if r.get("status") == "passed")
+                sub.hidden_total = len(hidden_results)
+        db.session.commit()
+        in_progress = None
+    
+    pending = ProficiencyTestAttempt.query.filter_by(
+        student_id=student.id, status="submitted"
+    ).first()
+    
+    # Get past attempts
+    past_attempts = ProficiencyTestAttempt.query.filter(
+        ProficiencyTestAttempt.student_id == student.id,
+        ProficiencyTestAttempt.status.in_(["passed", "failed"])
+    ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).all()
+    
+    can_start, reason = _student_can_start_proficiency_test(student)
+    
+    # Calculate cooldown remaining
+    cooldown_remaining = None
+    if reason == "cooldown":
+        last_failed = ProficiencyTestAttempt.query.filter_by(
+            student_id=student.id, status="failed"
+        ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).first()
+        if last_failed and last_failed.reviewed_at:
+            cooldown_end = last_failed.reviewed_at + timedelta(hours=config.cooldown_hours)
+            cooldown_remaining = cooldown_end - datetime.now(timezone.utc)
+    
+    exercise_count = ProficiencyExercise.query.filter_by(is_active=True).count()
+    
+    return render_template("proficiency_student.html",
+                           student=student,
+                           student_name=session.get("student_name"),
+                           config=config,
+                           has_tag=has_tag,
+                           in_progress=in_progress,
+                           pending=pending,
+                           past_attempts=past_attempts,
+                           can_start=can_start,
+                           reason=reason,
+                           cooldown_remaining=cooldown_remaining,
+                           exercise_count=exercise_count)
+
+@app.route("/student/proficiency/start", methods=["POST"])
+@require_student()
+def student_proficiency_start():
+    """Start a new proficiency test."""
+    student = current_student()
+    config = _get_proficiency_config()
+    
+    if not config.is_active:
+        abort(403, "Proficiency tests are currently disabled.")
+    
+    can_start, reason = _student_can_start_proficiency_test(student)
+    if not can_start:
+        return redirect(url_for("student_proficiency"))
+    
+    # Get random exercises
+    exercises = ProficiencyExercise.query.filter_by(is_active=True).all()
+    if len(exercises) < config.exercise_count:
+        abort(400, f"Not enough exercises in pool. Need {config.exercise_count}, have {len(exercises)}.")
+    
+    selected = random.sample(exercises, config.exercise_count)
+    
+    # Create attempt
+    attempt = ProficiencyTestAttempt(
+        student_id=student.id,
+        duration_minutes=config.duration_minutes,
+        status="in_progress",
+        ip_address=(request.remote_addr or "")[:64],
+    )
+    db.session.add(attempt)
+    db.session.flush()
+    
+    # Create submissions for each exercise
+    for idx, exercise in enumerate(selected):
+        sub = ProficiencyExerciseSubmission(
+            attempt_id=attempt.id,
+            exercise_id=exercise.id,
+            exercise_title=exercise.title,
+            exercise_description=exercise.description,
+            exercise_instructions=exercise.instructions,
+            exercise_starter_code=exercise.starter_code,
+            exercise_test_cases_json=exercise.test_cases_json,
+            code=exercise.starter_code or "",
+            order_index=idx,
+        )
+        db.session.add(sub)
+    
+    db.session.commit()
+    
+    return redirect(url_for("student_proficiency_take", attempt_id=attempt.id))
+
+@app.route("/student/proficiency/test/<int:attempt_id>", methods=["GET", "POST"])
+@require_student()
+def student_proficiency_take(attempt_id):
+    """Take a proficiency test."""
+    student = current_student()
+    attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
+    
+    if attempt.student_id != student.id:
+        abort(403)
+    
+    if attempt.status != "in_progress":
+        return redirect(url_for("student_proficiency"))
+    
+    # Check if expired
+    if attempt.is_expired:
+        attempt.status = "submitted"
+        attempt.submitted_at = datetime.now(timezone.utc)
+        # Run all tests on submission
+        for sub in attempt.submissions:
+            test_cases = sub.exercise_test_cases_json or {}
+            visible_results, hidden_results = _run_proficiency_tests(
+                sub.code or "", test_cases
+            )
+            sub.visible_results_json = visible_results
+            sub.hidden_results_json = hidden_results
+            sub.visible_passed = sum(1 for r in visible_results if r.get("status") == "passed")
+            sub.visible_total = len(visible_results)
+            sub.hidden_passed = sum(1 for r in hidden_results if r.get("status") == "passed")
+            sub.hidden_total = len(hidden_results)
+        db.session.commit()
+        return redirect(url_for("student_proficiency"))
+    
+    if request.method == "POST":
+        action = request.form.get("action")
+        
+        if action == "save":
+            # Save code for each exercise
+            for sub in attempt.submissions:
+                code_key = f"code_{sub.id}"
+                if code_key in request.form:
+                    sub.code = request.form.get(code_key) or ""
+            db.session.commit()
+            return redirect(url_for("student_proficiency_take", attempt_id=attempt_id))
+        
+        elif action == "submit":
+            # Save and submit
+            for sub in attempt.submissions:
+                code_key = f"code_{sub.id}"
+                if code_key in request.form:
+                    sub.code = request.form.get(code_key) or ""
+                
+                # Run all tests
+                test_cases = sub.exercise_test_cases_json or {}
+                visible_results, hidden_results = _run_proficiency_tests(
+                    sub.code or "", test_cases
+                )
+                sub.visible_results_json = visible_results
+                sub.hidden_results_json = hidden_results
+                sub.visible_passed = sum(1 for r in visible_results if r.get("status") == "passed")
+                sub.visible_total = len(visible_results)
+                sub.hidden_passed = sum(1 for r in hidden_results if r.get("status") == "passed")
+                sub.hidden_total = len(hidden_results)
+            
+            attempt.status = "submitted"
+            attempt.submitted_at = datetime.now(timezone.utc)
+            db.session.commit()
+            return redirect(url_for("student_proficiency"))
+    
+    deadline = attempt.started_at + timedelta(minutes=attempt.duration_minutes)
+    
+    return render_template("proficiency_take.html",
+                           student=student,
+                           student_name=session.get("student_name"),
+                           attempt=attempt,
+                           deadline=deadline)
+
+@app.route("/api/proficiency/test/<int:attempt_id>/run", methods=["POST"])
+@require_student()
+def api_proficiency_run_tests(attempt_id):
+    """Run visible tests for an exercise during the test."""
+    if not ENABLE_BACKEND_CODE_RUNS:
+        return jsonify({"ok": False, "error": "Backend code runs are disabled."}), 503
+    
+    student = current_student()
+    attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
+    
+    if attempt.student_id != student.id:
+        abort(403)
+    
+    if attempt.status != "in_progress" or attempt.is_expired:
+        return jsonify({"ok": False, "error": "Test is no longer active."}), 400
+    
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    
+    data = request.get_json(silent=True) or {}
+    submission_id = data.get("submission_id")
+    code_text = data.get("code") or ""
+    
+    sub = db.session.get(ProficiencyExerciseSubmission, submission_id)
+    if not sub or sub.attempt_id != attempt_id:
+        return jsonify({"ok": False, "error": "Invalid submission."}), 400
+    
+    # Save current code
+    sub.code = code_text
+    
+    # Run only visible tests
+    test_cases = sub.exercise_test_cases_json or {}
+    visible_only = {"visible": test_cases.get("visible", []), "hidden": []}
+    visible_results, _ = _run_proficiency_tests(code_text, visible_only)
+    
+    # Log the run
+    logs = sub.run_logs if isinstance(sub.run_logs, list) else []
+    logs.append({
+        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "results": visible_results,
+    })
+    sub.run_logs = logs
+    db.session.commit()
+    
+    return jsonify({
+        "ok": True,
+        "results": visible_results,
+        "passed": sum(1 for r in visible_results if r.get("status") == "passed"),
+        "total": len(visible_results),
+    })
+
+@app.route("/api/proficiency/test/<int:attempt_id>/save", methods=["POST"])
+@require_student()
+def api_proficiency_save_code(attempt_id):
+    """Auto-save code during the test."""
+    student = current_student()
+    attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
+    
+    if attempt.student_id != student.id:
+        abort(403)
+    
+    if attempt.status != "in_progress":
+        return jsonify({"ok": False, "error": "Test is no longer active."}), 400
+    
+    token = request.headers.get("X-CSRF", "")
+    if not hmac.compare_digest(token, csrf_token()):
+        abort(400, "bad csrf")
+    
+    data = request.get_json(silent=True) or {}
+    submission_id = data.get("submission_id")
+    code_text = data.get("code") or ""
+    
+    sub = db.session.get(ProficiencyExerciseSubmission, submission_id)
+    if not sub or sub.attempt_id != attempt_id:
+        return jsonify({"ok": False, "error": "Invalid submission."}), 400
+    
+    sub.code = code_text
+    db.session.commit()
+    
+    return jsonify({"ok": True})
 
 # --------------------------------------------------------------------
 # Dev entry
