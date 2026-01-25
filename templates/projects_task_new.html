@@ -23,7 +23,7 @@
 
     <label>Task resource file (optional)</label>
     <input type="file" name="resource_file">
-    <p class="muted" style="margin-top:-4px;">Any file type, up to 10 MB. Uploading a new file replaces the existing one.</p>
+    <p class="muted" style="margin-top:-4px;">Any file type, up to 10 MB. Uploading a new file replaces the existing one. Use the "Remove" button to delete the current file.</p>
     {% if task and task.resource_file %}
       <div style="margin-top:8px; padding:10px; border:1px dashed #334155; border-radius:10px;">
         <strong>Current resource</strong>
@@ -33,8 +33,18 @@
             <span class="muted">({{ (task.resource_file.size // 1024) }} KB)</span>
           {% endif %}
           <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+          <button type="button" class="btn btn-danger" onclick="removeResourceFile()" style="font-size:0.9rem;">Remove</button>
         </div>
       </div>
+      <input type="hidden" id="remove_resource_flag" name="remove_resource" value="0">
+      <script>
+        function removeResourceFile() {
+          if (confirm('Are you sure you want to remove this resource file? This cannot be undone.')) {
+            document.getElementById('remove_resource_flag').value = '1';
+            document.querySelector('form').submit();
+          }
+        }
+      </script>
     {% endif %}
 
     <div class="row" style="gap:12px; flex-wrap:wrap;">

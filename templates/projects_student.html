@@ -105,6 +105,25 @@
               {% else %}
                 <span style="color:#fde047;">In progress</span>
               {% endif %}
+              {% if row.time_window_status and not row.time_window_status.in_window %}
+                • <span style="color:#637FBE;">🕒 Time window: {{ row.time_window_status.reason }}</span>
+              {% endif %}
+              {% if row.deadline_status.is_late %}
+                • <span style="color:#f87171;">⚠️ Late ({{ row.project.late_penalty_percent }}% penalty)</span>
+              {% elif row.deadline_status.time_until_due %}
+                {% set total_seconds = row.deadline_status.time_until_due|int %}
+                {% set days = (total_seconds / 86400)|int %}
+                {% set hours = ((total_seconds % 86400) / 3600)|int %}
+                {% set minutes = ((total_seconds % 3600) / 60)|int %}
+                {% set seconds = total_seconds % 60 %}
+                {% if days > 0 %}
+                  • <span style="color:#fde047;">⏰ Due in {{ days }}d {{ hours }}h {{ minutes }}m</span>
+                {% elif hours > 0 %}
+                  • <span style="color:#fde047;">⏰ Due in {{ hours }}h {{ minutes }}m {{ seconds }}s</span>
+                {% else %}
+                  • <span style="color:#f87171;">⏰ Due in {{ minutes }}m {{ seconds }}s</span>
+                {% endif %}
+              {% endif %}
             </p>
           </div>
           {% if row.tasks %}
@@ -116,6 +135,52 @@
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project is optional for your group.</span></p>
           {% endif %}
+          
+          {% if row.time_window_status and row.time_window_status.in_window and row.time_window_status.current_window %}
+            <div style="padding:10px; background:rgba(99, 127, 190, 0.1); border-left:3px solid #637FBE; border-radius:6px; margin:10px 0;">
+              <strong style="color:#637FBE;">🕒 Active Time Window</strong>
+              <p class="muted" style="margin:4px 0 0;">Available today: {{ row.time_window_status.current_window }}</p>
+            </div>
+          {% endif %}
+          
+          {% if row.deadline_status %}
+            {% if row.deadline_status.is_late %}
+              <div style="padding:10px; background:rgba(248, 113, 113, 0.1); border-left:3px solid #f87171; border-radius:6px; margin:10px 0;">
+                <strong style="color:#f87171;">⚠️ Past Due Date</strong>
+                <p class="muted" style="margin:4px 0 0;">{{ row.project.late_penalty_percent }}% penalty applied to submissions</p>
+              </div>
+            {% elif row.deadline_status.time_until_due %}
+              {% set total_seconds = row.deadline_status.time_until_due|int %}
+              {% set days = (total_seconds / 86400)|int %}
+              {% set hours = ((total_seconds % 86400) / 3600)|int %}
+              {% set minutes = ((total_seconds % 3600) / 60)|int %}
+              {% if total_seconds < 172800 %}
+                <div style="padding:10px; background:rgba(253, 224, 71, 0.1); border-left:3px solid #fde047; border-radius:6px; margin:10px 0;">
+                  <strong style="color:#fde047;">⏰ Due Soon</strong>
+                  <p class="muted" style="margin:4px 0 0;">
+                    {% if days > 0 %}
+                      Due in {{ days }} day(s), {{ hours }} hour(s), {{ minutes }} minute(s)
+                    {% elif hours > 0 %}
+                      Due in {{ hours }} hour(s), {{ minutes }} minute(s)
+                    {% else %}
+                      Due in {{ minutes }} minute(s)
+                    {% endif %}
+                  </p>
+                </div>
+              {% endif %}
+            {% endif %}
+            {% if row.deadline_status.time_until_hard_deadline %}
+              {% set total_seconds_hard = row.deadline_status.time_until_hard_deadline|int %}
+              {% set hours_hard = (total_seconds_hard / 3600)|int %}
+              {% if total_seconds_hard < 259200 and row.project.hard_deadline_at %}
+                <div style="padding:10px; background:rgba(248, 113, 113, 0.1); border-left:3px solid #f87171; border-radius:6px; margin:10px 0;">
+                  <strong style="color:#f87171;">🚫 Hard Deadline Approaching</strong>
+                  <p class="muted" style="margin:4px 0 0;">No submissions accepted after {{ row.project.hard_deadline_at.strftime("%b %d at %H:%M") }}</p>
+                </div>
+              {% endif %}
+            {% endif %}
+          {% endif %}
+          
           <div style="margin:8px 0;">
             <a class="btn btn-primary" href="{{ url_for('student_project_detail', code=row.project.code) }}">Open project page</a>
           </div>
@@ -184,24 +249,61 @@
 
   <div class="card">
     <h3 style="margin:0;">Locked projects</h3>
-      <p class="muted" style="margin-top:6px;">Finish the listed prerequisite projects to unlock these.</p>
+      <p class="muted" style="margin-top:6px;">Finish the listed prerequisite projects to unlock these, or wait for scheduled start times.</p>
       {% if locked_projects %}
         {% for row in locked_projects %}
         <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
           <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
           <div style="margin-top:8px;">
             {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
-            <p class="muted" style="margin:4px 0;">
-              <span style="color:#f87171;">Locked — finish prerequisites.</span>
-            </p>
+            
+            {% if row.deadline_status %}
+              {% if row.deadline_status.past_hard_deadline %}
+                <p style="margin:4px 0;">
+                  <span style="color:#f87171;">🚫 Past Hard Deadline — No submissions accepted</span>
+                </p>
+                {% if row.project.hard_deadline_at %}
+                  <p class="muted" style="margin:4px 0 0;">Deadline was: {{ row.project.hard_deadline_at.strftime("%B %d, %Y at %H:%M") }}</p>
+                {% endif %}
+              {% elif row.deadline_status.time_until_start %}
+                <p style="margin:4px 0;">
+                  <span style="color:#fde047;">⏰ Not Yet Available</span>
+                </p>
+                {% if row.project.starts_at %}
+                  <p class="muted" style="margin:4px 0 0;">Opens: {{ row.project.starts_at.strftime("%B %d, %Y at %H:%M") }}</p>
+                {% endif %}
+              {% else %}
+                <p class="muted" style="margin:4px 0;">
+                  <span style="color:#f87171;">Locked — finish prerequisites.</span>
+                </p>
+              {% endif %}
+            {% elif row.time_window_status and not row.time_window_status.available %}
+              <p style="margin:4px 0;">
+                <span style="color:#637FBE;">🕒 {{ row.time_window_status.reason }}</span>
+              </p>
+              {% if row.time_window_status.next_window %}
+                <p class="muted" style="margin:4px 0 0;">Next available: {{ row.time_window_status.next_window }}</p>
+              {% elif row.time_window_status.day_windows %}
+                <p class="muted" style="margin:4px 0 0;">
+                  Available today: 
+                  {% for window in row.time_window_status.day_windows %}
+                    {{ window.start }} - {{ window.end }}{% if not loop.last %}, {% endif %}
+                  {% endfor %}
+                </p>
+              {% endif %}
+            {% else %}
+              <p class="muted" style="margin:4px 0;">
+                <span style="color:#f87171;">Locked — finish prerequisites.</span>
+              </p>
+            {% endif %}
+            
             {% if row.dependencies %}
+              <p class="muted" style="margin:8px 0 4px;"><strong>Prerequisites:</strong></p>
               <ul style="margin:6px 0 0 18px;">
                 {% for dep in row.dependencies %}
                   <li>{{ dep }}</li>
                 {% endfor %}
               </ul>
-            {% else %}
-              <p class="muted" style="margin:6px 0 0 0;">No prerequisites listed.</p>
             {% endif %}
           </div>
         </details>

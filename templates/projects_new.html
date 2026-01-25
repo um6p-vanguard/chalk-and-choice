@@ -29,8 +29,114 @@
     <label>Retry cooldown (minutes) after rejection</label>
     <input type="number" min="0" name="retry_cooldown_minutes" placeholder="0 = no cooldown" value="{{ form_data.retry_cooldown_minutes }}">
 
+    <div style="margin-top: 20px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <h4 style="margin: 0 0 15px;">Project Deadlines (Optional)</h4>
+      
+      <label>Starts at</label>
+      <input type="datetime-local" name="starts_at" value="{{ form_data.starts_at }}">
+      <small class="muted">Project becomes available to students at this time</small>
+
+      <label style="margin-top: 10px;">Due at (Soft Deadline)</label>
+      <input type="datetime-local" name="due_at" value="{{ form_data.due_at }}">
+      <small class="muted">Late penalty applies after this time</small>
+
+      <label style="margin-top: 10px;">Hard Deadline</label>
+      <input type="datetime-local" name="hard_deadline_at" value="{{ form_data.hard_deadline_at }}">
+      <small class="muted">No submissions accepted after this time</small>
+
+      <label style="margin-top: 10px;">Late Penalty (%)</label>
+      <input type="number" min="0" max="100" step="0.1" name="late_penalty_percent" placeholder="e.g., 20" value="{{ form_data.late_penalty_percent }}">
+      <small class="muted">Percentage deducted from score for late submissions (0-100)</small>
+    </div>
+
+    <div style="margin-top: 20px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 15px;">
+        <h4 style="margin: 0;">Time Window Availability</h4>
+        <label style="display: flex; align-items: center; gap: 6px; margin: 0;">
+          <input type="checkbox" name="availability_enabled" value="1" {% if form_data.availability_enabled %}checked{% endif %}>
+          <span style="font-weight: normal;">Enable time restrictions</span>
+        </label>
+      </div>
+      <small class="muted" style="display: block; margin-bottom: 12px;">Restrict project access to specific days and hours (useful for lab sessions, office hours, etc.)</small>
+      
+      <div id="time-windows-config" style="{% if not form_data.availability_enabled %}opacity: 0.5; pointer-events: none;{% endif %}">
+        {% set days = [('monday', 'Monday'), ('tuesday', 'Tuesday'), ('wednesday', 'Wednesday'), ('thursday', 'Thursday'), ('friday', 'Friday'), ('saturday', 'Saturday'), ('sunday', 'Sunday')] %}
+        {% for day_key, day_label in days %}
+          <div style="margin-bottom: 10px; padding: 10px; border: 1px solid #334155; border-radius: 6px; background: #0b1220;">
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0 0 8px 0;">
+              <input type="checkbox" name="day_{{ day_key }}" value="1" class="day-checkbox" data-day="{{ day_key }}" {% if form_data.get('day_' + day_key) %}checked{% endif %}>
+              <strong>{{ day_label }}</strong>
+            </label>
+            <div class="time-inputs-{{ day_key }}" style="{% if not form_data.get('day_' + day_key) %}display: none;{% endif %} margin-left: 24px; display: flex; gap: 10px; align-items: center;">
+              <div>
+                <label style="font-size: 0.85rem; margin: 0;">From</label>
+                <input type="time" name="time_{{ day_key }}_start" value="{{ form_data.get('time_' + day_key + '_start', '09:00') }}" style="width: 120px;">
+              </div>
+              <div>
+                <label style="font-size: 0.85rem; margin: 0;">To</label>
+                <input type="time" name="time_{{ day_key }}_end" value="{{ form_data.get('time_' + day_key + '_end', '17:00') }}" style="width: 120px;">
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+
     <button class="btn btn-primary" type="submit" style="margin-top:12px;">Create project</button>
     <a class="btn" href="{{ url_for('projects_list') }}" style="margin-left:8px;">Cancel</a>
   </form>
 </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const enableCheckbox = document.querySelector('input[name="availability_enabled"]');
+  const configDiv = document.getElementById('time-windows-config');
+  const dayCheckboxes = document.querySelectorAll('.day-checkbox');
+  
+  if (enableCheckbox) {
+    enableCheckbox.addEventListener('change', function() {
+      if (this.checked) {
+        configDiv.style.opacity = '1';
+        configDiv.style.pointerEvents = 'auto';
+      } else {
+        configDiv.style.opacity = '0.5';
+        configDiv.style.pointerEvents = 'none';
+      }
+    });
+  }
+  
+  dayCheckboxes.forEach(checkbox => {
+    const day = checkbox.dataset.day;
+    const timeInputs = document.querySelector('.time-inputs-' + day);
+    
+    checkbox.addEventListener('change', function() {
+      if (this.checked) {
+        timeInputs.style.display = 'flex';
+      } else {
+        timeInputs.style.display = 'none';
+      }
+    });
+  });
+  
+  // Validate time ranges
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  days.forEach(day => {
+    const startInput = document.querySelector(`input[name="time_${day}_start"]`);
+    const endInput = document.querySelector(`input[name="time_${day}_end"]`);
+    
+    if (startInput && endInput) {
+      const validateTimes = () => {
+        if (startInput.value && endInput.value && startInput.value >= endInput.value) {
+          endInput.setCustomValidity('End time must be after start time');
+        } else {
+          endInput.setCustomValidity('');
+        }
+      };
+      
+      startInput.addEventListener('change', validateTimes);
+      endInput.addEventListener('change', validateTimes);
+    }
+  });
+});
+</script>
 {% endblock %}

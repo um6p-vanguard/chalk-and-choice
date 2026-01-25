@@ -22,6 +22,7 @@ from models import (db, Student, User, Form,
 import qrcode
 from sqlalchemy import func
 from sqlalchemy.orm import subqueryload
+from sqlalchemy.orm.attributes import flag_modified
 
 # --------------------------------------------------------------------
 # Utils
@@ -229,11 +230,17 @@ def _save_task_resource(task, file_storage, existing_info=None):
     if not filename:
         return None, "No file selected."
     original_name = os.path.basename(filename)
+    
+    # Log file details for debugging
+    print(f"DEBUG: Uploading task resource - Task ID: {task.id}, File: {original_name}")
+    
     try:
         file_storage.stream.seek(0, os.SEEK_END)
         size = file_storage.stream.tell()
         file_storage.stream.seek(0)
-    except Exception:
+        print(f"DEBUG: File size: {size} bytes")
+    except Exception as e:
+        print(f"DEBUG: Error reading file size: {e}")
         size = None
     if size is not None and size > TASK_RESOURCE_MAX_BYTES:
         return None, f"File must be {TASK_RESOURCE_MAX_MB} MB or smaller."
@@ -249,8 +256,12 @@ def _save_task_resource(task, file_storage, existing_info=None):
     full_path = os.path.join(upload_dir, stored_name)
     try:
         file_storage.save(full_path)
-    except Exception:
-        return None, "Unable to save file."
+    except PermissionError:
+        return None, "Unable to save file: Permission denied. Check server permissions."
+    except OSError as e:
+        return None, f"Unable to save file: {str(e)}"
+    except Exception as e:
+        return None, f"Unable to save file: {str(e)}"
     rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
     file_info = {
         "original_name": original_name or safe_name,
@@ -321,6 +332,7 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
     
     warnings.append(warning)
     student.warnings_json = warnings
+    flag_modified(student, 'warnings_json')
     
     # Mark the field as modified so SQLAlchemy knows to commit it
     from sqlalchemy.orm.attributes import flag_modified
@@ -716,6 +728,14 @@ def render_md(text):
 @app.template_filter("markdown")
 def markdown_filter(text):
     return render_md(text)
+
+@app.template_filter("from_json")
+def from_json_filter(text):
+    """Parse JSON string to Python object for use in templates."""
+    try:
+        return json.loads(text) if text else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 @app.before_request
 def update_student_last_seen():
@@ -3735,6 +3755,10 @@ def projects_new():
         "required_task_count": request.form.get("required_task_count") or "",
         "points": request.form.get("points") or "",
         "retry_cooldown_minutes": request.form.get("retry_cooldown_minutes") or "",
+        "starts_at": request.form.get("starts_at") or "",
+        "due_at": request.form.get("due_at") or "",
+        "hard_deadline_at": request.form.get("hard_deadline_at") or "",
+        "late_penalty_percent": request.form.get("late_penalty_percent") or "",
     }
     error = None
     if request.method == "POST":
@@ -3764,6 +3788,53 @@ def projects_new():
                 retry_minutes_value = max(0, int(retry_raw))
             except Exception:
                 error = "Retry cooldown must be a number (minutes)."
+        
+        # Parse deadline fields
+        starts_at_val = None
+        due_at_val = None
+        hard_deadline_at_val = None
+        late_penalty_val = 0.0
+        
+        if form_data["starts_at"].strip() and not error:
+            try:
+                starts_at_val = datetime.strptime(form_data["starts_at"].strip(), "%Y-%m-%dT%H:%M")
+            except Exception:
+                error = "Invalid start date format."
+        
+        if form_data["due_at"].strip() and not error:
+            try:
+                due_at_val = datetime.strptime(form_data["due_at"].strip(), "%Y-%m-%dT%H:%M")
+            except Exception:
+                error = "Invalid due date format."
+        
+        if form_data["hard_deadline_at"].strip() and not error:
+            try:
+                hard_deadline_at_val = datetime.strptime(form_data["hard_deadline_at"].strip(), "%Y-%m-%dT%H:%M")
+            except Exception:
+                error = "Invalid hard deadline format."
+        
+        if form_data["late_penalty_percent"].strip() and not error:
+            try:
+                late_penalty_val = max(0.0, min(100.0, float(form_data["late_penalty_percent"].strip())))
+            except Exception:
+                error = "Late penalty must be a number (0-100)."
+        
+        # Parse time window availability
+        availability_enabled = request.form.get("availability_enabled") == "1"
+        availability_rules_json = None
+        
+        if availability_enabled and not error:
+            rules = {}
+            days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+            for day in days:
+                if request.form.get(f"day_{day}") == "1":
+                    start_time = request.form.get(f"time_{day}_start", "09:00")
+                    end_time = request.form.get(f"time_{day}_end", "17:00")
+                    rules[day] = [{"start": start_time, "end": end_time}]
+            
+            if rules:
+                availability_rules_json = json.dumps(rules)
+        
         if not error:
             code = gen_code(8)
             while Project.query.filter_by(code=code).first() is not None:
@@ -3777,6 +3848,12 @@ def projects_new():
                 is_active=False,
                 points=points_value,
                 retry_cooldown_minutes=retry_minutes_value,
+                starts_at=starts_at_val,
+                due_at=due_at_val,
+                hard_deadline_at=hard_deadline_at_val,
+                late_penalty_percent=late_penalty_val,
+                availability_enabled=availability_enabled,
+                availability_rules=availability_rules_json,
             )
             db.session.add(project)
             db.session.commit()
@@ -3881,6 +3958,35 @@ def projects_update_meta(code):
         abort(400, "Points and retry cooldown must be numbers.")
     project.points = max(0, points_val)
     project.retry_cooldown_minutes = max(0, retry_val)
+    
+    # Update deadline fields
+    starts_at_raw = (request.form.get("starts_at") or "").strip()
+    due_at_raw = (request.form.get("due_at") or "").strip()
+    hard_deadline_raw = (request.form.get("hard_deadline_at") or "").strip()
+    late_penalty_raw = (request.form.get("late_penalty_percent") or "").strip()
+    
+    project.starts_at = datetime.strptime(starts_at_raw, "%Y-%m-%dT%H:%M") if starts_at_raw else None
+    project.due_at = datetime.strptime(due_at_raw, "%Y-%m-%dT%H:%M") if due_at_raw else None
+    project.hard_deadline_at = datetime.strptime(hard_deadline_raw, "%Y-%m-%dT%H:%M") if hard_deadline_raw else None
+    project.late_penalty_percent = max(0.0, min(100.0, float(late_penalty_raw))) if late_penalty_raw else 0.0
+    
+    # Update time window availability
+    availability_enabled = request.form.get("availability_enabled") == "1"
+    project.availability_enabled = availability_enabled
+    
+    if availability_enabled:
+        rules = {}
+        days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        for day in days:
+            if request.form.get(f"day_{day}") == "1":
+                start_time = request.form.get(f"time_{day}_start", "09:00")
+                end_time = request.form.get(f"time_{day}_end", "17:00")
+                rules[day] = [{"start": start_time, "end": end_time}]
+        
+        project.availability_rules = json.dumps(rules) if rules else None
+    else:
+        project.availability_rules = None
+    
     db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
 
@@ -4158,6 +4264,7 @@ def projects_task_edit(code, task_id):
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     resource_upload = request.files.get("resource_file")
+    remove_resource = request.form.get("remove_resource") == "1"
     if request.method == "POST":
         form_data = {
             "title": request.form.get("title") or "",
@@ -4210,10 +4317,18 @@ def projects_task_edit(code, task_id):
             task.required = form_data["required"]
             task.auto_grade = form_data["auto_grade"]
             task.requires_review = form_data["requires_review"]
-            if resource_upload and resource_upload.filename:
+            
+            # Handle resource file removal
+            if remove_resource:
+                if task.resource_file:
+                    _remove_uploaded_file(task.resource_file)
+                    task.resource_file = None
+            # Handle resource file upload (only if not removing and file provided)
+            elif resource_upload and resource_upload.filename:
                 existing_info = _extract_file_info(task.resource_file)
                 file_info, upload_error = _save_task_resource(task, resource_upload, existing_info)
                 if upload_error:
+                    db.session.rollback()
                     error = upload_error
                 else:
                     task.resource_file = file_info
@@ -4254,7 +4369,24 @@ def student_projects():
     for project in projects:
         if not _project_visible_to_student(project, student):
             continue
-        unlocked = _project_dependencies_met(project, student)
+        
+        # Check deadline status
+        deadline_status = _check_project_deadline_status(project)
+        
+        # Check time window availability
+        time_window_status = _check_time_window_availability(project)
+        
+        # Check if student has any submissions for this project
+        has_submissions = ProjectTaskSubmission.query.filter_by(
+            project_id=project.id,
+            student_id=student.id
+        ).first() is not None
+        
+        # If time windows are enabled and student has no submissions, hide project outside windows
+        if project.availability_enabled and not has_submissions and not time_window_status["available"]:
+            continue
+        
+        unlocked = _project_dependencies_met(project, student) and deadline_status["available"] and time_window_status["available"]
         completed = _project_completed(project, student) if unlocked else False
         tasks = []
         completed_count = 0
@@ -4303,6 +4435,8 @@ def student_projects():
             "total_tasks": len(tasks),
             "required": _project_required_for_student(project, student),
             "dependencies": [dep.prerequisite.title for dep in (project.dependencies or []) if dep.prerequisite],
+            "deadline_status": deadline_status,
+            "time_window_status": time_window_status,
         }
         if completed:
             completed_rows.append(row)
@@ -4401,6 +4535,19 @@ def project_task_take(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    
+    # Check deadline status
+    deadline_status = _check_project_deadline_status(project)
+    if not deadline_status["available"]:
+        # Redirect to projects page - the project will appear in locked section
+        return redirect(url_for("student_projects"))
+    
+    # Check time window availability
+    time_window_status = _check_time_window_availability(project)
+    if not time_window_status["available"]:
+        # Redirect to projects page - the project will appear in locked section
+        return redirect(url_for("student_projects"))
+    
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(
@@ -4449,6 +4596,61 @@ def project_task_take(code, task_id):
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
+        
+        # Check deadline before allowing submission
+        deadline_status = _check_project_deadline_status(project)
+        if not deadline_status["available"]:
+            return render_template(
+                "projects_take.html",
+                project=project,
+                task=task,
+                question=questions[q_index] if total_questions else None,
+                total_questions=total_questions,
+                current_index=q_index,
+                has_prev=(q_index > 0),
+                has_next=(q_index + 1 < total_questions),
+                can_submit=False,
+                preview=False,
+                already_submitted=False,
+                previous_answers=previous_answers,
+                time_remaining_seconds=None,
+                user=current_user(),
+                student_name=student.name,
+                run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                cooldown_seconds_remaining=0,
+                submission_id=submission.id,
+                upload_error=f"Cannot submit: {deadline_status['status_message']}",
+            ), 403
+        
+        # Check time window availability before allowing submission
+        time_window_status = _check_time_window_availability(project)
+        if not time_window_status["available"]:
+            error_message = time_window_status.get("reason", "Not available at this time")
+            if time_window_status.get("next_window"):
+                error_message += f". Next available: {time_window_status['next_window']}"
+            
+            return render_template(
+                "projects_take.html",
+                project=project,
+                task=task,
+                question=questions[q_index] if total_questions else None,
+                total_questions=total_questions,
+                current_index=q_index,
+                has_prev=(q_index > 0),
+                has_next=(q_index + 1 < total_questions),
+                can_submit=False,
+                preview=False,
+                already_submitted=False,
+                previous_answers=previous_answers,
+                time_remaining_seconds=None,
+                user=current_user(),
+                student_name=student.name,
+                run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                cooldown_seconds_remaining=0,
+                submission_id=submission.id,
+                upload_error=f"Cannot submit: {deadline_status['status_message']}",
+            ), 403
+        
         post_q_index = clamp_q(request.form.get("q_index", q_index))
         q_index = post_q_index
         current_question = questions[q_index] if total_questions else None
@@ -4477,8 +4679,9 @@ def project_task_take(code, task_id):
                     val = request.form.get(field, "")
                 if upload_error:
                     return render_template(
-                        "exams_take.html",
-                        exam=_task_exam_view(project, task),
+                        "projects_take.html",
+                        project=project,
+                        task=task,
                         question=current_question,
                         total_questions=total_questions,
                         current_index=q_index,
@@ -4515,8 +4718,9 @@ def project_task_take(code, task_id):
         if action == "submit":
             if not can_submit:
                 return render_template(
-                    "exams_take.html",
-                    exam=_task_exam_view(project, task),
+                    "projects_take.html",
+                    project=project,
+                    task=task,
                     question=current_question,
                     total_questions=total_questions,
                     current_index=q_index,
@@ -4555,6 +4759,21 @@ def project_task_take(code, task_id):
                     )
                 except Exception:
                     app.logger.info(f"TASK AUTO-GRADE DEBUG [{project.code}-{task.id}] score={grade_score}/{grade_total} answers={answers}")
+            
+            # Apply late penalty if past due date
+            late_penalty_applied = 0.0
+            if deadline_status["is_late"] and deadline_status["late_penalty"] > 0:
+                penalty_percent = deadline_status["late_penalty"]
+                late_penalty_applied = (grade_score * penalty_percent) / 100.0
+                grade_score = max(0, grade_score - late_penalty_applied)
+                grade_details.append({
+                    "question_id": "_late_penalty",
+                    "description": f"Late submission penalty ({penalty_percent}%)",
+                    "score": -late_penalty_applied,
+                    "max_score": 0,
+                    "is_correct": False,
+                })
+            
             submission.answers_json = answers
             submission.score = grade_score
             submission.max_score = grade_total
@@ -4593,6 +4812,8 @@ def project_task_take(code, task_id):
             db.session.add(attempt)
             # Run cheating detection
             _run_cheating_detection(student, submission, request.remote_addr)
+            print("----------- Checking request data:", request)
+            print("------------ Request ip:", request.remote_addr)
             if submission.status == "accepted":
                 if _project_completed(project, student):
                     _award_project_points_if_needed(project, student)
@@ -4619,10 +4840,24 @@ def project_task_take(code, task_id):
             return redirect(url_for("project_task_take", code=project.code, task_id=task.id, q=target))
 
     current_question = dict(questions[q_index]) if total_questions else None
-    exam_view = _task_exam_view(project, task)
+    
+    # Calculate time remaining until deadline
+    time_remaining_seconds = None
+    now = datetime.utcnow()
+    
+    if project.hard_deadline_at:
+        time_remaining_seconds = int((project.hard_deadline_at - now).total_seconds())
+        if time_remaining_seconds < 0:
+            time_remaining_seconds = 0
+    elif project.due_at:
+        time_remaining_seconds = int((project.due_at - now).total_seconds())
+        if time_remaining_seconds < 0:
+            time_remaining_seconds = 0
+    
     return render_template(
-        "exams_take.html",
-        exam=exam_view,
+        "projects_take.html",
+        project=project,
+        task=task,
         question=current_question,
         total_questions=total_questions,
         current_index=q_index,
@@ -4632,7 +4867,7 @@ def project_task_take(code, task_id):
         preview=preview,
         already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
         previous_answers=previous_answers,
-        time_remaining_seconds=None,
+        time_remaining_seconds=time_remaining_seconds,
         user=current_user(),
         student_name=student.name,
         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),

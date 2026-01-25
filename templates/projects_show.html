@@ -73,10 +73,132 @@
       <label style="min-width:140px;">Retry cooldown (minutes)</label>
       <input type="number" min="0" name="retry_cooldown_minutes" value="{{ project.retry_cooldown_minutes }}" style="flex:1; min-width:160px;">
     </div>
+    
+    <div style="margin-top: 15px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <h4 style="margin: 0 0 10px;">Project Deadlines</h4>
+      
+      <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <label style="min-width:140px;">Starts at</label>
+        <input type="datetime-local" name="starts_at" value="{{ project.starts_at.strftime('%Y-%m-%dT%H:%M') if project.starts_at else '' }}" style="flex:1; min-width:160px;">
+      </div>
+      <small class="muted" style="display:block; margin-left:150px; margin-bottom:10px;">Project becomes available to students</small>
+      
+      <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <label style="min-width:140px;">Due at</label>
+        <input type="datetime-local" name="due_at" value="{{ project.due_at.strftime('%Y-%m-%dT%H:%M') if project.due_at else '' }}" style="flex:1; min-width:160px;">
+      </div>
+      <small class="muted" style="display:block; margin-left:150px; margin-bottom:10px;">Soft deadline - late penalty applies after</small>
+      
+      <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+        <label style="min-width:140px;">Hard deadline</label>
+        <input type="datetime-local" name="hard_deadline_at" value="{{ project.hard_deadline_at.strftime('%Y-%m-%dT%H:%M') if project.hard_deadline_at else '' }}" style="flex:1; min-width:160px;">
+      </div>
+      <small class="muted" style="display:block; margin-left:150px; margin-bottom:10px;">No submissions accepted after this time</small>
+      
+      <div class="row" style="gap:10px; align-items:center; flex-wrap:wrap;">
+        <label style="min-width:140px;">Late penalty (%)</label>
+        <input type="number" min="0" max="100" step="0.1" name="late_penalty_percent" value="{{ project.late_penalty_percent }}" style="flex:1; min-width:160px;">
+      </div>
+      <small class="muted" style="display:block; margin-left:150px;">Percentage deducted for late submissions (0-100)</small>
+    </div>
+    
+    <div style="margin-top: 15px; padding: 15px; border-radius: 6px; border:1px dashed #334155;">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+        <h4 style="margin: 0;">Time Window Availability</h4>
+        <label style="display: flex; align-items: center; gap: 6px; margin: 0;">
+          <input type="checkbox" name="availability_enabled" value="1" id="availability-enabled" {% if project.availability_enabled %}checked{% endif %}>
+          <span style="font-weight: normal;">Enable time restrictions</span>
+        </label>
+      </div>
+      <small class="muted" style="display: block; margin-bottom: 12px;">Restrict project access to specific days and hours</small>
+      
+      <div id="time-windows-config" style="{% if not project.availability_enabled %}opacity: 0.5; pointer-events: none;{% endif %}">
+        {% set days = [('monday', 'Monday'), ('tuesday', 'Tuesday'), ('wednesday', 'Wednesday'), ('thursday', 'Thursday'), ('friday', 'Friday'), ('saturday', 'Saturday'), ('sunday', 'Sunday')] %}
+        {% set rules = {} %}
+        {% if project.availability_rules %}
+          {% set rules = project.availability_rules|from_json %}
+        {% endif %}
+        {% for day_key, day_label in days %}
+          {% set day_has_rules = day_key in rules and rules[day_key] %}
+          {% set day_start = rules[day_key][0].start if day_has_rules else '09:00' %}
+          {% set day_end = rules[day_key][0].end if day_has_rules else '17:00' %}
+          <div style="margin-bottom: 10px; padding: 10px; border: 1px solid #334155; border-radius: 6px; background: #0b1220;">
+            <label style="display: flex; align-items: center; gap: 8px; margin: 0 0 8px 0;">
+              <input type="checkbox" name="day_{{ day_key }}" value="1" class="day-checkbox" data-day="{{ day_key }}" {% if day_has_rules %}checked{% endif %}>
+              <strong>{{ day_label }}</strong>
+            </label>
+            <div class="time-inputs-{{ day_key }}" style="{% if not day_has_rules %}display: none;{% endif %} margin-left: 24px; display: flex; gap: 10px; align-items: center;">
+              <div>
+                <label style="font-size: 0.85rem; margin: 0;">From</label>
+                <input type="time" name="time_{{ day_key }}_start" value="{{ day_start }}" style="width: 120px;">
+              </div>
+              <div>
+                <label style="font-size: 0.85rem; margin: 0;">To</label>
+                <input type="time" name="time_{{ day_key }}_end" value="{{ day_end }}" style="width: 120px;">
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+    
     <div>
       <button class="btn btn-primary" type="submit">Save</button>
     </div>
   </form>
+  
+  <script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const enableCheckbox = document.getElementById('availability-enabled');
+    const configDiv = document.getElementById('time-windows-config');
+    const dayCheckboxes = document.querySelectorAll('.day-checkbox');
+    
+    if (enableCheckbox) {
+      enableCheckbox.addEventListener('change', function() {
+        if (this.checked) {
+          configDiv.style.opacity = '1';
+          configDiv.style.pointerEvents = 'auto';
+        } else {
+          configDiv.style.opacity = '0.5';
+          configDiv.style.pointerEvents = 'none';
+        }
+      });
+    }
+    
+    dayCheckboxes.forEach(checkbox => {
+      const day = checkbox.dataset.day;
+      const timeInputs = document.querySelector('.time-inputs-' + day);
+      
+      checkbox.addEventListener('change', function() {
+        if (this.checked) {
+          timeInputs.style.display = 'flex';
+        } else {
+          timeInputs.style.display = 'none';
+        }
+      });
+    });
+    
+    // Validate time ranges
+    const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+    days.forEach(day => {
+      const startInput = document.querySelector(`input[name="time_${day}_start"]`);
+      const endInput = document.querySelector(`input[name="time_${day}_end"]`);
+      
+      if (startInput && endInput) {
+        const validateTimes = () => {
+          if (startInput.value && endInput.value && startInput.value >= endInput.value) {
+            endInput.setCustomValidity('End time must be after start time');
+          } else {
+            endInput.setCustomValidity('');
+          }
+        };
+        
+        startInput.addEventListener('change', validateTimes);
+        endInput.addEventListener('change', validateTimes);
+      }
+    });
+  });
+  </script>
   <div class="sp"></div>
   <div style="padding:10px; border:1px dashed #334155; border-radius:10px;">
     <strong>Recalculate project points</strong>

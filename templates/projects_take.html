@@ -1,0 +1,344 @@
+{% extends "base.html" %}
+{% block content %}
+{% set submit_label = "Submit task" %}
+{% set log_url = run_log_url if run_log_url is defined and run_log_url else '' %}
+<div class="card">
+  <h3 style="margin:0;" data-markdown-inline>{{ task.title }}</h3>
+  {% if task.description %}
+    <div class="muted" style="margin:6px 0;" data-markdown-block>{{ task.description }}</div>
+  {% endif %}
+  <p class="muted" style="margin:6px 0;">
+    Project: <strong>{{ project.title }}</strong>
+  </p>
+  {% if task.instructions %}
+    <div style="margin-top:12px; padding:12px; border:1px dashed #334155; border-radius:10px;">
+      <strong>Instructions</strong>
+      <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-instructions>{{ task.instructions }}</div>
+    </div>
+  {% endif %}
+  {% if task.resource_file %}
+    <div style="margin-top:12px; padding:12px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Task resource</strong>
+        <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+      </div>
+      <div class="muted" style="margin-top:6px;">
+        {{ task.resource_file.original_name or task.resource_file.stored_name or "resource" }}
+        {% if task.resource_file.size %} • {{ (task.resource_file.size // 1024) }} KB{% endif %}
+      </div>
+    </div>
+  {% endif %}
+</div>
+<div class="sp"></div>
+<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}">
+  {% if preview %}
+    <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
+  {% elif already_submitted %}
+    <p class="muted">You already submitted this task. Your responses are shown below.</p>
+  {% elif not can_submit %}
+    <p class="text-danger">This task is not currently accepting submissions.</p>
+  {% endif %}
+  {% if upload_error %}
+    <p class="text-danger" style="margin-top:6px;">{{ upload_error }}</p>
+  {% endif %}
+  {% if cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and not can_submit %}
+    {% set hrs = cooldown_seconds_remaining // 3600 %}
+    {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
+    <p class="text-danger" style="margin-top:6px;">You can try this task again in approximately {{ hrs }}h {{ mins }}m.</p>
+  {% endif %}
+  {% if time_remaining_seconds is not none and not preview %}
+  <div class="card" style="border:1px solid #1f2937; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;" data-timer data-seconds="{{ time_remaining_seconds }}">
+    <div>
+      <strong>Time remaining:</strong>
+      <span data-timer-text>--:--</span>
+    </div>
+    <div class="muted" data-timer-warning style="display:none;">Submitting...</div>
+  </div>
+  {% endif %}
+  <form method="post" data-exam-form enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="q_index" value="{{ current_index }}">
+    <input type="hidden" name="nav_action_auto" value="">
+    {% if question %}
+      {% set q = question %}
+      <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
+        <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • <span data-markdown-inline>{{ q.title }}</span>{% endif %}</div>
+        <div class="markdown-block q" style="margin:8px 0 12px 0;" data-markdown-prompt="{{ q.id }}">{{ q.prompt }}</div>
+        {% if q.code_snippet %}
+          <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
+        {% endif %}
+        {% if q.type in ("mcq", "multi") %}
+          {% set prev_raw = previous_answers.get(q.id) or '' %}
+          {% if q.type == "multi" %}
+            {% set selected = prev_raw.split('||') if prev_raw else [] %}
+          {% else %}
+            {% set selected = [prev_raw|string] if prev_raw not in (None, '') else [] %}
+          {% endif %}
+          <div class="choice-list">
+            {% for option in q.options or [] %}
+              {% set opt_value = loop.index0 ~ '' %}
+              <label class="choice-option">
+                {% if q.type == "multi" %}
+                  <input type="checkbox" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                {% else %}
+                  <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                {% endif %}
+                <div class="choice-option-text" data-markdown-block>{{ option }}</div>
+              </label>
+            {% endfor %}
+          </div>
+        {% elif q.type == "text" %}
+          <div class="text-answer-shell" data-markdown-shell="{{ q.id }}" style="display:flex; flex-direction:column; gap:8px;">
+            <textarea name="answer_{{ q.id }}" data-markdown-answer="{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" style="width:100%; min-height:120px; max-height:240px;" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
+            <div class="markdown-preview-header muted" style="font-size:0.9rem;">Preview (Markdown)</div>
+            <div class="markdown-preview-body" data-markdown-preview="{{ q.id }}" style="white-space:pre-wrap; min-height:60px; padding:8px; border:1px solid #1f2937; border-radius:8px; background:#0b1220;"></div>
+          </div>
+        {% elif q.type == "file" %}
+          {% set existing_file = previous_answers.get(q.id) %}
+          {% set has_file = existing_file is mapping %}
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <div>
+              <input type="file" name="answer_{{ q.id }}" accept="{{ q.accept or '.zip' }}" {% if not can_submit %}disabled{% endif %}>
+              <div class="muted" style="margin-top:6px;">Accepted: {{ q.accept or '.zip' }} • Max size: {{ q.max_mb or 5 }} MB</div>
+            </div>
+            {% if has_file %}
+              <div style="padding:10px; border-radius:10px; border:1px solid #334155; background:#0b1220;">
+                <div class="muted" style="font-size:0.85rem;">Uploaded file</div>
+                <div style="margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                  <strong>{{ existing_file.original_name or existing_file.stored_name or "uploaded.zip" }}</strong>
+                  {% if existing_file.size %}
+                    <span class="muted">({{ (existing_file.size // 1024) }} KB)</span>
+                  {% endif %}
+                  {% if submission_id is defined %}
+                    <a class="btn" href="{{ url_for('project_task_file_download', submission_id=submission_id, question_id=q.id) }}">Download</a>
+                  {% endif %}
+                </div>
+              </div>
+            {% else %}
+              <p class="muted" style="margin:0;">No file uploaded yet.</p>
+            {% endif %}
+          </div>
+        {% elif q.type == "code" %}
+          {% set raw_samples = q.samples or [] %}
+          {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
+          {% set prior_code = previous_answers.get(q.id) %}
+          {% set starter = prior_code if prior_code else (q.starter or "") %}
+          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="code-question-main" style="display:flex; flex-wrap:wrap; gap:12px;">
+              <div class="code-question-description" style="flex:1 1 280px; min-width:260px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                {% if q.statement %}
+                  <div style="margin-bottom:10px;">
+                    <strong>Problem statement</strong>
+                    <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-statement="{{ q.id }}">{{ q.statement }}</div>
+                  </div>
+                {% endif %}
+                {% if q.mode == "function" and q.function_signature %}
+                  <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                    <strong>Implement</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.function_signature }}</pre>
+                  </div>
+                {% endif %}
+              </div>
+              <div class="code-question-editor" style="flex:1 1 360px; min-width:320px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                </div>
+                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+              </div>
+            </div>
+
+            <div class="code-question-tests" style="display:flex; flex-direction:column; gap:10px;">
+              <div class="code-samples-card" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+                  <div style="display:flex; align-items:center; gap:8px;">
+                    <strong>Sample tests</strong>
+                    <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-sample-summary="{{ q.id }}">Not run</span>
+                  </div>
+                  {% if public_samples %}
+                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
+                  {% endif %}
+                </div>
+                {% if public_samples %}
+                  <ul style="list-style:none; padding:0; margin:10px 0; display:grid; gap:8px;">
+                    {% for sample in public_samples %}
+                      <li style="border:1px dashed #334155; border-radius:8px; padding:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                          <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
+                          {% if q.mode == "function" %}
+                            <span class="muted" style="font-size:0.85rem;">Call: <code>{{ sample.call or sample.input }}</code></span>
+                          {% else %}
+                            <span class="muted" style="font-size:0.85rem;">Std in</span>
+                          {% endif %}
+                        </div>
+                        {% if q.mode != "function" and sample.input %}
+                          <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; white-space:pre-wrap;">{{ sample.input }}</pre>
+                        {% endif %}
+                      </li>
+                    {% endfor %}
+                  </ul>
+                {% else %}
+                  <p class="muted" style="margin:10px 0;">No public sample tests are available for this question.</p>
+                {% endif %}
+                <div data-results="{{ q.id }}" class="test-results" style="font-size:0.95rem; margin-top:8px;"></div>
+              </div>
+
+              <div class="code-custom-run" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+                  <strong>Try your own input</strong>
+                  <span class="muted" style="font-size:0.85rem;" data-custom-summary="{{ q.id }}">Not run</span>
+                </div>
+                {% if q.mode == "function" %}
+                  <label style="display:block; margin-top:6px;">Function call</label>
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                {% else %}
+                  <label style="display:block; margin-top:6px;">Standard input</label>
+                  <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
+                {% endif %}
+                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+                <div data-custom-results="{{ q.id }}" class="code-custom-results" style="margin-top:8px; font-size:0.95rem;"></div>
+              </div>
+            </div>
+          </div>
+        {% elif q.type == "tokens" %}
+          {% set tpl = q.template or "" %}
+          {% set segments = tpl.split('[[blank]]') %}
+          {% set existing_value = previous_answers.get(q.id, '') or '' %}
+          {% set filled = existing_value.split('||') if existing_value else [] %}
+          <div data-token-question>
+            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;">{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
+            <input type="hidden" name="answer_{{ q.id }}" data-token-answer value="{{ existing_value }}">
+            <div class="token-bank" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
+              {% set base_tokens = q.correct_tokens or [] %}
+              {% set extra_tokens = q.distractor_tokens or [] %}
+              {% set options = q.token_options if q.token_options else (base_tokens + extra_tokens) %}
+              {% for opt in options %}
+                <button type="button" class="token-option" data-token-option data-token-value="{{ opt|e }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;" data-markdown-inline>{{ opt }}</button>
+              {% endfor %}
+            </div>
+          </div>
+        {% elif q.type == "fill" %}
+          {% set tpl = q.template or "" %}
+          {% set segments = tpl.split('[[blank]]') %}
+          {% set existing_value = previous_answers.get(q.id, '') or '' %}
+          {% set filled = existing_value.split('||') if existing_value else [] %}
+          <div data-fill-question>
+            <div class="fill-expression" style="display:flex; flex-wrap:wrap; gap:6px; padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+              {% for segment in segments %}
+                {% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}
+                {% if not loop.last %}
+                  {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
+                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}" style="min-width:4ch; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                {% endif %}
+              {% endfor %}
+            </div>
+            <input type="hidden" name="answer_{{ q.id }}" data-fill-answer value="{{ existing_value }}">
+          </div>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="card" style="background:#0b1220; border:1px dashed #334155;">
+        <p class="muted">No questions have been configured for this task.</p>
+      </div>
+    {% endif %}
+
+    <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:12px;">
+      <div class="row" style="gap:8px;">
+        {% if has_prev %}
+          <button class="btn" type="submit" name="nav_action" value="prev">Previous</button>
+        {% endif %}
+      </div>
+      <div class="row" style="gap:8px;">
+        {% if not preview %}
+          <button class="btn" type="submit" name="nav_action" value="save">Save without submitting</button>
+        {% endif %}
+        {% if preview %}
+          {% if has_next %}
+            <a class="btn btn-primary" href="#">Next</a>
+          {% endif %}
+        {% else %}
+          {% if has_next %}
+            <button class="btn btn-primary" type="submit" name="nav_action" value="next">Save &amp; Next</button>
+          {% else %}
+            {% if can_submit %}
+              <button class="btn btn-primary" type="submit" name="nav_action" value="submit">{{ submit_label }}</button>
+            {% elif already_submitted %}
+              <span class="muted">Submission already received.</span>
+            {% elif cooldown_seconds_remaining and cooldown_seconds_remaining > 0 %}
+              {% set hrs = cooldown_seconds_remaining // 3600 %}
+              {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
+              <span class="muted">Try again in {{ hrs }}h {{ mins }}m.</span>
+            {% else %}
+              <span class="muted">Task is not accepting submissions.</span>
+            {% endif %}
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script defer src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+{% if time_remaining_seconds is not none and not preview %}
+<script>
+(function(){
+  const timerEl = document.querySelector("[data-timer]");
+  if (!timerEl) return;
+  const total = parseInt(timerEl.dataset.seconds || "0", 10);
+  let remaining = isNaN(total) ? 0 : total;
+  const textEl = timerEl.querySelector("[data-timer-text]");
+  const warningEl = timerEl.querySelector("[data-timer-warning]");
+  const form = document.querySelector("[data-exam-form]");
+  const autoInput = form ? form.querySelector('input[name="nav_action_auto"]') : null;
+  let submitted = false;
+
+  const format = (secs) => {
+    const m = Math.max(0, Math.floor(secs / 60));
+    const s = Math.max(0, secs % 60);
+    return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+  };
+
+  const submitExam = () => {
+    if (submitted || !form) return;
+    submitted = true;
+    if (warningEl) warningEl.style.display = "block";
+    if (autoInput) autoInput.value = "submit";
+    form.submit();
+  };
+
+  const tick = () => {
+    if (textEl) textEl.textContent = format(remaining);
+    if (remaining <= 0) {
+      submitExam();
+      return;
+    }
+    remaining -= 1;
+    window.setTimeout(tick, 1000);
+  };
+
+  tick();
+})();
+</script>
+{% endif %}
+<script>
+(function(){
+  const preventCopy = (ev) => {
+    if ((ev.ctrlKey || ev.metaKey) && ["c","v","x"].includes(ev.key.toLowerCase())) {
+      ev.preventDefault();
+    }
+  };
+  const block = (ev) => ev.preventDefault();
+  document.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-code-input]").forEach((el) => {
+      el.addEventListener("copy", block);
+      el.addEventListener("cut", block);
+      el.addEventListener("paste", block);
+      el.addEventListener("contextmenu", block);
+      el.addEventListener("keydown", preventCopy);
+    });
+  });
+})();
+</script>
+{% endblock %}
