@@ -30,8 +30,16 @@
           <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
         </div>
       {% endif %}
-      {% set review_notes = latest_attempt.review_notes if (latest_attempt and latest_attempt.review_notes) else (submission.review_notes or "") %}
-      {% set reviewer_name = latest_attempt.reviewer.name if (latest_attempt and latest_attempt.reviewer) else "" %}
+      {% set review_notes = "" %}
+      {% if latest_attempt and latest_attempt.review_notes %}
+        {% set review_notes = latest_attempt.review_notes %}
+      {% elif submission.review_notes %}
+        {% set review_notes = submission.review_notes %}
+      {% endif %}
+      {% set reviewer_name = "" %}
+      {% if latest_attempt and latest_attempt.reviewer %}
+        {% set reviewer_name = latest_attempt.reviewer.name %}
+      {% endif %}
       {% if review_notes or reviewer_name %}
         <div style="margin-top:6px; padding:10px; border:1px dashed #334155; border-radius:10px;">
           <strong>Reviewer notes</strong>
