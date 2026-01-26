@@ -28,6 +28,13 @@ from sqlalchemy.orm.attributes import flag_modified
 # Utils
 # --------------------------------------------------------------------
 
+def utcnow():
+    """Get current UTC time as naive datetime (for database storage).
+    Uses datetime.now(timezone.utc).replace(tzinfo=None) to avoid deprecation warning
+    while maintaining compatibility with naive datetime fields in database.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 def parse_dt_local(s):
     """Parse HTML <input type=datetime-local> to UTC naive datetime."""
     if not s: return None
@@ -217,7 +224,7 @@ def _save_task_upload(submission, question, qid, file_storage, existing_info=Non
         "stored_name": stored_name,
         "path": rel_path,
         "size": size or os.path.getsize(full_path),
-        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
+        "uploaded_at": utcnow().isoformat() + "Z",
     }
     if existing_info:
         _remove_uploaded_file(existing_info)
@@ -268,7 +275,7 @@ def _save_task_resource(task, file_storage, existing_info=None):
         "stored_name": stored_name,
         "path": rel_path,
         "size": size or os.path.getsize(full_path),
-        "uploaded_at": datetime.now(timezone.utc).isoformat() + "Z",
+        "uploaded_at": utcnow().isoformat() + "Z",
         "content_type": file_storage.mimetype or "",
     }
     if existing_info:
@@ -310,7 +317,7 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
         "type": warning_type,
         "description": description,
         "severity": severity,
-        "timestamp": datetime.now(timezone.utc).isoformat() + "Z",
+        "timestamp": utcnow().isoformat() + "Z",
         "auto_detected": auto_detected,
     }
     
@@ -745,7 +752,7 @@ def update_student_last_seen():
         s = None
     if not s:
         return
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     if not s.last_seen_at or (now - s.last_seen_at).total_seconds() >= LOG_ACTIVITY_UPDATE_SEC:
         s.last_seen_at = now
         _touch_student_log_session(s, now)
@@ -847,7 +854,7 @@ def student_ping():
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     student.last_seen_at = now
     _touch_student_log_session(student, now)
     try:
@@ -883,7 +890,7 @@ def login():
                 logout_everyone()
                 session["user_id"] = acct_user.id
                 session["user_role"] = acct_user.role
-                acct_user.last_login = datetime.now(timezone.utc)
+                acct_user.last_login = utcnow()
                 db.session.commit()
                 if acct_user.first_login:
                     session["must_change_pw"] = {"kind": "user", "id": acct_user.id}
@@ -896,7 +903,7 @@ def login():
                 logout_everyone()
                 session["student_id"] = acct_student.id
                 session["student_name"] = acct_student.name
-                acct_student.last_login = datetime.now(timezone.utc)
+                acct_student.last_login = utcnow()
                 db.session.commit()
                 if acct_student.first_login:
                     session["must_change_pw"] = {"kind": "student", "id": acct_student.id}
@@ -969,7 +976,7 @@ def index():
         student_name=session.get("student_name"),
         exams=exams,
         available_exams=available_exams,
-        now_utc=datetime.now(timezone.utc),
+        now_utc=utcnow(),
     )
 
 def gen_code(n=6):
@@ -1227,7 +1234,7 @@ def students_online():
     except Exception:
         minutes = 10
     minutes = max(1, min(minutes, 120))
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    cutoff = utcnow() - timedelta(minutes=minutes)
     students = Student.query.filter(Student.last_seen_at != None, Student.last_seen_at >= cutoff).order_by(Student.last_seen_at.desc()).all()
     return render_template(
         "students_online.html",
@@ -1283,7 +1290,7 @@ def spotlight_start():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
     if not iv.started_at:
-        iv.started_at = datetime.now(timezone.utc)
+        iv.started_at = utcnow()
     iv.status = "running"
     db.session.commit()
     return jsonify({"ok": True})
@@ -1300,7 +1307,7 @@ def spotlight_complete():
     if iv.status not in ("picked","running"):
         return jsonify({"ok": False, "error": "bad_state"}), 400
 
-    iv.ended_at = datetime.now(timezone.utc)
+    iv.ended_at = utcnow()
     iv.status = "completed"
 
     # Update StudentStats
@@ -1309,7 +1316,7 @@ def spotlight_complete():
         ss = StudentStats(student_id=iv.student_id, times_spoken=0, current_round_done=False)
         db.session.add(ss)
     ss.times_spoken += 1
-    ss.last_spoken_at = datetime.now(timezone.utc)
+    ss.last_spoken_at = utcnow()
     ss.current_round_done = True
 
     db.session.commit()
@@ -1368,7 +1375,7 @@ def forms_new():
 @app.route("/f/<code>")
 def form_render(code):
     form = Form.query.filter_by(code=code).first_or_404()
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     is_expired = bool(form.closes_at and form.closes_at <= now)
     if not form.is_open or is_expired:
         return render_template("form_closed.html", form=form,
@@ -1440,7 +1447,7 @@ def form_submit(code):
     stu = current_student()
     if not stu:
         abort(401)
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     if not form.is_open or (form.closes_at and form.closes_at <= now):
         abort(403, description="Form is closed.")
 
@@ -1824,7 +1831,7 @@ def _record_task_attempt_review(submission, status=None, notes=None, reviewer=No
         attempt.review_notes = notes
     if reviewer:
         attempt.reviewed_by_user_id = reviewer.id
-    attempt.reviewed_at = datetime.now(timezone.utc)
+    attempt.reviewed_at = utcnow()
 
 def _project_required_count(project):
     required_tasks = [t for t in project.tasks if t.required]
@@ -1980,7 +1987,7 @@ def _parse_iso_datetime(val):
         return None
 
 def _logtime_range_from_params(params):
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     params = params if isinstance(params, dict) else {}
     range_type = params.get("range") or "all_time"
     start = None
@@ -2847,7 +2854,7 @@ def exam_take(code):
             # Start a fresh attempt by resetting the existing row.
             _clear_exam_draft(exam.id)
             submission.status = "in_progress"
-            submission.started_at = datetime.now(timezone.utc)
+            submission.started_at = utcnow()
             submission.submitted_at = None
             submission.last_activity_at = submission.started_at
             submission.answers_json = {}
@@ -2902,13 +2909,13 @@ def exam_take(code):
     if duration_seconds and submission:
         # started_at is assumed to be set by DB default or earlier commit
         deadline = submission.started_at + timedelta(seconds=duration_seconds)
-        time_remaining = int((deadline - datetime.now(timezone.utc)).total_seconds())
+        time_remaining = int((deadline - utcnow()).total_seconds())
         if time_remaining <= 0 and submission.status != "submitted":
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
             submission.status = "submitted"
-            submission.submitted_at = datetime.now(timezone.utc)
+            submission.submitted_at = utcnow()
             submission.last_activity_at = submission.submitted_at
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.score = grade_score
@@ -2995,7 +3002,7 @@ def exam_take(code):
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.answers_json = answers
             submission.status = "submitted"
-            submission.submitted_at = datetime.now(timezone.utc)
+            submission.submitted_at = utcnow()
             submission.last_activity_at = submission.submitted_at
             submission.score = grade_score
             submission.max_score = grade_total
@@ -3016,7 +3023,7 @@ def exam_take(code):
                 answers = dict(base_answers)
                 answers.update(draft_answers)
                 submission.answers_json = answers
-                submission.last_activity_at = datetime.now(timezone.utc)
+                submission.last_activity_at = utcnow()
                 db.session.commit()
             target = q_index
             if action == "prev":
@@ -3087,12 +3094,12 @@ def exams_log_run(code):
     summary = {
         "question_id": question_id,
         "samples": samples,
-        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "ts": utcnow().isoformat() + "Z",
     }
     logs = submission.run_logs if isinstance(submission.run_logs, list) else []
     logs.append(summary)
     submission.run_logs = logs
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
@@ -3143,10 +3150,10 @@ def exams_run_code(code):
         "question_id": qid,
         "tests": visible + hidden,
         "summary": summary,
-        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "ts": utcnow().isoformat() + "Z",
     })
     submission.run_logs = logs
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     db.session.commit()
     return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
 
@@ -3198,10 +3205,10 @@ def projects_run_code(code, task_id):
         "question_id": qid,
         "tests": visible + hidden,
         "summary": summary,
-        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "ts": utcnow().isoformat() + "Z",
     })
     submission.run_logs = logs
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     db.session.commit()
     return jsonify({"ok": True, "tests": visible + hidden, "summary": summary})
 
@@ -3425,7 +3432,7 @@ def attendance_new():
     if not _is_staff(user):
         abort(403)
     groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
-    default_date = datetime.now(timezone.utc).date().isoformat()
+    default_date = utcnow().date().isoformat()
     form_data = {
         "group_id": request.form.get("group_id") or "",
         "date": request.form.get("date") or default_date,
@@ -4412,7 +4419,7 @@ def student_projects():
                 elif status == "rejected":
                     retry_minutes = project.retry_cooldown_minutes or 0
                     if retry_minutes > 0 and submission.submitted_at:
-                        elapsed = (datetime.now(timezone.utc) - submission.submitted_at).total_seconds()
+                        elapsed = (utcnow() - submission.submitted_at).total_seconds()
                         wait_seconds = int(retry_minutes * 60 - elapsed)
                         if wait_seconds > 0:
                             can_retry_now = False
@@ -4486,7 +4493,7 @@ def student_project_detail(code):
             elif status == "rejected":
                 retry_minutes = project.retry_cooldown_minutes or 0
                 if retry_minutes > 0 and submission.submitted_at:
-                    elapsed = (datetime.now(timezone.utc) - submission.submitted_at).total_seconds()
+                    elapsed = (utcnow() - submission.submitted_at).total_seconds()
                     wait_seconds = int(retry_minutes * 60 - elapsed)
                     if wait_seconds > 0:
                         can_retry_now = False
@@ -4562,7 +4569,7 @@ def project_task_take(code, task_id):
         db.session.commit()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
     total_questions = len(questions)
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     cooldown_minutes = project.retry_cooldown_minutes or 0
     cooldown_seconds_remaining = 0
     status = submission.status if submission and submission.status else "in_progress"
@@ -4712,7 +4719,7 @@ def project_task_take(code, task_id):
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
-            submission.last_activity_at = datetime.now(timezone.utc)
+            submission.last_activity_at = utcnow()
             db.session.commit()
             return redirect(url_for("student_projects"))
         if action == "submit":
@@ -4830,7 +4837,7 @@ def project_task_take(code, task_id):
             answers = dict(base_answers)
             answers.update(draft_answers)
             submission.answers_json = answers
-            submission.last_activity_at = datetime.now(timezone.utc)
+            submission.last_activity_at = utcnow()
             db.session.commit()
             target = q_index
             if action == "prev":
@@ -5002,8 +5009,8 @@ def projects_submission_task_validate(code, student_id, task_id):
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "accepted"
     if not submission.submitted_at:
-        submission.submitted_at = datetime.now(timezone.utc)
-    submission.last_activity_at = datetime.now(timezone.utc)
+        submission.submitted_at = utcnow()
+    submission.last_activity_at = utcnow()
     _record_task_attempt_review(submission, status="accepted", reviewer=current_user())
     if submission.student and _project_completed(project, submission.student):
         _award_project_points_if_needed(project, submission.student)
@@ -5020,7 +5027,7 @@ def projects_submission_task_need_rework(code, student_id, task_id):
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "rejected"
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     _record_task_attempt_review(submission, status="rejected", reviewer=current_user())
     db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
@@ -5067,12 +5074,12 @@ def projects_task_log_run(code, task_id):
     summary = {
         "question_id": data.get("question_id"),
         "samples": data.get("samples") or [],
-        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "ts": utcnow().isoformat() + "Z",
     }
     logs = submission.run_logs if isinstance(submission.run_logs, list) else []
     logs.append(summary)
     submission.run_logs = logs
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
@@ -5353,7 +5360,7 @@ def projects_review_decision(submission_id):
     if attempt_id:
         review_attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
     if review_attempt:
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         if reviewed_status:
             review_attempt.status = reviewed_status
         if notes:
@@ -5381,7 +5388,7 @@ def projects_review_decision(submission_id):
         # Clear warnings for this submission since it has been reviewed
         if submission.student and notes:
             _clear_submission_warnings(submission.student, submission)
-    submission.last_activity_at = datetime.now(timezone.utc)
+    submission.last_activity_at = utcnow()
     if submission.status == "accepted" and submission.student:
         if _project_completed(submission.project, submission.student):
             _award_project_points_if_needed(submission.project, submission.student)
@@ -5695,7 +5702,7 @@ def _student_can_start_proficiency_test(student):
             return False, "in_progress"
         # Auto-submit expired test
         in_progress.status = "submitted"
-        in_progress.submitted_at = datetime.now(timezone.utc)
+        in_progress.submitted_at = utcnow()
         db.session.commit()
     
     # Has a pending review?
@@ -5713,7 +5720,7 @@ def _student_can_start_proficiency_test(student):
     
     if last_failed and last_failed.reviewed_at:
         cooldown_end = last_failed.reviewed_at + timedelta(hours=config.cooldown_hours)
-        if datetime.now(timezone.utc) < cooldown_end:
+        if utcnow() < cooldown_end:
             return False, "cooldown"
     
     return True, "ok"
@@ -5931,7 +5938,7 @@ def proficiency_review_detail(attempt_id):
         action = request.form.get("action")
         if action == "pass":
             attempt.status = "passed"
-            attempt.reviewed_at = datetime.now(timezone.utc)
+            attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
             
             # Award proficiency tag
@@ -5950,7 +5957,7 @@ def proficiency_review_detail(attempt_id):
             db.session.commit()
         elif action == "fail":
             attempt.status = "failed"
-            attempt.reviewed_at = datetime.now(timezone.utc)
+            attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
             db.session.commit()
         
@@ -5975,7 +5982,7 @@ def proficiency_change_status(attempt_id):
     
     old_status = attempt.status
     attempt.status = new_status
-    attempt.reviewed_at = datetime.now(timezone.utc)
+    attempt.reviewed_at = utcnow()
     attempt.reviewed_by_user_id = user.id
     
     # Handle proficiency tag based on new status
@@ -6027,7 +6034,7 @@ def student_proficiency():
     if in_progress and in_progress.is_expired:
         # Auto-submit expired test
         in_progress.status = "submitted"
-        in_progress.submitted_at = datetime.now(timezone.utc)
+        in_progress.submitted_at = utcnow()
         # Run hidden tests on submission
         for sub in in_progress.submissions:
             if sub.exercise:
@@ -6064,7 +6071,7 @@ def student_proficiency():
         ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).first()
         if last_failed and last_failed.reviewed_at:
             cooldown_end = last_failed.reviewed_at + timedelta(hours=config.cooldown_hours)
-            cooldown_remaining = cooldown_end - datetime.now(timezone.utc)
+            cooldown_remaining = cooldown_end - utcnow()
     
     exercise_count = ProficiencyExercise.query.filter_by(is_active=True).count()
     
@@ -6147,7 +6154,7 @@ def student_proficiency_take(attempt_id):
     # Check if expired
     if attempt.is_expired:
         attempt.status = "submitted"
-        attempt.submitted_at = datetime.now(timezone.utc)
+        attempt.submitted_at = utcnow()
         # Run all tests on submission
         for sub in attempt.submissions:
             test_cases = sub.exercise_test_cases_json or {}
@@ -6195,7 +6202,7 @@ def student_proficiency_take(attempt_id):
                 sub.hidden_total = len(hidden_results)
             
             attempt.status = "submitted"
-            attempt.submitted_at = datetime.now(timezone.utc)
+            attempt.submitted_at = utcnow()
             db.session.commit()
             return redirect(url_for("student_proficiency"))
     
@@ -6246,7 +6253,7 @@ def api_proficiency_run_tests(attempt_id):
     # Log the run
     logs = sub.run_logs if isinstance(sub.run_logs, list) else []
     logs.append({
-        "ts": datetime.now(timezone.utc).isoformat() + "Z",
+        "ts": utcnow().isoformat() + "Z",
         "results": visible_results,
     })
     sub.run_logs = logs
