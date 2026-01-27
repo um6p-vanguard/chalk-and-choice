@@ -224,6 +224,19 @@
 
 <div class="sp"></div>
 
+<!-- Test Access Status -->
+{% if not tests_enabled %}
+<div class="card" style="background:#1e293b; border:2px solid #fbbf24; padding:24px; text-align:center;">
+  <div style="font-size:2.5rem; margin-bottom:16px;">⏸️</div>
+  <h3 style="margin:0 0 12px 0; color:#fbbf24;">Proficiency Tests Currently Unavailable</h3>
+  <p class="muted" style="margin:0; max-width:600px; margin:0 auto;">
+    Your instructors have temporarily disabled test-taking while they configure the system. 
+    You can still view your progress above. Check back soon!
+  </p>
+</div>
+<div class="sp"></div>
+{% endif %}
+
 <!-- Outcomes by Domain -->
 {% for domain_key, domain_info in outcomes_by_domain.items() %}
 <div class="domain-card">
@@ -269,14 +282,20 @@
         {% if progress.best_score %}
           <div class="score-display" style="color: #f87171;">Best: {{ (progress.best_score * 100)|int }}%</div>
         {% endif %}
-        {% if can_attempt.get(outcome.tag_name) %}
+        {% if tests_enabled and can_attempt.get(outcome.tag_name) %}
           <a href="{{ url_for('student_proficiency_test_outcome', outcome_tag=outcome.tag_name) }}" class="btn btn-primary">Take Test</a>
+        {% elif can_attempt.get(outcome.tag_name) %}
+          <span class="muted" style="font-size: 0.85rem;">Tests disabled</span>
         {% else %}
           <span class="muted" style="font-size: 0.85rem;">Cooldown active</span>
         {% endif %}
       {% elif progress and progress.is_unlocked %}
         <div class="status-badge status-unlocked">🔓 Ready</div>
+        {% if tests_enabled %}
         <a href="{{ url_for('student_proficiency_test_outcome', outcome_tag=outcome.tag_name) }}" class="btn btn-primary">Take Test</a>
+        {% else %}
+        <span class="muted" style="font-size: 0.85rem;">Tests disabled</span>
+        {% endif %}
       {% else %}
         <div class="status-badge status-locked">🔒 Locked</div>
       {% endif %}

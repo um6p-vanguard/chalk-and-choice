@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2>{% if outcome %}Edit Learning Outcome{% else %}New Learning Outcome{% endif %}</h2>
+  
+  {% if error %}
+  <div style="background:var(--danger); color:white; padding:10px; border-radius:8px; margin-bottom:16px;">
+    {{ error }}
+  </div>
+  {% endif %}
+
+  <form method="POST">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div>
+        <label>Tag Name * <span class="muted" style="font-weight:normal;">(unique identifier, lowercase with underscores)</span></label>
+        <input type="text" name="tag_name" value="{{ outcome.tag_name if outcome else '' }}" 
+               {% if outcome %}readonly style="background:#1a1f35;"{% else %}required{% endif %}
+               placeholder="e.g., control_flow">
+      </div>
+      
+      <div>
+        <label>Display Name *</label>
+        <input type="text" name="display_name" value="{{ outcome.display_name if outcome else '' }}" required
+               placeholder="e.g., Control Flow">
+      </div>
+    </div>
+    <div class="sp"></div>
+
+    <label>Description</label>
+    <textarea name="description" rows="3" placeholder="Brief description of what students will learn...">{{ outcome.description if outcome else '' }}</textarea>
+    <div class="sp"></div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <div>
+        <label>Domain * <span class="muted" style="font-weight:normal;">(e.g., algorithms, data_structures)</span></label>
+        <input type="text" name="domain" value="{{ outcome.domain if outcome else '' }}" required
+               placeholder="e.g., algorithms">
+      </div>
+      
+      <div>
+        <label>Domain Display Name</label>
+        <input type="text" name="domain_display" value="{{ outcome.domain_display if outcome else '' }}"
+               placeholder="e.g., Algorithms & Problem Solving">
+      </div>
+    </div>
+    <div class="sp"></div>
+
+    <div style="display:grid; grid-template-columns:200px 200px 200px; gap:16px;">
+      <div>
+        <label>Icon Emoji</label>
+        <input type="text" name="icon_emoji" value="{{ outcome.icon_emoji if outcome else '📚' }}" maxlength="4"
+               placeholder="📚">
+      </div>
+      
+      <div>
+        <label>Difficulty Level *</label>
+        <select name="difficulty_level" required>
+          <option value="1" {% if outcome and outcome.difficulty_level == 1 %}selected{% elif not outcome %}selected{% endif %}>⭐ Basic</option>
+          <option value="2" {% if outcome and outcome.difficulty_level == 2 %}selected{% endif %}>⭐⭐ Intermediate</option>
+          <option value="3" {% if outcome and outcome.difficulty_level == 3 %}selected{% endif %}>⭐⭐⭐ Advanced</option>
+        </select>
+      </div>
+      
+      <div>
+        <label>Week Number <span class="muted" style="font-weight:normal;">(optional)</span></label>
+        <input type="number" name="week_number" value="{{ outcome.week_number if outcome and outcome.week_number else '' }}" 
+               min="1" placeholder="e.g., 5">
+      </div>
+    </div>
+    <div class="sp"></div>
+
+    <hr style="border-color:var(--border); margin:20px 0;">
+    <h3>Test Configuration</h3>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:16px;">
+      <div>
+        <label>Exercise Count *</label>
+        <input type="number" name="exercise_count" value="{{ outcome.exercise_count if outcome else 3 }}" 
+               required min="1" max="20">
+        <p class="muted" style="font-size:0.85rem; margin:4px 0 0;">Exercises per test</p>
+      </div>
+      
+      <div>
+        <label>Duration (minutes) *</label>
+        <input type="number" name="duration_minutes" value="{{ outcome.duration_minutes if outcome else 20 }}" 
+               required min="5" max="120">
+        <p class="muted" style="font-size:0.85rem; margin:4px 0 0;">Time limit</p>
+      </div>
+      
+      <div>
+        <label>Cooldown (hours) *</label>
+        <input type="number" name="cooldown_hours" value="{{ outcome.cooldown_hours if outcome else 24 }}" 
+               required min="1" max="168">
+        <p class="muted" style="font-size:0.85rem; margin:4px 0 0;">Retry wait time</p>
+      </div>
+      
+      <div>
+        <label>Passing Threshold *</label>
+        <input type="number" name="passing_threshold" step="0.05" 
+               value="{{ outcome.passing_threshold if outcome else 0.75 }}" 
+               required min="0.5" max="1.0">
+        <p class="muted" style="font-size:0.85rem; margin:4px 0 0;">Score needed (0.0-1.0)</p>
+      </div>
+    </div>
+    <div class="sp"></div>
+
+    <label>Display Order * <span class="muted" style="font-weight:normal;">(lower numbers appear first)</span></label>
+    <input type="number" name="display_order" value="{{ outcome.display_order if outcome else 10 }}" 
+           required min="1" max="1000">
+    <div class="sp"></div>
+
+    <hr style="border-color:var(--border); margin:20px 0;">
+    <h3>Prerequisites</h3>
+    <p class="muted">Select outcomes that must be completed before this one becomes available.</p>
+    
+    {% if all_outcomes %}
+    <div style="background:#1e293b; padding:16px; border-radius:8px; max-height:200px; overflow-y:auto;">
+      {% for other in all_outcomes %}
+      <label style="display:block; padding:8px; cursor:pointer; border-radius:4px;" 
+             onmouseover="this.style.background='#334155'" 
+             onmouseout="this.style.background='transparent'">
+        <input type="checkbox" name="prerequisites" value="{{ other.tag_name }}"
+               {% if outcome and other.tag_name in outcome.prerequisites %}checked{% endif %}>
+        {{ other.icon_emoji }} {{ other.display_name }} <span class="muted">({{ other.tag_name }})</span>
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">No other outcomes available as prerequisites.</p>
+    {% endif %}
+    <div class="sp"></div>
+
+    <hr style="border-color:var(--border); margin:20px 0;">
+    
+    <label>
+      <input type="checkbox" name="is_active" value="1" {% if outcome and outcome.is_active %}checked{% elif not outcome %}checked{% endif %}>
+      Active (students can take tests for this outcome)
+    </label>
+    <div class="sp"></div>
+
+    <div class="row" style="gap:10px;">
+      <button type="submit" class="btn btn-primary">{% if outcome %}Save Changes{% else %}Create Outcome{% endif %}</button>
+      <a href="{{ url_for('proficiency_outcomes_list') }}" class="btn">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

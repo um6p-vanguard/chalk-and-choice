@@ -467,6 +467,7 @@ class ProficiencyTestConfig(db.Model):
     duration_minutes = db.Column(db.Integer, nullable=False, default=60)  # Test duration
     cooldown_hours = db.Column(db.Integer, nullable=False, default=48)  # Hours before retry
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    student_access_enabled = db.Column(db.Boolean, nullable=False, default=True)  # Allow students to access proficiency tests
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

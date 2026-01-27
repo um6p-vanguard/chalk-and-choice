@@ -736,6 +736,12 @@ def verify_csrf(form_field="csrf"):
 def inject_csrf():
     return {"csrf_token": csrf_token}
 
+@app.context_processor
+def inject_proficiency_status():
+    """Make proficiency config available to all templates for navigation logic."""
+    config = _get_proficiency_config()
+    return {"proficiency_enabled": config.student_access_enabled}
+
 # Minimal markdown renderer with headings, inline code, fenced code blocks, lists.
 def render_md(text):
     if text is None:
@@ -5837,6 +5843,139 @@ def _run_proficiency_tests(code_text, test_cases, time_limit=3.0):
 
 # --- Admin/Mentor: Manage Exercises ---
 
+@app.route("/proficiency/outcomes")
+@require_user()
+def proficiency_outcomes_list():
+    """List all learning outcomes."""
+    user = current_user()
+    outcomes = LearningOutcome.query.order_by(
+        LearningOutcome.domain, LearningOutcome.display_order
+    ).all()
+    
+    # Group by domain
+    by_domain = {}
+    for outcome in outcomes:
+        if outcome.domain not in by_domain:
+            by_domain[outcome.domain] = {
+                'display': outcome.domain_display,
+                'outcomes': []
+            }
+        by_domain[outcome.domain]['outcomes'].append(outcome)
+    
+    return render_template("proficiency_outcomes_list.html", 
+                           user=user, by_domain=by_domain)
+
+@app.route("/proficiency/outcomes/new", methods=["GET", "POST"])
+@require_user()
+def proficiency_outcomes_new():
+    """Create a new learning outcome."""
+    user = current_user()
+    all_outcomes = LearningOutcome.query.all()
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        tag_name = (request.form.get("tag_name") or "").strip()
+        display_name = (request.form.get("display_name") or "").strip()
+        description = (request.form.get("description") or "").strip()
+        domain = (request.form.get("domain") or "").strip()
+        domain_display = (request.form.get("domain_display") or "").strip()
+        icon_emoji = (request.form.get("icon_emoji") or "").strip() or "📚"
+        
+        error = None
+        if not tag_name:
+            error = "Tag name is required"
+        elif LearningOutcome.query.filter_by(tag_name=tag_name).first():
+            error = "Tag name already exists"
+        elif not display_name:
+            error = "Display name is required"
+        elif not domain:
+            error = "Domain is required"
+        
+        if error:
+            return render_template("proficiency_outcome_form.html", 
+                                   user=user, error=error, outcome=None, 
+                                   all_outcomes=all_outcomes)
+        
+        outcome = LearningOutcome(
+            tag_name=tag_name,
+            display_name=display_name,
+            description=description,
+            icon_emoji=icon_emoji,
+            domain=domain,
+            domain_display=domain_display or domain.replace('_', ' ').title(),
+            difficulty_level=int(request.form.get("difficulty_level") or 1),
+            week_number=int(request.form.get("week_number") or 1) if request.form.get("week_number") else None,
+            exercise_count=int(request.form.get("exercise_count") or 3),
+            duration_minutes=int(request.form.get("duration_minutes") or 20),
+            cooldown_hours=int(request.form.get("cooldown_hours") or 24),
+            passing_threshold=float(request.form.get("passing_threshold") or 0.75),
+            display_order=int(request.form.get("display_order") or 10),
+            is_active=request.form.get("is_active") == "1",
+        )
+        
+        # Handle prerequisites
+        prereq_tags = request.form.getlist("prerequisites")
+        outcome.prerequisites_json = prereq_tags if prereq_tags else []
+        
+        db.session.add(outcome)
+        db.session.commit()
+        
+        return redirect(url_for("proficiency_outcomes_list"))
+    
+    return render_template("proficiency_outcome_form.html", 
+                           user=user, outcome=None, all_outcomes=all_outcomes)
+
+@app.route("/proficiency/outcomes/<int:outcome_id>/edit", methods=["GET", "POST"])
+@require_user()
+def proficiency_outcomes_edit(outcome_id):
+    """Edit a learning outcome."""
+    user = current_user()
+    outcome = LearningOutcome.query.get_or_404(outcome_id)
+    all_outcomes = LearningOutcome.query.filter(LearningOutcome.id != outcome_id).all()
+    
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        
+        outcome.display_name = (request.form.get("display_name") or "").strip()
+        outcome.description = (request.form.get("description") or "").strip()
+        outcome.domain = (request.form.get("domain") or "").strip()
+        outcome.domain_display = (request.form.get("domain_display") or "").strip()
+        outcome.icon_emoji = (request.form.get("icon_emoji") or "").strip() or "📚"
+        outcome.difficulty_level = int(request.form.get("difficulty_level") or 1)
+        outcome.week_number = int(request.form.get("week_number") or 1) if request.form.get("week_number") else None
+        outcome.exercise_count = int(request.form.get("exercise_count") or 3)
+        outcome.duration_minutes = int(request.form.get("duration_minutes") or 20)
+        outcome.cooldown_hours = int(request.form.get("cooldown_hours") or 24)
+        outcome.passing_threshold = float(request.form.get("passing_threshold") or 0.75)
+        outcome.display_order = int(request.form.get("display_order") or 10)
+        outcome.is_active = request.form.get("is_active") == "1"
+        
+        # Handle prerequisites
+        prereq_tags = request.form.getlist("prerequisites")
+        outcome.prerequisites_json = prereq_tags if prereq_tags else []
+        
+        db.session.commit()
+        return redirect(url_for("proficiency_outcomes_list"))
+    
+    return render_template("proficiency_outcome_form.html", 
+                           user=user, outcome=outcome, all_outcomes=all_outcomes)
+
+@app.route("/proficiency/outcomes/<int:outcome_id>/delete", methods=["POST"])
+@require_user()
+def proficiency_outcomes_delete(outcome_id):
+    """Delete a learning outcome."""
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    
+    outcome = LearningOutcome.query.get_or_404(outcome_id)
+    db.session.delete(outcome)
+    db.session.commit()
+    
+    return redirect(url_for("proficiency_outcomes_list"))
+
 @app.route("/proficiency/exercises")
 @require_user()
 def proficiency_exercises_list():
@@ -5991,14 +6130,17 @@ def proficiency_config():
     config = _get_proficiency_config()
     
     if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
         config.title = (request.form.get("title") or "").strip() or "Python Proficiency Test"
         config.description = (request.form.get("description") or "").strip()
         config.exercise_count = int(request.form.get("exercise_count") or 3)
         config.duration_minutes = int(request.form.get("duration_minutes") or 60)
         config.cooldown_hours = int(request.form.get("cooldown_hours") or 48)
         config.is_active = request.form.get("is_active") == "1"
+        config.student_access_enabled = request.form.get("student_access_enabled") == "1"
         db.session.commit()
-        return redirect(url_for("proficiency_exercises_list"))
+        return redirect(url_for("proficiency_outcomes_list"))
     
     return render_template("proficiency_config.html", user=user, config=config)
 
@@ -6264,6 +6406,12 @@ def student_proficiency_start():
 def student_proficiency_take(attempt_id):
     """Take a proficiency test."""
     student = current_student()
+    
+    # Check if tests are enabled
+    config = _get_proficiency_config()
+    if not config.student_access_enabled:
+        abort(403, "Proficiency tests are currently disabled.")
+    
     attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
     
     if attempt.student_id != student.id:
@@ -6464,6 +6612,10 @@ def student_proficiency_outcomes():
     """Student view of learning outcomes with progress graph."""
     student = current_student()
     
+    # Get proficiency config to check if tests are enabled
+    config = _get_proficiency_config()
+    tests_enabled = config.student_access_enabled
+    
     # Update unlocks based on current progress
     _update_outcome_unlocks(student)
     
@@ -6563,7 +6715,8 @@ def student_proficiency_outcomes():
         can_attempt=can_attempt,
         pending_attempts=pending_attempts,
         stats=stats,
-        domain_progress=domain_progress
+        domain_progress=domain_progress,
+        tests_enabled=tests_enabled
     )
 
 @app.route("/student/proficiency/test/<outcome_tag>")
@@ -6571,6 +6724,12 @@ def student_proficiency_outcomes():
 def student_proficiency_test_outcome(outcome_tag):
     """Show test start page for a specific learning outcome."""
     student = current_student()
+    
+    # Check if tests are enabled
+    config = _get_proficiency_config()
+    if not config.student_access_enabled:
+        abort(403, "Proficiency tests are currently disabled.")
+    
     outcome = LearningOutcome.query.filter_by(tag_name=outcome_tag).first_or_404()
     
     if not outcome.is_active:
@@ -6620,6 +6779,12 @@ def student_proficiency_test_outcome(outcome_tag):
 def student_proficiency_start_outcome(outcome_tag):
     """Start a test for a specific learning outcome."""
     student = current_student()
+    
+    # Check if tests are enabled
+    config = _get_proficiency_config()
+    if not config.student_access_enabled:
+        abort(403, "Proficiency tests are currently disabled.")
+    
     outcome = LearningOutcome.query.filter_by(tag_name=outcome_tag).first_or_404()
     
     if not outcome.is_active:
