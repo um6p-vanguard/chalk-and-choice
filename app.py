@@ -18,7 +18,8 @@ from models import (db, Student, User, Form,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
                     BlogPost, BlogComment, Leaderboard,
                     ProficiencyExercise, ProficiencyTestConfig, ProficiencyTestAttempt,
-                    ProficiencyExerciseSubmission, StudentProficiencyTag)
+                    ProficiencyExerciseSubmission, StudentProficiencyTag,
+                    LearningOutcome, StudentOutcomeProgress)
 import qrcode
 from sqlalchemy import func
 from sqlalchemy.orm import subqueryload
@@ -491,6 +492,84 @@ def _calculate_code_similarity(code1, code2):
     union = len(tokens1.union(tokens2))
     
     return intersection / union if union > 0 else 0.0
+
+def _check_project_deadline_status(project):
+    """Check if a project is within its deadline constraints."""
+    now = utcnow()
+    
+    # Check if project has started
+    if project.starts_at and now < project.starts_at:
+        return {
+            "available": False,
+            "status": "not_started",
+            "message": f"Available from {project.starts_at.strftime('%Y-%m-%d %H:%M')}"
+        }
+    
+    # Check hard deadline
+    if project.hard_deadline_at and now > project.hard_deadline_at:
+        return {
+            "available": False,
+            "status": "past_hard_deadline",
+            "message": "Submission deadline has passed"
+        }
+    
+    # Check soft deadline (late work allowed with penalty)
+    if project.due_at and now > project.due_at:
+        return {
+            "available": True,
+            "status": "late",
+            "message": f"Late submission ({project.late_penalty_percent}% penalty)",
+            "penalty": project.late_penalty_percent
+        }
+    
+    # Project is on time
+    return {
+        "available": True,
+        "status": "on_time",
+        "message": None,
+        "penalty": 0
+    }
+
+def _check_time_window_availability(project):
+    """Check if a project is available based on weekly time windows."""
+    if not project.availability_enabled or not project.availability_rules:
+        return {"available": True, "message": None}
+    
+    try:
+        import json
+        rules = json.loads(project.availability_rules) if isinstance(project.availability_rules, str) else project.availability_rules
+    except:
+        return {"available": True, "message": None}
+    
+    now = utcnow()
+    current_day = now.strftime('%A')  # Monday, Tuesday, etc.
+    current_time = now.time()
+    
+    day_windows = rules.get(current_day, [])
+    if not day_windows:
+        return {
+            "available": False,
+            "message": f"Not available on {current_day}"
+        }
+    
+    # Check if current time falls within any window
+    for window in day_windows:
+        try:
+            start_str = window.get('start', '00:00')
+            end_str = window.get('end', '23:59')
+            from datetime import time as dt_time
+            start_time = dt_time(*map(int, start_str.split(':')))
+            end_time = dt_time(*map(int, end_str.split(':')))
+            
+            if start_time <= current_time <= end_time:
+                return {"available": True, "message": None}
+        except:
+            continue
+    
+    return {
+        "available": False,
+        "message": f"Available during: {', '.join({f"{w.get('start')}-{w.get('end')}" for w in day_windows})}"
+    }
 
 def _detect_code_similarity(student, submission, question_id, submitted_code):
     """Detect similar code submissions from other students."""
@@ -4850,7 +4929,7 @@ def project_task_take(code, task_id):
     
     # Calculate time remaining until deadline
     time_remaining_seconds = None
-    now = datetime.utcnow()
+    now = utcnow()
     
     if project.hard_deadline_at:
         time_remaining_seconds = int((project.hard_deadline_at - now).total_seconds())
@@ -5774,12 +5853,19 @@ def proficiency_exercises_new():
     """Create a new proficiency exercise."""
     user = current_user()
     
+    # Get all learning outcomes for the dropdown
+    outcomes = LearningOutcome.query.filter_by(is_active=True).order_by(
+        LearningOutcome.domain, LearningOutcome.display_order
+    ).all()
+    
     if request.method == "POST":
         title = (request.form.get("title") or "").strip()
         description = (request.form.get("description") or "").strip()
         instructions = (request.form.get("instructions") or "").strip()
         starter_code = (request.form.get("starter_code") or "").strip()
         time_limit = float(request.form.get("time_limit") or 3.0)
+        outcome_tag = (request.form.get("outcome_tag") or "").strip()
+        difficulty_level = int(request.form.get("difficulty_level") or 1)
         
         # Parse test cases
         visible_tests = []
@@ -5811,7 +5897,11 @@ def proficiency_exercises_new():
         
         if not title:
             return render_template("proficiency_exercise_form.html", 
-                                   user=user, error="Title is required", exercise=None)
+                                   user=user, error="Title is required", exercise=None, outcomes=outcomes)
+        
+        if not outcome_tag:
+            return render_template("proficiency_exercise_form.html", 
+                                   user=user, error="Learning outcome is required", exercise=None, outcomes=outcomes)
         
         exercise = ProficiencyExercise(
             title=title,
@@ -5820,6 +5910,8 @@ def proficiency_exercises_new():
             starter_code=starter_code,
             test_cases_json={"visible": visible_tests, "hidden": hidden_tests},
             time_limit_sec=time_limit,
+            outcome_tag=outcome_tag,
+            difficulty_level=difficulty_level,
             is_active=True,
             created_by_user_id=user.id,
         )
@@ -5828,7 +5920,7 @@ def proficiency_exercises_new():
         
         return redirect(url_for("proficiency_exercises_list"))
     
-    return render_template("proficiency_exercise_form.html", user=user, exercise=None)
+    return render_template("proficiency_exercise_form.html", user=user, exercise=None, outcomes=outcomes)
 
 @app.route("/proficiency/exercises/<int:exercise_id>/edit", methods=["GET", "POST"])
 @require_user()
@@ -5941,24 +6033,79 @@ def proficiency_review_detail(attempt_id):
             attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
             
-            # Award proficiency tag
-            existing_tag = StudentProficiencyTag.query.filter_by(
-                student_id=attempt.student_id, tag_name="python"
-            ).first()
-            if not existing_tag:
-                tag = StudentProficiencyTag(
+            # Calculate final score if not already calculated
+            if not attempt.final_score:
+                total_tests = 0
+                passed_tests = 0
+                for sub in attempt.submissions:
+                    total_tests += sub.visible_total + sub.hidden_total
+                    passed_tests += sub.visible_passed + sub.hidden_passed
+                attempt.final_score = passed_tests / total_tests if total_tests > 0 else 0.0
+            
+            # Award proficiency tag based on test type
+            if attempt.outcome_tag:
+                # Outcome-based test
+                existing_tag = StudentProficiencyTag.query.filter_by(
+                    student_id=attempt.student_id, tag_name=attempt.outcome_tag
+                ).first()
+                if not existing_tag:
+                    tag = StudentProficiencyTag(
+                        student_id=attempt.student_id,
+                        tag_name=attempt.outcome_tag,
+                        attempt_id=attempt.id,
+                        awarded_by_user_id=user.id,
+                    )
+                    db.session.add(tag)
+                
+                # Update outcome progress
+                progress = StudentOutcomeProgress.query.filter_by(
                     student_id=attempt.student_id,
-                    tag_name="python",
-                    attempt_id=attempt.id,
-                    awarded_by_user_id=user.id,
-                )
-                db.session.add(tag)
+                    outcome_tag=attempt.outcome_tag
+                ).first()
+                if progress:
+                    progress.is_passed = True
+                    progress.passed_at = utcnow()
+                    if not progress.best_score or attempt.final_score > progress.best_score:
+                        progress.best_score = attempt.final_score
+            else:
+                # Legacy "python" proficiency test
+                existing_tag = StudentProficiencyTag.query.filter_by(
+                    student_id=attempt.student_id, tag_name="python"
+                ).first()
+                if not existing_tag:
+                    tag = StudentProficiencyTag(
+                        student_id=attempt.student_id,
+                        tag_name="python",
+                        attempt_id=attempt.id,
+                        awarded_by_user_id=user.id,
+                    )
+                    db.session.add(tag)
             
             db.session.commit()
         elif action == "fail":
             attempt.status = "failed"
             attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
+            
+            # Calculate final score if not already calculated
+            if not attempt.final_score:
+                total_tests = 0
+                passed_tests = 0
+                for sub in attempt.submissions:
+                    total_tests += sub.visible_total + sub.hidden_total
+                    passed_tests += sub.visible_passed + sub.hidden_passed
+                attempt.final_score = passed_tests / total_tests if total_tests > 0 else 0.0
+            
+            # Update outcome progress
+            if attempt.outcome_tag:
+                progress = StudentOutcomeProgress.query.filter_by(
+                    student_id=attempt.student_id,
+                    outcome_tag=attempt.outcome_tag
+                ).first()
+                if progress:
+                    if not progress.best_score or attempt.final_score > progress.best_score:
+                        progress.best_score = attempt.final_score
+            
             db.session.commit()
         
         return redirect(url_for("proficiency_reviews"))
@@ -5985,30 +6132,53 @@ def proficiency_change_status(attempt_id):
     attempt.reviewed_at = utcnow()
     attempt.reviewed_by_user_id = user.id
     
+    # Handle proficiency tags based on outcome test or legacy
+    tag_name = attempt.outcome_tag if attempt.outcome_tag else "python"
+    
     # Handle proficiency tag based on new status
     if new_status == "passed":
         # Award proficiency tag if not already present
         existing_tag = StudentProficiencyTag.query.filter_by(
-            student_id=attempt.student_id, tag_name="python"
+            student_id=attempt.student_id, tag_name=tag_name
         ).first()
         if not existing_tag:
             tag = StudentProficiencyTag(
                 student_id=attempt.student_id,
-                tag_name="python",
+                tag_name=tag_name,
                 attempt_id=attempt.id,
                 awarded_by_user_id=user.id,
             )
             db.session.add(tag)
+        
+        # Update outcome progress if applicable
+        if attempt.outcome_tag:
+            progress = StudentOutcomeProgress.query.filter_by(
+                student_id=attempt.student_id,
+                outcome_tag=attempt.outcome_tag
+            ).first()
+            if progress:
+                progress.is_passed = True
+                progress.passed_at = utcnow()
     elif new_status == "failed" and old_status == "passed":
         # Remove proficiency tag if changing from passed to failed
         # Only remove if this attempt was the one that awarded the tag
         tag = StudentProficiencyTag.query.filter_by(
             student_id=attempt.student_id, 
-            tag_name="python",
+            tag_name=tag_name,
             attempt_id=attempt.id
         ).first()
         if tag:
             db.session.delete(tag)
+        
+        # Update outcome progress if applicable
+        if attempt.outcome_tag:
+            progress = StudentOutcomeProgress.query.filter_by(
+                student_id=attempt.student_id,
+                outcome_tag=attempt.outcome_tag
+            ).first()
+            if progress:
+                progress.is_passed = False
+                progress.passed_at = None
     
     db.session.commit()
     
@@ -6016,81 +6186,32 @@ def proficiency_change_status(attempt_id):
 
 # --- Student: Take Proficiency Test ---
 
+# ===================================================================
+# PROFICIENCY TEST SYSTEM
+# 
+# NEW SYSTEM (Active): Outcome-based micro-tests
+# - 21 learning outcomes across 5 domains
+# - Each outcome has its own test configuration
+# - Prerequisites unlock system creates skill tree progression
+# - Student dashboard with radar chart visualization
+# - Main route: /student/proficiency/outcomes
+#
+# LEGACY SYSTEM (Deprecated): Single proficiency test
+# - Old "python" tag system with single comprehensive test
+# - Routes kept for backward compatibility
+# - /student/proficiency now redirects to outcomes system
+# ===================================================================
+
 @app.route("/student/proficiency")
 @require_student()
 def student_proficiency():
-    """Student proficiency test hub."""
-    student = current_student()
-    config = _get_proficiency_config()
-    
-    # Check student status
-    has_tag = StudentProficiencyTag.query.filter_by(student_id=student.id, tag_name="python").first()
-    
-    # Check for in-progress test
-    in_progress = ProficiencyTestAttempt.query.filter_by(
-        student_id=student.id, status="in_progress"
-    ).first()
-    
-    if in_progress and in_progress.is_expired:
-        # Auto-submit expired test
-        in_progress.status = "submitted"
-        in_progress.submitted_at = utcnow()
-        # Run hidden tests on submission
-        for sub in in_progress.submissions:
-            if sub.exercise:
-                test_cases = sub.exercise_test_cases_json or {}
-                visible_results, hidden_results = _run_proficiency_tests(
-                    sub.code or "", test_cases, sub.exercise.time_limit_sec
-                )
-                sub.visible_results_json = visible_results
-                sub.hidden_results_json = hidden_results
-                sub.visible_passed = sum(1 for r in visible_results if r.get("status") == "passed")
-                sub.visible_total = len(visible_results)
-                sub.hidden_passed = sum(1 for r in hidden_results if r.get("status") == "passed")
-                sub.hidden_total = len(hidden_results)
-        db.session.commit()
-        in_progress = None
-    
-    pending = ProficiencyTestAttempt.query.filter_by(
-        student_id=student.id, status="submitted"
-    ).first()
-    
-    # Get past attempts
-    past_attempts = ProficiencyTestAttempt.query.filter(
-        ProficiencyTestAttempt.student_id == student.id,
-        ProficiencyTestAttempt.status.in_(["passed", "failed"])
-    ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).all()
-    
-    can_start, reason = _student_can_start_proficiency_test(student)
-    
-    # Calculate cooldown remaining
-    cooldown_remaining = None
-    if reason == "cooldown":
-        last_failed = ProficiencyTestAttempt.query.filter_by(
-            student_id=student.id, status="failed"
-        ).order_by(ProficiencyTestAttempt.reviewed_at.desc()).first()
-        if last_failed and last_failed.reviewed_at:
-            cooldown_end = last_failed.reviewed_at + timedelta(hours=config.cooldown_hours)
-            cooldown_remaining = cooldown_end - utcnow()
-    
-    exercise_count = ProficiencyExercise.query.filter_by(is_active=True).count()
-    
-    return render_template("proficiency_student.html",
-                           student=student,
-                           student_name=session.get("student_name"),
-                           config=config,
-                           has_tag=has_tag,
-                           in_progress=in_progress,
-                           pending=pending,
-                           past_attempts=past_attempts,
-                           can_start=can_start,
-                           reason=reason,
-                           cooldown_remaining=cooldown_remaining,
-                           exercise_count=exercise_count)
+    """Redirect to the new outcome-based proficiency system."""
+    return redirect(url_for("student_proficiency_outcomes"))
 
 @app.route("/student/proficiency/start", methods=["POST"])
 @require_student()
 def student_proficiency_start():
+    """[DEPRECATED] Old single test system - kept for backward compatibility."""
     """Start a new proficiency test."""
     student = current_student()
     config = _get_proficiency_config()
@@ -6295,6 +6416,279 @@ def api_proficiency_save_code(attempt_id):
     db.session.commit()
     
     return jsonify({"ok": True})
+
+# --------------------------------------------------------------------
+# Learning Outcomes System
+# --------------------------------------------------------------------
+
+def _check_outcome_unlocked(student, outcome):
+    """Check if a student has met prerequisites for an outcome."""
+    for prereq_tag in outcome.prerequisites:
+        # Check if student has passed the prerequisite
+        has_prereq = StudentProficiencyTag.query.filter_by(
+            student_id=student.id,
+            tag_name=prereq_tag
+        ).first()
+        if not has_prereq:
+            return False
+    return True
+
+def _update_outcome_unlocks(student):
+    """Update which outcomes are unlocked for a student based on prerequisites."""
+    all_outcomes = LearningOutcome.query.filter_by(is_active=True).all()
+    
+    for outcome in all_outcomes:
+        # Get or create progress record
+        progress = StudentOutcomeProgress.query.filter_by(
+            student_id=student.id,
+            outcome_tag=outcome.tag_name
+        ).first()
+        
+        if not progress:
+            progress = StudentOutcomeProgress(
+                student_id=student.id,
+                outcome_tag=outcome.tag_name,
+                is_unlocked=False
+            )
+            db.session.add(progress)
+        
+        # Check if should be unlocked
+        if not progress.is_passed:
+            progress.is_unlocked = _check_outcome_unlocked(student, outcome)
+    
+    db.session.commit()
+
+@app.route("/student/proficiency/outcomes")
+@require_student()
+def student_proficiency_outcomes():
+    """Student view of learning outcomes with progress graph."""
+    student = current_student()
+    
+    # Update unlocks based on current progress
+    _update_outcome_unlocks(student)
+    
+    # Get all outcomes grouped by domain
+    all_outcomes = LearningOutcome.query.filter_by(is_active=True).order_by(
+        LearningOutcome.domain, LearningOutcome.display_order
+    ).all()
+    
+    # Get student progress
+    progress_records = StudentOutcomeProgress.query.filter_by(student_id=student.id).all()
+    progress_dict = {p.outcome_tag: p for p in progress_records}
+    
+    # Create outcomes dictionary for easy lookup
+    outcomes_dict = {o.tag_name: o for o in all_outcomes}
+    
+    # Check for pending (submitted) attempts for each outcome
+    pending_attempts = {}
+    for outcome in all_outcomes:
+        pending = ProficiencyTestAttempt.query.filter_by(
+            student_id=student.id,
+            outcome_tag=outcome.tag_name,
+            status="submitted"
+        ).first()
+        if pending:
+            pending_attempts[outcome.tag_name] = pending
+    
+    # Check which outcomes can be attempted (not in cooldown and no pending review)
+    can_attempt = {}
+    for outcome in all_outcomes:
+        # If there's a pending review, can't attempt
+        if outcome.tag_name in pending_attempts:
+            can_attempt[outcome.tag_name] = False
+            continue
+            
+        progress = progress_dict.get(outcome.tag_name)
+        if progress and progress.last_attempt_at and not progress.is_passed:
+            cooldown_end = progress.last_attempt_at + timedelta(hours=outcome.cooldown_hours)
+            can_attempt[outcome.tag_name] = utcnow() >= cooldown_end
+        else:
+            can_attempt[outcome.tag_name] = True
+    
+    # Group outcomes by domain
+    outcomes_by_domain = {}
+    for outcome in all_outcomes:
+        if outcome.domain not in outcomes_by_domain:
+            outcomes_by_domain[outcome.domain] = {
+                'display': outcome.domain_display,
+                'outcomes': [],
+                'passed': 0,
+                'total': 0
+            }
+        outcomes_by_domain[outcome.domain]['outcomes'].append(outcome)
+        outcomes_by_domain[outcome.domain]['total'] += 1
+        
+        progress = progress_dict.get(outcome.tag_name)
+        if progress and progress.is_passed:
+            outcomes_by_domain[outcome.domain]['passed'] += 1
+    
+    # Calculate overall stats
+    stats = {
+        'total_outcomes': len(all_outcomes),
+        'total_passed': sum(1 for p in progress_records if p.is_passed),
+        'total_unlocked': sum(1 for p in progress_records if p.is_unlocked),
+        'total_locked': len(all_outcomes) - sum(1 for p in progress_records if p.is_unlocked)
+    }
+    
+    # Prepare data for radar chart with abbreviated labels
+    domain_progress = {
+        'labels': [],
+        'passed': [],
+        'totals': []
+    }
+    
+    # Create short abbreviations for domains
+    label_abbrev = {
+        'algorithms': 'Algorithms',
+        'data_structures': 'Data Struct',
+        'recursion': 'Recursion',
+        'programming_fundamentals': 'Prog Fund',
+        'systems': 'Systems'
+    }
+    
+    for domain_key, domain_info in outcomes_by_domain.items():
+        # Use abbreviated label or fall back to shortened display name
+        short_label = label_abbrev.get(domain_key, domain_info['display'].split('&')[0].strip()[:12])
+        domain_progress['labels'].append(short_label)
+        domain_progress['passed'].append(domain_info['passed'])
+        domain_progress['totals'].append(domain_info['total'])
+    
+    return render_template(
+        "proficiency_outcomes_student.html",
+        student=student,
+        student_name=session.get("student_name"),
+        outcomes_by_domain=outcomes_by_domain,
+        progress_dict=progress_dict,
+        outcomes_dict=outcomes_dict,
+        can_attempt=can_attempt,
+        pending_attempts=pending_attempts,
+        stats=stats,
+        domain_progress=domain_progress
+    )
+
+@app.route("/student/proficiency/test/<outcome_tag>")
+@require_student()
+def student_proficiency_test_outcome(outcome_tag):
+    """Show test start page for a specific learning outcome."""
+    student = current_student()
+    outcome = LearningOutcome.query.filter_by(tag_name=outcome_tag).first_or_404()
+    
+    if not outcome.is_active:
+        abort(403, "This outcome is not currently available.")
+    
+    # Get progress
+    progress = StudentOutcomeProgress.query.filter_by(
+        student_id=student.id,
+        outcome_tag=outcome_tag
+    ).first()
+    
+    if not progress or not progress.is_unlocked:
+        abort(403, "This outcome is locked. Complete prerequisites first.")
+    
+    # Check if already passed
+    if progress.is_passed:
+        return redirect(url_for("student_proficiency_outcomes"))
+    
+    # Check cooldown
+    can_attempt = True
+    cooldown_remaining = None
+    if progress.last_attempt_at:
+        cooldown_end = progress.last_attempt_at + timedelta(hours=outcome.cooldown_hours)
+        if utcnow() < cooldown_end:
+            can_attempt = False
+            cooldown_remaining = cooldown_end - utcnow()
+    
+    # Check if exercises available
+    exercise_count = ProficiencyExercise.query.filter_by(
+        outcome_tag=outcome_tag,
+        is_active=True
+    ).count()
+    
+    return render_template(
+        "proficiency_outcome_test_start.html",
+        student=student,
+        student_name=session.get("student_name"),
+        outcome=outcome,
+        progress=progress,
+        can_attempt=can_attempt,
+        cooldown_remaining=cooldown_remaining,
+        exercise_count=exercise_count
+    )
+
+@app.route("/student/proficiency/test/<outcome_tag>/start", methods=["POST"])
+@require_student()
+def student_proficiency_start_outcome(outcome_tag):
+    """Start a test for a specific learning outcome."""
+    student = current_student()
+    outcome = LearningOutcome.query.filter_by(tag_name=outcome_tag).first_or_404()
+    
+    if not outcome.is_active:
+        abort(403, "This outcome is not available.")
+    
+    # Get progress
+    progress = StudentOutcomeProgress.query.filter_by(
+        student_id=student.id,
+        outcome_tag=outcome_tag
+    ).first()
+    
+    if not progress or not progress.is_unlocked:
+        abort(403, "This outcome is locked.")
+    
+    if progress.is_passed:
+        abort(403, "You have already passed this outcome.")
+    
+    # Check cooldown
+    if progress.last_attempt_at:
+        cooldown_end = progress.last_attempt_at + timedelta(hours=outcome.cooldown_hours)
+        if utcnow() < cooldown_end:
+            abort(403, f"Cooldown active. Try again later.")
+    
+    # Get random exercises for this outcome
+    exercises = ProficiencyExercise.query.filter_by(
+        outcome_tag=outcome_tag,
+        is_active=True
+    ).all()
+    
+    if len(exercises) < outcome.exercise_count:
+        abort(400, f"Not enough exercises available. Need {outcome.exercise_count}, have {len(exercises)}.")
+    
+    selected = random.sample(exercises, outcome.exercise_count)
+    
+    # Create attempt
+    attempt = ProficiencyTestAttempt(
+        student_id=student.id,
+        outcome_tag=outcome_tag,
+        duration_minutes=outcome.duration_minutes,
+        status="in_progress",
+        ip_address=(request.remote_addr or "")[:64],
+    )
+    db.session.add(attempt)
+    db.session.flush()
+    
+    # Create submissions for each exercise
+    for idx, exercise in enumerate(selected):
+        sub = ProficiencyExerciseSubmission(
+            attempt_id=attempt.id,
+            exercise_id=exercise.id,
+            exercise_title=exercise.title,
+            exercise_description=exercise.description,
+            exercise_instructions=exercise.instructions,
+            exercise_starter_code=exercise.starter_code,
+            exercise_test_cases_json=exercise.test_cases_json,
+            code=exercise.starter_code or "",
+            order_index=idx,
+        )
+        db.session.add(sub)
+    
+    # Update progress tracking
+    if not progress.first_attempt_at:
+        progress.first_attempt_at = utcnow()
+    progress.attempts += 1
+    progress.last_attempt_at = utcnow()
+    
+    db.session.commit()
+    
+    return redirect(url_for("student_proficiency_take", attempt_id=attempt.id))
 
 # --------------------------------------------------------------------
 # Dev entry

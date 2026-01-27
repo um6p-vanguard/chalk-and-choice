@@ -44,10 +44,11 @@
     <thead>
       <tr>
         <th>Title</th>
+        <th>Learning Outcome</th>
+        <th>Difficulty</th>
         <th>Visible Tests</th>
         <th>Hidden Tests</th>
         <th>Status</th>
-        <th>Created</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -55,6 +56,20 @@
       {% for ex in exercises %}
       <tr>
         <td><strong>{{ ex.title }}</strong></td>
+        <td>
+          {% if ex.outcome_tag %}
+            <span style="background:#1f2937; padding:4px 8px; border-radius:4px; font-size:0.85rem;">{{ ex.outcome_tag }}</span>
+          {% else %}
+            <span class="muted" style="font-size:0.85rem;">Not tagged</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if ex.difficulty_level %}
+            <span style="color:var(--brand);">{{ '⭐' * ex.difficulty_level }}</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
         <td>{{ ex.visible_test_cases|length }}</td>
         <td>{{ ex.hidden_test_cases|length }}</td>
         <td>
@@ -64,7 +79,6 @@
             <span class="muted">Inactive</span>
           {% endif %}
         </td>
-        <td class="muted">{{ ex.created_at.strftime('%Y-%m-%d') }}</td>
         <td>
           <a href="{{ url_for('proficiency_exercises_edit', exercise_id=ex.id) }}" class="btn" style="padding:6px 10px;">Edit</a>
         </td>
@@ -73,7 +87,7 @@
     </tbody>
   </table>
   {% else %}
-  <p class="muted">No exercises yet. Create your first exercise to start building the test pool.</p>
+  <p class="muted">No exercises yet. Create your first exercise and tag it with a learning outcome to build outcome-specific test pools.</p>
   {% endif %}
 </div>
 {% endblock %}

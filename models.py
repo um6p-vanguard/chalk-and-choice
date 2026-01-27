@@ -1,6 +1,6 @@
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.types import TypeDecorator, TEXT
 from sqlalchemy import UniqueConstraint, func
@@ -151,7 +151,7 @@ class Form(db.Model):
 
     @property
     def is_open(self):
-        return (self.closes_at is None) or (datetime.utcnow() < self.closes_at)
+        return (self.closes_at is None) or (datetime.now(timezone.utc).replace(tzinfo=None) < self.closes_at)
 
 class FormResponse(db.Model):
     __tablename__ = "form_responses"
@@ -185,7 +185,7 @@ class Exam(db.Model):
 
     @property
     def is_available(self):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if not self.is_open:
             return False
         if self.starts_at and now < self.starts_at:
@@ -436,6 +436,11 @@ class ProficiencyExercise(db.Model):
     test_cases_json = db.Column(JSONText, nullable=False, default=dict)
     time_limit_sec = db.Column(db.Float, nullable=False, default=3.0)  # Per test case
     is_active = db.Column(db.Boolean, nullable=False, default=True)
+    
+    # Link to learning outcome
+    outcome_tag = db.Column(db.String(64), db.ForeignKey('learning_outcomes.tag_name', onupdate="CASCADE"), nullable=True, index=True)
+    difficulty_level = db.Column(db.Integer, nullable=False, default=1)  # 1=basic, 2=intermediate, 3=advanced
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
 
@@ -471,10 +476,18 @@ class ProficiencyTestAttempt(db.Model):
     __tablename__ = "proficiency_test_attempts"
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    
+    # Link to specific learning outcome (if outcome-based test)
+    outcome_tag = db.Column(db.String(64), db.ForeignKey('learning_outcomes.tag_name', onupdate="CASCADE"), nullable=True, index=True)
+    
     # Snapshot of config at time of test
     duration_minutes = db.Column(db.Integer, nullable=False, default=60)
     # Status: in_progress | submitted | passed | failed
     status = db.Column(db.String(32), nullable=False, default="in_progress")
+    
+    # Score tracking
+    final_score = db.Column(db.Float, nullable=True)  # 0.0-1.0 percentage
+    
     started_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     submitted_at = db.Column(db.DateTime, nullable=True)
     reviewed_at = db.Column(db.DateTime, nullable=True)
@@ -490,14 +503,14 @@ class ProficiencyTestAttempt(db.Model):
         if self.status != "in_progress":
             return False
         deadline = self.started_at + timedelta(minutes=self.duration_minutes)
-        return datetime.utcnow() > deadline
+        return datetime.now(timezone.utc).replace(tzinfo=None) > deadline
 
     @property
     def time_remaining_sec(self):
         if self.status != "in_progress":
             return 0
         deadline = self.started_at + timedelta(minutes=self.duration_minutes)
-        remaining = (deadline - datetime.utcnow()).total_seconds()
+        remaining = (deadline - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()
         return max(0, remaining)
 
 
@@ -546,4 +559,76 @@ class StudentProficiencyTag(db.Model):
 
     __table_args__ = (
         UniqueConstraint('student_id', 'tag_name', name='uq_student_proficiency_tag'),
+    )
+
+
+class LearningOutcome(db.Model):
+    """Defines a learning outcome/competency area (e.g., 'recursion_basic', 'algorithms_sorting')."""
+    __tablename__ = "learning_outcomes"
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Unique identifier (e.g., "recursion_basic", "algorithms_sorting")
+    tag_name = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    
+    # Display information
+    display_name = db.Column(db.String(120), nullable=False)  # "Recursion (Basic)"
+    description = db.Column(db.Text, nullable=True)
+    icon_emoji = db.Column(db.String(10), nullable=True, default="📚")  # "🔁" for recursion
+    
+    # Domain categorization
+    domain = db.Column(db.String(64), nullable=False, index=True)  # "fundamentals", "data_structures", "recursion", etc.
+    domain_display = db.Column(db.String(120), nullable=False)  # "Programming Fundamentals & Python Proficiency"
+    
+    # Difficulty & progression (1=basic, 2=intermediate, 3=advanced)
+    difficulty_level = db.Column(db.Integer, nullable=False, default=1)
+    
+    # Week in curriculum (for ordering)
+    week_number = db.Column(db.Integer, nullable=True)
+    
+    # Prerequisites (JSON array of tag_names that must be passed first)
+    prerequisites_json = db.Column(JSONText, nullable=True, default=list)
+    
+    # Test configuration for this specific outcome
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    exercise_count = db.Column(db.Integer, nullable=False, default=2)  # Micro-tests
+    duration_minutes = db.Column(db.Integer, nullable=False, default=15)
+    cooldown_hours = db.Column(db.Integer, nullable=False, default=24)
+    passing_threshold = db.Column(db.Float, nullable=False, default=0.75)  # 75% to pass
+    
+    # Ordering/display priority
+    display_order = db.Column(db.Integer, nullable=False, default=0)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    @property
+    def prerequisites(self):
+        """Get list of prerequisite tag names."""
+        return self.prerequisites_json if isinstance(self.prerequisites_json, list) else []
+
+
+class StudentOutcomeProgress(db.Model):
+    """Track student progress per learning outcome (including failed attempts)."""
+    __tablename__ = "student_outcome_progress"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
+    outcome_tag = db.Column(db.String(64), db.ForeignKey('learning_outcomes.tag_name', onupdate="CASCADE"), nullable=False, index=True)
+    
+    # Progress tracking
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    best_score = db.Column(db.Float, nullable=True)  # Best % across attempts (0.0-1.0)
+    is_unlocked = db.Column(db.Boolean, nullable=False, default=False)  # Prerequisites met
+    is_passed = db.Column(db.Boolean, nullable=False, default=False)
+    
+    # Timestamps
+    first_attempt_at = db.Column(db.DateTime, nullable=True)
+    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    passed_at = db.Column(db.DateTime, nullable=True)
+    
+    # Relationships
+    student = db.relationship('Student', backref=db.backref('outcome_progress', cascade="all,delete-orphan"))
+    outcome = db.relationship('LearningOutcome', backref='student_progress')
+    
+    __table_args__ = (
+        UniqueConstraint('student_id', 'outcome_tag', name='uq_student_outcome_progress'),
     )

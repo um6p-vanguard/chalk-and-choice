@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .outcome-card {
+    background: linear-gradient(135deg, #1a1f35 0%, #0f1220 100%);
+    border: 2px solid var(--brand);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+    text-align: center;
+  }
+  .outcome-icon-large {
+    font-size: 4rem;
+    margin-bottom: 16px;
+  }
+  .outcome-title-large {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--brand);
+  }
+  .outcome-desc {
+    font-size: 1.1rem;
+    color: #94a3b8;
+    margin-bottom: 24px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .test-info {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin: 24px 0;
+    flex-wrap: wrap;
+  }
+  .test-info-item {
+    text-align: center;
+  }
+  .test-info-label {
+    font-size: 0.9rem;
+    color: #64748b;
+    margin-bottom: 6px;
+  }
+  .test-info-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--brand);
+  }
+  .prereq-list {
+    margin: 20px auto;
+    max-width: 600px;
+    text-align: left;
+  }
+  .prereq-item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    margin: 6px 0;
+    background: #1a1f35;
+    border: 1px solid #2d3350;
+    border-radius: 6px;
+  }
+  .prereq-item.passed {
+    border-color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+  }
+  .progress-history {
+    margin: 24px auto;
+    max-width: 700px;
+    text-align: left;
+  }
+  .attempt-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    margin: 8px 0;
+    background: #1a1f35;
+    border: 1px solid #2d3350;
+    border-radius: 6px;
+  }
+</style>
+
+<div class="outcome-card">
+  <div class="outcome-icon-large">{{ outcome.icon_emoji }}</div>
+  <div class="outcome-title-large">{{ outcome.display_name }}</div>
+  <div class="outcome-desc">{{ outcome.description }}</div>
+  
+  <div class="test-info">
+    <div class="test-info-item">
+      <div class="test-info-label">Exercises</div>
+      <div class="test-info-value">{{ outcome.exercise_count }}</div>
+    </div>
+    <div class="test-info-item">
+      <div class="test-info-label">Duration</div>
+      <div class="test-info-value">{{ outcome.duration_minutes }} min</div>
+    </div>
+    <div class="test-info-item">
+      <div class="test-info-label">Passing Score</div>
+      <div class="test-info-value">{{ (outcome.passing_threshold * 100)|int }}%</div>
+    </div>
+    <div class="test-info-item">
+      <div class="test-info-label">Difficulty</div>
+      <div class="test-info-value">
+        {% if outcome.difficulty_level == 1 %}⭐ Basic
+        {% elif outcome.difficulty_level == 2 %}⭐⭐ Intermediate
+        {% else %}⭐⭐⭐ Advanced
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  
+  {% if progress and progress.attempts > 0 %}
+  <div class="progress-history">
+    <h4>Your Progress</h4>
+    <div class="attempt-row">
+      <div>
+        <strong>Attempts:</strong> {{ progress.attempts }}
+        {% if progress.best_score %}
+        <span style="margin-left: 16px;"><strong>Best Score:</strong> 
+          <span style="color: {% if progress.best_score >= outcome.passing_threshold %}#4ade80{% else %}#f87171{% endif %};">
+            {{ (progress.best_score * 100)|int }}%
+          </span>
+        </span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  
+  {% if can_attempt and exercise_count >= outcome.exercise_count %}
+  <form method="POST" action="{{ url_for('student_proficiency_start_outcome', outcome_tag=outcome.tag_name) }}">
+    <button type="submit" class="btn btn-primary" style="font-size: 1.2rem; padding: 16px 32px;" 
+            onclick="return confirm('Start the test now? The timer will begin immediately and you cannot pause.');">
+      🚀 Start Test
+    </button>
+  </form>
+  {% elif not can_attempt %}
+  <div style="background: rgba(248, 113, 113, 0.15); border: 1px solid #f87171; padding: 20px; border-radius: 10px; max-width: 500px; margin: 0 auto;">
+    <h4 style="color: #f87171; margin: 0 0 10px 0;">⏳ Cooldown Active</h4>
+    <p class="muted" style="margin: 0;">
+      You can retry in: 
+      <strong>{{ (cooldown_remaining.total_seconds() / 3600)|int }} hours, {{ ((cooldown_remaining.total_seconds() % 3600) / 60)|int }} minutes</strong>
+    </p>
+  </div>
+  {% elif exercise_count < outcome.exercise_count %}
+  <div style="background: rgba(251, 191, 36, 0.15); border: 1px solid #fbbf24; padding: 20px; border-radius: 10px; max-width: 500px; margin: 0 auto;">
+    <p class="muted" style="margin: 0;">
+      ⚠️ Not enough exercises available yet. Need {{ outcome.exercise_count }}, have {{ exercise_count }}.
+    </p>
+  </div>
+  {% endif %}
+  
+  <div style="margin-top: 24px;">
+    <a href="{{ url_for('student_proficiency_outcomes') }}" class="btn">← Back to All Outcomes</a>
+  </div>
+</div>
+
+{% if outcome.prerequisites %}
+<div class="card">
+  <h3>📚 Prerequisites</h3>
+  <p class="muted">You must pass these outcomes before attempting this one:</p>
+  <div class="prereq-list">
+    {% for prereq_tag in outcome.prerequisites %}
+    <div class="prereq-item passed">
+      <div style="margin-right: 12px; font-size: 1.3rem;">✅</div>
+      <div>{{ prereq_tag }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>💡 Tips for Success</h3>
+  <ul style="text-align: left; max-width: 700px; margin: 0 auto;">
+    <li style="margin: 12px 0;">Read all instructions carefully before starting</li>
+    <li style="margin: 12px 0;">Test your code with the visible test cases before submitting</li>
+    <li style="margin: 12px 0;">Remember that hidden test cases will be run after submission</li>
+    <li style="margin: 12px 0;">You can save your progress during the test</li>
+    <li style="margin: 12px 0;">The test will auto-submit when time expires</li>
+  </ul>
+</div>
+
+{% endblock %}

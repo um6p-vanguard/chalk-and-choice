@@ -1,0 +1,418 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .domain-card {
+    background: #1a1f35;
+    border: 1px solid #2d3350;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .domain-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #2d3350;
+  }
+  .domain-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: var(--brand);
+  }
+  .domain-progress {
+    font-size: 0.95rem;
+    color: #94a3b8;
+  }
+  .outcome-item {
+    display: flex;
+    align-items: center;
+    padding: 14px;
+    margin: 8px 0;
+    background: #0f1220;
+    border: 1px solid #2d3350;
+    border-radius: 8px;
+    transition: all 0.2s;
+  }
+  .outcome-item:hover {
+    border-color: var(--brand);
+    transform: translateX(4px);
+  }
+  .outcome-icon {
+    font-size: 1.8rem;
+    margin-right: 16px;
+  }
+  .outcome-info {
+    flex: 1;
+  }
+  .outcome-name {
+    font-weight: 600;
+    font-size: 1.05rem;
+    margin-bottom: 4px;
+  }
+  .outcome-description {
+    font-size: 0.9rem;
+    color: #94a3b8;
+    margin-bottom: 6px;
+  }
+  .outcome-meta {
+    font-size: 0.85rem;
+    color: #64748b;
+  }
+  .outcome-status {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .status-badge {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    white-space: nowrap;
+  }
+  .status-passed {
+    background: rgba(74, 222, 128, 0.15);
+    border: 1px solid #4ade80;
+    color: #4ade80;
+  }
+  .status-unlocked {
+    background: rgba(99, 127, 190, 0.15);
+    border: 1px solid var(--brand);
+    color: var(--brand);
+  }
+  .status-locked {
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid #475569;
+    color: #94a3b8;
+  }
+  .status-failed {
+    background: rgba(248, 113, 113, 0.15);
+    border: 1px solid #f87171;
+    color: #f87171;
+  }
+  .score-display {
+    font-size: 0.9rem;
+    font-weight: 600;
+  }
+  .progress-ring {
+    width: 50px;
+    height: 50px;
+  }
+  .progress-ring__circle {
+    transition: stroke-dashoffset 0.35s;
+    transform: rotate(-90deg);
+    transform-origin: 50% 50%;
+  }
+  .overall-progress {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid #334155;
+    border-radius: 16px;
+    padding: 40px;
+    margin-bottom: 32px;
+    text-align: center;
+  }
+  .overall-progress h2 {
+    margin: 0 0 32px 0;
+    color: #e2e8f0;
+    font-size: 1.6rem;
+    font-weight: 600;
+  }
+  #progressChart {
+    width: 100%;
+    max-width: 550px;
+    max-height: 550px;
+    margin: 0 auto 32px auto;
+  }
+  .chart-container {
+    padding: 40px 80px;
+    max-width: 100%;
+    margin: 0 auto;
+    overflow: visible;
+  }
+  .progress-summary {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 48px;
+    margin-top: 32px;
+    padding-top: 32px;
+    border-top: 1px solid #334155;
+  }
+  .progress-stat {
+    text-align: center;
+  }
+  .progress-stat-value {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: var(--brand);
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .progress-stat-label {
+    font-size: 0.95rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-top: 24px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.95rem;
+    color: #cbd5e1;
+  }
+  .legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+  }
+</style>
+
+<div class="card">
+  <h2 style="margin: 0 0 8px 0;">🎯 Python Proficiency - Learning Outcomes</h2>
+  <p class="muted" style="margin: 0;">Master Python skills through targeted proficiency tests across 5 domains</p>
+</div>
+
+<div class="sp"></div>
+
+<!-- Overall Progress Visualization -->
+<div class="overall-progress">
+  <h2>📊 Your Learning Progress</h2>
+  
+  <div class="chart-container">
+    <canvas id="progressChart"></canvas>
+  </div>
+  
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-color" style="background: #4ade80;"></div>
+      <span>Mastered</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: var(--brand);"></div>
+      <span>Available</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #64748b;"></div>
+      <span>Locked</span>
+    </div>
+  </div>
+  
+  <div class="progress-summary">
+    <div class="progress-stat">
+      <div class="progress-stat-value">{{ stats.total_passed }}</div>
+      <div class="progress-stat-label">Mastered</div>
+    </div>
+    <div class="progress-stat">
+      <div class="progress-stat-value">{{ stats.total_unlocked }}</div>
+      <div class="progress-stat-label">Unlocked</div>
+    </div>
+    <div class="progress-stat">
+      <div class="progress-stat-value">{{ (stats.total_passed / stats.total_outcomes * 100)|int }}%</div>
+      <div class="progress-stat-label">Complete</div>
+    </div>
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<!-- Outcomes by Domain -->
+{% for domain_key, domain_info in outcomes_by_domain.items() %}
+<div class="domain-card">
+  <div class="domain-header">
+    <div class="domain-title">{{ domain_info.display }}</div>
+    <div class="domain-progress">
+      {{ domain_info.passed }} / {{ domain_info.total }} completed
+    </div>
+  </div>
+  
+  {% for outcome in domain_info.outcomes %}
+  <div class="outcome-item">
+    <div class="outcome-icon">{{ outcome.icon_emoji }}</div>
+    <div class="outcome-info">
+      <div class="outcome-name">{{ outcome.display_name }}</div>
+      <div class="outcome-description">{{ outcome.description }}</div>
+      <div class="outcome-meta">
+        {% if outcome.week_number %}Week {{ outcome.week_number }} • {% endif %}
+        {{ outcome.exercise_count }} exercises • 
+        {{ outcome.duration_minutes }} min • 
+        Pass: {{ (outcome.passing_threshold * 100)|int }}%
+        {% if outcome.prerequisites %}
+        <br>Prerequisites: 
+        {% for prereq_tag in outcome.prerequisites %}
+          {% set prereq = outcomes_dict.get(prereq_tag) %}
+          {% if prereq %}{{ prereq.display_name }}{% if not loop.last %}, {% endif %}{% endif %}
+        {% endfor %}
+        {% endif %}
+      </div>
+    </div>
+    <div class="outcome-status">
+      {% set progress = progress_dict.get(outcome.tag_name) %}
+      {% set pending = pending_attempts.get(outcome.tag_name) %}
+      
+      {% if progress and progress.is_passed %}
+        <div class="status-badge status-passed">✅ Passed</div>
+        <div class="score-display" style="color: #4ade80;">{{ (progress.best_score * 100)|int }}%</div>
+      {% elif pending %}
+        <div class="status-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24; border-color: #fbbf24;">📋 Awaiting Review</div>
+        <span class="muted" style="font-size: 0.85rem;">Submitted {{ pending.submitted_at.strftime('%m/%d %H:%M') if pending.submitted_at else 'recently' }}</span>
+      {% elif progress and progress.attempts > 0 and not progress.is_passed %}
+        <div class="status-badge status-failed">❌ Retry ({{ progress.attempts }} attempts)</div>
+        {% if progress.best_score %}
+          <div class="score-display" style="color: #f87171;">Best: {{ (progress.best_score * 100)|int }}%</div>
+        {% endif %}
+        {% if can_attempt.get(outcome.tag_name) %}
+          <a href="{{ url_for('student_proficiency_test_outcome', outcome_tag=outcome.tag_name) }}" class="btn btn-primary">Take Test</a>
+        {% else %}
+          <span class="muted" style="font-size: 0.85rem;">Cooldown active</span>
+        {% endif %}
+      {% elif progress and progress.is_unlocked %}
+        <div class="status-badge status-unlocked">🔓 Ready</div>
+        <a href="{{ url_for('student_proficiency_test_outcome', outcome_tag=outcome.tag_name) }}" class="btn btn-primary">Take Test</a>
+      {% else %}
+        <div class="status-badge status-locked">🔒 Locked</div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  // Clean, educational radar chart
+  const ctx = document.getElementById('progressChart').getContext('2d');
+  
+  const domainData = {{ domain_progress|tojson }};
+  
+  // Calculate percentages for cleaner display
+  const percentages = domainData.passed.map((passed, idx) => {
+    const total = domainData.totals[idx];
+    return total > 0 ? (passed / total * 100) : 0;
+  });
+  
+  const chart = new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: domainData.labels,
+      datasets: [
+        {
+          label: 'Mastery Level',
+          data: percentages,
+          backgroundColor: 'rgba(102, 126, 234, 0.2)',
+          borderColor: 'rgb(102, 126, 234)',
+          borderWidth: 3,
+          pointBackgroundColor: 'rgb(102, 126, 234)',
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          pointRadius: 6,
+          pointHoverRadius: 8,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 1,
+      layout: {
+        padding: {
+          top: 50,
+          bottom: 50,
+          left: 80,
+          right: 80
+        }
+      },
+      animation: {
+        duration: 1500,
+        easing: 'easeInOutQuad'
+      },
+      scales: {
+        r: {
+          beginAtZero: true,
+          max: 100,
+          ticks: {
+            stepSize: 25,
+            color: '#94a3b8',
+            backdropColor: 'transparent',
+            font: {
+              size: 12
+            },
+            callback: function(value) {
+              return value + '%';
+            }
+          },
+          grid: {
+            color: 'rgba(148, 163, 184, 0.15)',
+            lineWidth: 1
+          },
+          angleLines: {
+            color: 'rgba(148, 163, 184, 0.15)',
+            lineWidth: 1
+          },
+          pointLabels: {
+            color: '#e2e8f0',
+            font: {
+              size: 14,
+              weight: '600'
+            },
+            padding: 20
+          }
+        }
+      },
+      plugins: {
+        legend: {
+          display: false
+        },
+        tooltip: {
+          backgroundColor: 'rgba(15, 23, 42, 0.95)',
+          titleColor: '#e2e8f0',
+          bodyColor: '#cbd5e1',
+          borderColor: 'rgba(102, 126, 234, 0.3)',
+          borderWidth: 1,
+          padding: 16,
+          cornerRadius: 8,
+          titleFont: {
+            size: 15,
+            weight: '600'
+          },
+          bodyFont: {
+            size: 14
+          },
+          displayColors: false,
+          callbacks: {
+            title: function(context) {
+              return context[0].label;
+            },
+            label: function(context) {
+              const domainIdx = context.dataIndex;
+              const passed = domainData.passed[domainIdx];
+              const total = domainData.totals[domainIdx];
+              const percentage = context.parsed.r.toFixed(0);
+              return `${passed} of ${total} outcomes completed (${percentage}%)`;
+            },
+            afterLabel: function(context) {
+              const domainIdx = context.dataIndex;
+              const passed = domainData.passed[domainIdx];
+              const total = domainData.totals[domainIdx];
+              const remaining = total - passed;
+              if (remaining > 0) {
+                return `\n${remaining} more to master this domain`;
+              }
+              return '\n✓ Domain completed!';
+            }
+          }
+        }
+      }
+    }
+  });
+</script>
+
+{% endblock %}

@@ -5,6 +5,23 @@
     <div>
       <h3 style="margin:0;">{{ project.title }}</h3>
       {% if project.description %}<div class="muted markdown-block" style="margin:6px 0;" data-markdown-project>{{ project.description }}</div>{% endif %}
+      
+      <!-- Time/Deadline Information -->
+      <div style="margin-top:10px;">
+        {% if project.due_at or project.hard_deadline_at %}
+          {% if project.due_at %}
+            <span class="muted" style="margin-right:12px;">📅 Due: {{ project.due_at.strftime("%b %d, %Y at %H:%M") }}</span>
+          {% endif %}
+          {% if project.hard_deadline_at %}
+            <span class="muted" style="color:#f87171;">🚫 Hard deadline: {{ project.hard_deadline_at.strftime("%b %d, %Y at %H:%M") }}</span>
+          {% endif %}
+        {% elif project.availability_enabled %}
+          <span class="muted" style="color:#637FBE;">🕒 Time windows enabled</span>
+        {% else %}
+          <span style="color:#4ade80;">✓ No time limit</span>
+        {% endif %}
+      </div>
+      
       {% if project.instructions %}
         <div style="margin-top:8px; padding:10px; border:1px dashed #334155; border-radius:10px;">
           <strong>Instructions</strong>

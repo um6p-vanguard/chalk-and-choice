@@ -14,6 +14,28 @@
     <input type="text" name="title" value="{{ exercise.title if exercise else '' }}" required>
     <div class="sp"></div>
 
+    <label>Learning Outcome * 
+      <span class="muted" style="font-weight:normal; margin-left:8px;">Tag this exercise to a specific learning outcome</span>
+    </label>
+    <select name="outcome_tag" required style="padding:10px;">
+      <option value="">-- Select a Learning Outcome --</option>
+      {% for outcome in outcomes %}
+      <option value="{{ outcome.tag_name }}" 
+              {% if exercise and exercise.outcome_tag == outcome.tag_name %}selected{% endif %}>
+        {{ outcome.icon_emoji }} {{ outcome.display_name }} ({{ outcome.domain_display }})
+      </option>
+      {% endfor %}
+    </select>
+    <div class="sp"></div>
+
+    <label>Difficulty Level *</label>
+    <select name="difficulty_level" style="padding:10px;">
+      <option value="1" {% if exercise and exercise.difficulty_level == 1 %}selected{% elif not exercise %}selected{% endif %}>⭐ Basic</option>
+      <option value="2" {% if exercise and exercise.difficulty_level == 2 %}selected{% endif %}>⭐⭐ Intermediate</option>
+      <option value="3" {% if exercise and exercise.difficulty_level == 3 %}selected{% endif %}>⭐⭐⭐ Advanced</option>
+    </select>
+    <div class="sp"></div>
+
     <label>Description (problem statement)</label>
     <textarea name="description" rows="6" placeholder="Describe the problem the student needs to solve...">{{ exercise.description if exercise else '' }}</textarea>
     <div class="sp"></div>
@@ -57,38 +79,53 @@
         <div id="json-example" style="display:none; margin-top:16px; background:#0b1220; padding:14px; border-radius:8px; overflow-x:auto;">
           <p class="muted" style="margin:0 0 10px 0;"><strong>Example JSON format:</strong></p>
 <pre style="margin:0; font-size:12px; color:var(--text); white-space:pre-wrap;">{
-  "title": "Sum of Two Numbers",
-  "description": "Write a function `add(a, b)` that returns the sum of two numbers.",
-  "instructions": "The function should handle both positive and negative integers.",
-  "starter_code": "def add(a, b):\n    # Your code here\n    pass",
+  "title": "Check Balanced Parentheses",
+  "description": "Write a function `is_balanced(s)` that checks if a string has balanced parentheses.",
+  "instructions": "Return True if all parentheses are properly matched, False otherwise.",
+  "starter_code": "def is_balanced(s):\n    # Your code here\n    pass",
+  "outcome_tag": "data_structures_stacks",
+  "difficulty_level": 2,
   "time_limit": 3.0,
   "test_cases": {
     "visible": [
       {
-        "description": "Test with positive numbers",
-        "input": "print(add(2, 3))",
-        "expected_output": "5"
+        "description": "Simple balanced case",
+        "input": "is_balanced(\"()\")",
+        "expected_output": "True"
       },
       {
-        "description": "Test with zero",
-        "input": "print(add(0, 5))",
-        "expected_output": "5"
+        "description": "Nested parentheses",
+        "input": "is_balanced(\"((()))\")",
+        "expected_output": "True"
+      },
+      {
+        "description": "Unbalanced case",
+        "input": "is_balanced(\"(()\")",
+        "expected_output": "False"
       }
     ],
     "hidden": [
       {
-        "description": "Test with negative numbers",
-        "input": "print(add(-3, -7))",
-        "expected_output": "-10"
+        "description": "Complex nested",
+        "input": "is_balanced(\"(()())()\")",
+        "expected_output": "True"
       },
       {
-        "description": "Test with large numbers",
-        "input": "print(add(1000000, 2000000))",
-        "expected_output": "3000000"
+        "description": "Wrong order",
+        "input": "is_balanced(\")(\")",
+        "expected_output": "False"
+      },
+      {
+        "description": "Empty string",
+        "input": "is_balanced(\"\")",
+        "expected_output": "True"
       }
     ]
   }
 }</pre>
+          <p class="muted" style="margin:10px 0 0 0; font-size:0.85rem;">
+            <strong>Note:</strong> Input should be a function call expression (e.g., <code>is_balanced("()")</code>), not a print statement.
+          </p>
         </div>
       </div>
     </div>
@@ -279,6 +316,18 @@ function importFromJson() {
     }
     if (data.time_limit) {
       document.querySelector('input[name="time_limit"]').value = data.time_limit;
+    }
+    if (data.outcome_tag) {
+      const outcomeSelect = document.querySelector('select[name="outcome_tag"]');
+      if (outcomeSelect) {
+        outcomeSelect.value = data.outcome_tag;
+      }
+    }
+    if (data.difficulty_level) {
+      const difficultySelect = document.querySelector('select[name="difficulty_level"]');
+      if (difficultySelect) {
+        difficultySelect.value = data.difficulty_level;
+      }
     }
     
     // Clear existing test cases

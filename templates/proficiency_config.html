@@ -1,7 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h2>Proficiency Test Settings</h2>
+  <div style="background:rgba(251,191,36,0.15); border:1px solid #fbbf24; padding:16px; border-radius:10px; margin-bottom:24px;">
+    <h3 style="margin:0 0 10px 0; color:#fbbf24;">⚠️ Legacy Configuration</h3>
+    <p class="muted" style="margin:0;">This page configures the old single proficiency test system which has been replaced by the <strong>Learning Outcome-based</strong> system. Each learning outcome now has its own test configuration.</p>
+    <p class="muted" style="margin:8px 0 0 0;">These settings are kept for backward compatibility but are no longer actively used.</p>
+  </div>
+  
+  <h2>Proficiency Test Settings (Legacy)</h2>
   
   <form method="POST">
     <label>Test Title</label>

@@ -123,6 +123,8 @@
                 {% else %}
                   • <span style="color:#f87171;">⏰ Due in {{ minutes }}m {{ seconds }}s</span>
                 {% endif %}
+              {% elif not row.project.due_at and not row.project.hard_deadline_at and not row.project.availability_enabled %}
+                • <span style="color:#4ade80;">✓ No time limit</span>
               {% endif %}
             </p>
           </div>

@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <h2>🐍 Proficiency Test</h2>
+  <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <h2 style="margin: 0;">🐍 Proficiency Test</h2>
+    <div class="row" style="gap: 12px;">
+      <a href="{{ url_for('student_proficiency_outcomes') }}" class="btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border: none;">
+        📊 Learning Outcomes
+      </a>
+    </div>
+  </div>
   
   {% if has_tag %}
   <div style="background:rgba(74,222,128,0.15); border:1px solid #4ade80; padding:20px; border-radius:10px; margin-bottom:20px;">
