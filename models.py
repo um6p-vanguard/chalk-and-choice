@@ -48,6 +48,13 @@ class Student(db.Model):
     warnings_json = db.Column(JSONText, nullable=True, default=list)  # List of warning records
     is_flagged = db.Column(db.Boolean, nullable=False, default=False)  # Quick flag for cheater tag
     flag_notes = db.Column(db.Text, nullable=True)  # Admin notes about the flag
+    # Enhanced flag tracking
+    flag_status = db.Column(db.String(32), nullable=False, default="none")  # none | under_review | confirmed | cleared
+    flag_history_json = db.Column(JSONText, nullable=True, default=list)  # History of flag status changes
+    flagged_at = db.Column(db.DateTime, nullable=True)  # When first flagged
+    flagged_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+
+    flagged_by = db.relationship('User', foreign_keys=[flagged_by_user_id])
 
     def set_password(self, pw): self.password_hash = generate_password_hash(pw)
     def check_password(self, pw): return check_password_hash(self.password_hash, pw)

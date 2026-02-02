@@ -307,14 +307,57 @@ def _touch_student_log_session(student, now):
 # Warning System Helpers
 # --------------------------------------------------------------------
 
+def _generate_warning_id():
+    """Generate a unique ID for a warning."""
+    return uuid.uuid4().hex[:12]
+
 def _add_warning(student, warning_type, description, severity="medium", auto_detected=True, 
                  exam_id=None, exam_code=None, project_id=None, project_code=None, 
                  task_id=None, task_title=None, submission_id=None):
-    """Add a warning to a student's record with context about the exam/project."""
+    """Add a warning to a student's record with context about the exam/project.
+    
+    Includes deduplication: won't add a warning if one with the same type and context
+    already exists within the last 24 hours.
+    """
     if not student:
-        return
+        return False
     warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    
+    # Deduplication: Check if a similar warning already exists
+    # A warning is considered duplicate if it has the same type AND same context (exam/task/submission)
+    for existing in warnings:
+        if existing.get("type") != warning_type:
+            continue
+        
+        # Check context match
+        context_match = False
+        if exam_id and existing.get("exam_id") == exam_id:
+            context_match = True
+        elif task_id and existing.get("task_id") == task_id:
+            context_match = True
+        elif submission_id and existing.get("submission_id") == submission_id:
+            context_match = True
+        elif not exam_id and not task_id and not submission_id:
+            # No context provided - check if existing also has no context (manual warnings)
+            if not existing.get("exam_id") and not existing.get("task_id") and not existing.get("submission_id"):
+                context_match = True
+        
+        if context_match:
+            # Check if the existing warning is recent (within 24 hours)
+            existing_ts = existing.get("timestamp")
+            if existing_ts:
+                try:
+                    existing_time = datetime.fromisoformat(existing_ts.replace("Z", "+00:00"))
+                    existing_time = existing_time.replace(tzinfo=None)  # Make naive for comparison
+                    time_diff = (utcnow() - existing_time).total_seconds()
+                    if time_diff < 86400:  # 24 hours in seconds
+                        # Duplicate warning within 24 hours - skip
+                        return False
+                except (ValueError, TypeError):
+                    pass
+    
     warning = {
+        "id": _generate_warning_id(),
         "type": warning_type,
         "description": description,
         "severity": severity,
@@ -342,14 +385,52 @@ def _add_warning(student, warning_type, description, severity="medium", auto_det
     student.warnings_json = warnings
     flag_modified(student, 'warnings_json')
     
-    # Mark the field as modified so SQLAlchemy knows to commit it
-    from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(student, "warnings_json")
-    
-    # Auto-flag if threshold reached
-    if len(warnings) >= WARNING_AUTO_FLAG_COUNT and not student.is_flagged:
+    # Auto-flag if threshold reached and not already under review/confirmed
+    if len(warnings) >= WARNING_AUTO_FLAG_COUNT and student.flag_status == "none":
         student.is_flagged = True
-        student.flag_notes = f"Auto-flagged after {len(warnings)} warnings"
+        student.flag_status = "under_review"
+        student.flagged_at = utcnow()
+        # Add to flag history
+        _add_flag_history(student, "under_review", f"Auto-flagged after {len(warnings)} warnings", user_id=None)
+    
+    return True  # Warning was added successfully
+
+def _add_flag_history(student, new_status, notes, user_id=None):
+    """Add an entry to the student's flag history."""
+    if not student:
+        return
+    history = student.flag_history_json if isinstance(student.flag_history_json, list) else []
+    entry = {
+        "status": new_status,
+        "notes": notes,
+        "timestamp": utcnow().isoformat() + "Z",
+        "by_user_id": user_id,
+    }
+    history.append(entry)
+    student.flag_history_json = history
+    flag_modified(student, 'flag_history_json')
+
+def _get_submission_warnings(student, submission):
+    """Get warnings specific to a submission (exam or project task)."""
+    if not student or not submission:
+        return []
+    
+    warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
+    if not warnings:
+        return []
+    
+    # Filter based on submission type
+    if hasattr(submission, 'exam_id'):
+        exam_id = submission.exam_id
+        return [w for w in warnings if w.get('exam_id') == exam_id]
+    elif hasattr(submission, 'task_id'):
+        task_id = submission.task_id
+        submission_id = submission.id
+        project_id = getattr(submission, 'project_id', None)
+        # Match by task_id OR submission_id (and optionally project_id for broader context)
+        return [w for w in warnings if w.get('task_id') == task_id or w.get('submission_id') == submission_id]
+    
+    return []
 
 def _clear_submission_warnings(student, submission):
     """Clear warnings related to a specific submission when it receives a review."""
@@ -476,22 +557,151 @@ def _detect_ip_change(student, submission, current_ip):
             return True
     return False
 
+def _normalize_code_for_comparison(code):
+    """
+    Normalize Python code for plagiarism detection by:
+    1. Parsing to AST and renaming all variables/functions to generic names
+    2. Removing comments and docstrings
+    3. Normalizing whitespace
+    Returns normalized code string, or None if parsing fails.
+    """
+    import ast
+    
+    if not code or not isinstance(code, str):
+        return None
+    
+    code = code.strip()
+    if not code:
+        return None
+    
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    
+    # Collect all user-defined names
+    name_counter = [0]
+    name_map = {}
+    
+    def get_normalized_name(original_name):
+        # Skip built-in names and common stdlib
+        builtins = {'print', 'len', 'range', 'int', 'str', 'float', 'list', 'dict', 
+                    'set', 'tuple', 'True', 'False', 'None', 'input', 'open', 'file',
+                    'sum', 'min', 'max', 'abs', 'sorted', 'reversed', 'enumerate',
+                    'zip', 'map', 'filter', 'any', 'all', 'type', 'isinstance',
+                    'hasattr', 'getattr', 'setattr', 'super', 'self', 'cls'}
+        if original_name in builtins:
+            return original_name
+        if original_name.startswith('_'):
+            return original_name
+        if original_name not in name_map:
+            name_map[original_name] = f"var{name_counter[0]}"
+            name_counter[0] += 1
+        return name_map[original_name]
+    
+    class NameNormalizer(ast.NodeTransformer):
+        def visit_Name(self, node):
+            node.id = get_normalized_name(node.id)
+            return node
+        
+        def visit_FunctionDef(self, node):
+            node.name = get_normalized_name(node.name)
+            # Normalize argument names
+            for arg in node.args.args:
+                arg.arg = get_normalized_name(arg.arg)
+            self.generic_visit(node)
+            return node
+        
+        def visit_AsyncFunctionDef(self, node):
+            return self.visit_FunctionDef(node)
+        
+        def visit_arg(self, node):
+            node.arg = get_normalized_name(node.arg)
+            return node
+    
+    try:
+        normalizer = NameNormalizer()
+        normalized_tree = normalizer.visit(tree)
+        # Use ast.unparse if available (Python 3.9+), otherwise dump
+        if hasattr(ast, 'unparse'):
+            return ast.unparse(normalized_tree)
+        else:
+            return ast.dump(normalized_tree)
+    except Exception:
+        return None
+
+def _tokenize_code(code):
+    """Tokenize code into meaningful tokens for comparison."""
+    if not code:
+        return []
+    # Split on non-word characters but keep operators
+    tokens = re.findall(r'\w+|[+\-*/%=<>!&|^~]+|[(){}\[\],;:]', str(code))
+    return [t.lower() for t in tokens if t.strip()]
+
+def _get_ngrams(tokens, n=3):
+    """Generate n-grams from token list."""
+    if len(tokens) < n:
+        return set(tuple(tokens))
+    return set(tuple(tokens[i:i+n]) for i in range(len(tokens) - n + 1))
+
 def _calculate_code_similarity(code1, code2):
-    """Simple token-based code similarity (Jaccard similarity)."""
+    """
+    Calculate code similarity using multiple techniques:
+    1. Try AST-based normalization (catches variable renaming)
+    2. Use n-gram based Jaccard similarity (catches structural similarity)
+    3. Fall back to token-based similarity if AST parsing fails
+    """
     if not code1 or not code2:
         return 0.0
     
-    # Normalize whitespace and tokenize
-    tokens1 = set(re.findall(r'\w+', str(code1).lower()))
-    tokens2 = set(re.findall(r'\w+', str(code2).lower()))
+    # Try AST-based normalization first (best for Python)
+    norm1 = _normalize_code_for_comparison(code1)
+    norm2 = _normalize_code_for_comparison(code2)
+    
+    if norm1 and norm2:
+        # Both parsed successfully - compare normalized versions
+        tokens1 = _tokenize_code(norm1)
+        tokens2 = _tokenize_code(norm2)
+    else:
+        # Fallback to raw tokenization
+        tokens1 = _tokenize_code(code1)
+        tokens2 = _tokenize_code(code2)
     
     if not tokens1 or not tokens2:
         return 0.0
     
-    intersection = len(tokens1.intersection(tokens2))
-    union = len(tokens1.union(tokens2))
+    # Use multiple n-gram sizes and take weighted average
+    similarities = []
     
-    return intersection / union if union > 0 else 0.0
+    # Unigrams (individual tokens) - catches vocabulary similarity
+    set1 = set(tokens1)
+    set2 = set(tokens2)
+    if set1 and set2:
+        uni_sim = len(set1 & set2) / len(set1 | set2)
+        similarities.append((uni_sim, 0.2))  # 20% weight
+    
+    # Bigrams - catches local patterns
+    bigrams1 = _get_ngrams(tokens1, 2)
+    bigrams2 = _get_ngrams(tokens2, 2)
+    if bigrams1 and bigrams2:
+        bi_sim = len(bigrams1 & bigrams2) / len(bigrams1 | bigrams2)
+        similarities.append((bi_sim, 0.3))  # 30% weight
+    
+    # Trigrams - catches code structure
+    trigrams1 = _get_ngrams(tokens1, 3)
+    trigrams2 = _get_ngrams(tokens2, 3)
+    if trigrams1 and trigrams2:
+        tri_sim = len(trigrams1 & trigrams2) / len(trigrams1 | trigrams2)
+        similarities.append((tri_sim, 0.5))  # 50% weight
+    
+    if not similarities:
+        return 0.0
+    
+    # Weighted average
+    total_weight = sum(w for _, w in similarities)
+    weighted_sum = sum(s * w for s, w in similarities)
+    
+    return weighted_sum / total_weight if total_weight > 0 else 0.0
 
 def _check_project_deadline_status(project):
     """Check if a project is within its deadline constraints."""
@@ -4854,8 +5064,8 @@ def project_task_take(code, task_id):
             
             # Apply late penalty if past due date
             late_penalty_applied = 0.0
-            if deadline_status["is_late"] and deadline_status["late_penalty"] > 0:
-                penalty_percent = deadline_status["late_penalty"]
+            if deadline_status.get("status") == "late" and deadline_status.get("penalty", 0) > 0:
+                penalty_percent = deadline_status["penalty"]
                 late_penalty_applied = (grade_score * penalty_percent) / 100.0
                 grade_score = max(0, grade_score - late_penalty_applied)
                 grade_details.append({
@@ -4878,8 +5088,12 @@ def project_task_take(code, task_id):
                 if task.auto_grade and not has_manual_review and grade_total > 0:
                     if grade_score >= grade_total:
                         submission.status = "accepted"
+                        # Clear warnings since submission passed
+                        _clear_submission_warnings(student, submission)
                     else:
                         submission.status = "rejected"
+                        # Clear warnings since submission failed test cases
+                        _clear_submission_warnings(student, submission)
                 else:
                     submission.status = "submitted"
             grade_details_for_history = grade_details
@@ -5114,6 +5328,8 @@ def projects_submission_task_need_rework(code, student_id, task_id):
     submission.status = "rejected"
     submission.last_activity_at = utcnow()
     _record_task_attempt_review(submission, status="rejected", reviewer=current_user())
+    # Clear warnings for this submission since it has been rejected
+    _clear_submission_warnings(student, submission)
     db.session.commit()
     return redirect(url_for("projects_student_submissions", code=project.code, student_id=student.id))
 
@@ -5403,6 +5619,10 @@ def projects_review_detail(submission_id):
         except Exception:
             grading_details = []
         grading_by_question = _grading_by_question(grading_details)
+    
+    # Get submission-specific warnings (not all student warnings)
+    submission_warnings = _get_submission_warnings(submission.student, submission) if submission.student else []
+    
     return render_template(
         "projects_review_detail.html",
         submission=submission,
@@ -5416,6 +5636,7 @@ def projects_review_detail(submission_id):
         review_attempt=review_attempt,
         active_attempt=active_attempt,
         is_latest_attempt=is_latest_attempt,
+        submission_warnings=submission_warnings,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -5462,16 +5683,16 @@ def projects_review_decision(submission_id):
             if reviewed_status == "accepted" and submission.student:
                 if _project_completed(submission.project, submission.student):
                     _award_project_points_if_needed(submission.project, submission.student)
-        # Clear warnings for this submission since it has been reviewed
-        if submission.student and notes:
+        # Clear warnings for this submission since it has been reviewed (accept/reject or feedback)
+        if submission.student and (reviewed_status or notes):
             _clear_submission_warnings(submission.student, submission)
     elif reviewed_status:
         submission.status = reviewed_status
         if notes:
             submission.review_notes = notes
         _record_task_attempt_review(submission, status=reviewed_status, notes=notes, reviewer=reviewer)
-        # Clear warnings for this submission since it has been reviewed
-        if submission.student and notes:
+        # Clear warnings for this submission since it has been reviewed (accept/reject or feedback)
+        if submission.student:
             _clear_submission_warnings(submission.student, submission)
     submission.last_activity_at = utcnow()
     if submission.status == "accepted" and submission.student:
@@ -5675,15 +5896,31 @@ def warnings_student_detail(student_id):
 @app.post("/warnings/student/<int:student_id>/flag")
 @require_user()
 def warnings_flag_student(student_id):
-    """Manually flag a student."""
+    """Manually flag a student with a specific status."""
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
     student = Student.query.get_or_404(student_id)
     notes = (request.form.get("notes") or "").strip()
+    new_status = (request.form.get("status") or "under_review").strip()
     
+    # Validate status
+    if new_status not in ("under_review", "confirmed"):
+        new_status = "under_review"
+    
+    old_status = student.flag_status
     student.is_flagged = True
-    student.flag_notes = notes or "Manually flagged by instructor"
+    student.flag_status = new_status
+    student.flag_notes = notes or f"Manually flagged as '{new_status}' by instructor"
+    
+    # Set flagged_at and flagged_by only on first flag
+    if old_status == "none":
+        student.flagged_at = utcnow()
+        student.flagged_by_user_id = user.id
+    
+    # Add to history
+    _add_flag_history(student, new_status, notes or f"Status changed from '{old_status}' to '{new_status}'", user_id=user.id)
     db.session.commit()
     
     return redirect(url_for("warnings_student_detail", student_id=student.id))
@@ -5691,13 +5928,25 @@ def warnings_flag_student(student_id):
 @app.post("/warnings/student/<int:student_id>/unflag")
 @require_user()
 def warnings_unflag_student(student_id):
-    """Remove flag from a student."""
+    """Clear flag from a student (set status to 'cleared')."""
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
     student = Student.query.get_or_404(student_id)
+    notes = (request.form.get("notes") or "").strip()
+    
+    old_status = student.flag_status
     student.is_flagged = False
-    student.flag_notes = None
+    student.flag_status = "cleared"
+    # Preserve flag_notes as historical record, append clearing note
+    if notes:
+        student.flag_notes = f"[CLEARED] {notes}"
+    else:
+        student.flag_notes = f"[CLEARED] Previously: {student.flag_notes or 'No notes'}"
+    
+    # Add to history
+    _add_flag_history(student, "cleared", notes or f"Flag cleared (was '{old_status}')", user_id=user.id)
     db.session.commit()
     
     return redirect(url_for("warnings_student_detail", student_id=student.id))
@@ -5725,14 +5974,24 @@ def warnings_add_manual(student_id):
 @app.post("/warnings/student/<int:student_id>/clear")
 @require_user()
 def warnings_clear_all(student_id):
-    """Clear all warnings for a student."""
+    """Clear all warnings for a student and reset flag status."""
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
     student = Student.query.get_or_404(student_id)
+    
+    old_warning_count = len(student.warnings_json) if student.warnings_json else 0
+    old_status = student.flag_status
+    
     student.warnings_json = []
     student.is_flagged = False
+    student.flag_status = "none"
     student.flag_notes = None
+    # Note: we keep flagged_at and flagged_by for historical reference
+    
+    # Add to history
+    _add_flag_history(student, "none", f"All warnings cleared ({old_warning_count} warnings removed), status reset from '{old_status}'", user_id=user.id)
     db.session.commit()
     
     return redirect(url_for("warnings_student_detail", student_id=student.id))

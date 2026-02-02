@@ -22,6 +22,7 @@
         <tr style="background: rgba(99, 127, 190, 0.15); border-bottom: 2px solid #637FBE;">
           <th style="padding: 10px; text-align: left;">Student</th>
           <th style="padding: 10px; text-align: left;">Email</th>
+          <th style="padding: 10px; text-align: center;">Status</th>
           <th style="padding: 10px; text-align: center;">Warnings</th>
           <th style="padding: 10px; text-align: left;">Flag Notes</th>
           <th style="padding: 10px; text-align: center;">Actions</th>
@@ -35,12 +36,17 @@
           </td>
           <td style="padding: 10px;">{{ student.email }}</td>
           <td style="padding: 10px; text-align: center;">
+            <span style="background: {% if student.flag_status == 'confirmed' %}#dc2626{% elif student.flag_status == 'under_review' %}#f59e0b{% else %}#637FBE{% endif %}; color: white; padding: 4px 10px; border-radius: 12px; font-weight: bold; font-size: 11px; text-transform: uppercase;">
+              {{ student.flag_status|replace("_", " ") }}
+            </span>
+          </td>
+          <td style="padding: 10px; text-align: center;">
             <span style="background: #637FBE; color: white; padding: 4px 10px; border-radius: 12px; font-weight: bold;">
               {{ (student.warnings_json|length) if student.warnings_json else 0 }}
             </span>
           </td>
           <td style="padding: 10px;">
-            <small style="color: #94a3b8;">{{ student.flag_notes or "No notes" }}</small>
+            <small style="color: #94a3b8;">{{ student.flag_notes[:50] + "..." if student.flag_notes and student.flag_notes|length > 50 else (student.flag_notes or "No notes") }}</small>
           </td>
           <td style="padding: 10px; text-align: center;">
             <a href="{{ url_for('warnings_student_detail', student_id=student.id) }}" 

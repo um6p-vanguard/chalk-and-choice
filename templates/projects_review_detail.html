@@ -9,9 +9,12 @@
         Student: <strong>{{ submission.student_name or "Unknown" }}</strong>
         {% if submission.student %}
           {% if submission.student.is_flagged %}
-          <span style="background: #637FBE; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; font-weight: bold;">🚩 FLAGGED</span>
-          {% elif submission.student.warnings_json and submission.student.warnings_json|length > 0 %}
-          <span style="background: #5775B8; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; font-weight: bold;">⚠️ {{ submission.student.warnings_json|length }} WARNING(S)</span>
+          <span style="background: {% if submission.student.flag_status == 'confirmed' %}#dc2626{% else %}#637FBE{% endif %}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; font-weight: bold;">
+            🚩 {{ submission.student.flag_status|upper }}
+          </span>
+          {% endif %}
+          {% if submission_warnings|length > 0 %}
+          <span style="background: #5775B8; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; font-weight: bold;">⚠️ {{ submission_warnings|length }} WARNING(S) FOR THIS TASK</span>
           {% endif %}
         {% endif %}
       </p>
@@ -35,7 +38,7 @@
     </div>
     <div class="row" style="gap:8px;">
       {% if submission.student %}
-        <a class="btn" href="{{ url_for('warnings_student_detail', student_id=submission.student.id) }}" style="background: #5775B8; color: white; border: none;">View Warnings</a>
+        <a class="btn" href="{{ url_for('warnings_student_detail', student_id=submission.student.id) }}" style="background: #5775B8; color: white; border: none;">View All Warnings</a>
       {% endif %}
       <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
       <a class="btn" href="{{ url_for('projects_reviews') }}">Back to review list</a>
@@ -45,32 +48,41 @@
     </div>
   </div>
   
-  {% if submission.student and (submission.student.is_flagged or (submission.student.warnings_json and submission.student.warnings_json|length > 0)) %}
-  <div style="margin-top: 20px; padding: 15px; background: {% if submission.student.is_flagged %}rgba(99, 127, 190, 0.1){% else %}rgba(99, 127, 190, 0.05){% endif %}; border-left: 4px solid {% if submission.student.is_flagged %}#637FBE{% else %}#5775B8{% endif %}; border-radius: 6px;">
-    <strong style="color: {% if submission.student.is_flagged %}#637FBE{% else %}#5775B8{% endif %};">
-      {% if submission.student.is_flagged %}
-      🚩 Academic Integrity Alert: This student has been flagged for potential violations.
-      {% else %}
-      ⚠️ Warning: This student has {{ submission.student.warnings_json|length }} academic integrity warning(s).
-      {% endif %}
+  {# Show submission-specific warnings first #}
+  {% if submission_warnings|length > 0 %}
+  <div style="margin-top: 20px; padding: 15px; background: rgba(220, 38, 38, 0.1); border-left: 4px solid #dc2626; border-radius: 6px;">
+    <strong style="color: #dc2626;">
+      ⚠️ Warnings for This Submission ({{ submission_warnings|length }})
+    </strong>
+    <ul style="margin: 10px 0 0; padding-left: 20px;">
+      {% for warning in submission_warnings %}
+      <li style="margin: 8px 0;">
+        <strong>{{ warning.type|replace("_", " ")|title }}</strong> 
+        <span style="font-size: 11px; color: {% if warning.severity == 'high' %}#dc2626{% elif warning.severity == 'medium' %}#f59e0b{% else %}#94a3b8{% endif %}; text-transform: uppercase; font-weight: bold;">[{{ warning.severity }}]</span>
+        <br>
+        <span style="color: #e5e7eb; font-size: 13px;">{{ warning.description }}</span>
+        <br>
+        <small style="color: #94a3b8;">{{ warning.timestamp[:16] if warning.timestamp else "" }}</small>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  
+  {# Show flag status if flagged #}
+  {% if submission.student and submission.student.is_flagged %}
+  <div style="margin-top: 15px; padding: 15px; background: {% if submission.student.flag_status == 'confirmed' %}rgba(220, 38, 38, 0.15){% else %}rgba(99, 127, 190, 0.1){% endif %}; border-left: 4px solid {% if submission.student.flag_status == 'confirmed' %}#dc2626{% else %}#637FBE{% endif %}; border-radius: 6px;">
+    <strong style="color: {% if submission.student.flag_status == 'confirmed' %}#dc2626{% else %}#637FBE{% endif %};">
+      🚩 Student Flag Status: {{ submission.student.flag_status|replace("_", " ")|title }}
     </strong>
     {% if submission.student.flag_notes %}
     <p style="margin: 8px 0 0; color: #94a3b8;">{{ submission.student.flag_notes }}</p>
     {% endif %}
-    {% if submission.student.warnings_json and submission.student.warnings_json|length > 0 %}
-    <details style="margin-top: 10px;">
-      <summary style="cursor: pointer; user-select: none; font-weight: 500;">View Recent Warnings</summary>
-      <ul style="margin: 8px 0 0; padding-left: 20px;">
-        {% for warning in (submission.student.warnings_json|reverse|list)[:3] %}
-        <li style="margin: 5px 0;">
-          <strong>{{ warning.type|replace("_", " ")|title }}</strong> 
-          <span style="font-size: 11px; color: {% if warning.severity == 'high' %}#637FBE{% elif warning.severity == 'medium' %}#5775B8{% else %}#94a3b8{% endif %}; text-transform: uppercase; font-weight: bold;">[{{ warning.severity }}]</span>
-          <br>
-          <span style="color: #94a3b8; font-size: 13px;">{{ warning.description }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-    </details>
+    {% if submission.student.flagged_at %}
+    <p style="margin: 4px 0 0; color: #64748b; font-size: 12px;">
+      Flagged on {{ submission.student.flagged_at.strftime("%Y-%m-%d %H:%M") }}
+      {% if submission.student.flagged_by %} by {{ submission.student.flagged_by.name }}{% endif %}
+    </p>
     {% endif %}
   </div>
   {% endif %}

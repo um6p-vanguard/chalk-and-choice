@@ -9,48 +9,114 @@
       <p style="margin: 5px 0 0; color: #94a3b8;">{{ student.email }}</p>
     </div>
     {% if student.is_flagged %}
-    <span style="background: #637FBE; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
-      🚩 FLAGGED
+    <span style="background: {% if student.flag_status == 'confirmed' %}#dc2626{% elif student.flag_status == 'under_review' %}#f59e0b{% else %}#637FBE{% endif %}; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
+      🚩 {{ student.flag_status|replace("_", " ")|upper }}
+    </span>
+    {% elif student.flag_status == 'cleared' %}
+    <span style="background: #10b981; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
+      ✓ CLEARED
     </span>
     {% endif %}
   </div>
 
   <!-- Flag Actions -->
   <div class="card" style="margin-bottom: 30px;">
-    <h3 style="margin-top: 0;">Actions</h3>
+    <h3 style="margin-top: 0;">Flag Actions</h3>
     
     {% if student.is_flagged %}
-    <form method="post" action="{{ url_for('warnings_unflag_student', student_id=student.id) }}" style="display: inline-block; margin-right: 10px;">
-      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <button type="submit" class="btn" style="background: #637FBE; color: white; border: none;">
-        ✓ Remove Flag
-      </button>
-    </form>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;">
+      {# Change status options #}
+      <form method="post" action="{{ url_for('warnings_flag_student', student_id=student.id) }}" style="display: flex; gap: 10px; align-items: center;">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <select name="status" style="padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e5e7eb;">
+          <option value="under_review" {% if student.flag_status == 'under_review' %}selected{% endif %}>Under Review</option>
+          <option value="confirmed" {% if student.flag_status == 'confirmed' %}selected{% endif %}>Confirmed</option>
+        </select>
+        <input type="text" name="notes" placeholder="Update notes..." style="padding: 10px; width: 200px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e5e7eb;">
+        <button type="submit" class="btn" style="background: #637FBE; color: white; border: none;">
+          Update Status
+        </button>
+      </form>
+      
+      <form method="post" action="{{ url_for('warnings_unflag_student', student_id=student.id) }}" style="display: flex; gap: 10px; align-items: center;">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <input type="text" name="notes" placeholder="Reason for clearing..." style="padding: 10px; width: 200px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e5e7eb;">
+        <button type="submit" class="btn" style="background: #10b981; color: white; border: none;">
+          ✓ Clear Flag
+        </button>
+      </form>
+    </div>
     {% else %}
-    <form method="post" action="{{ url_for('warnings_flag_student', student_id=student.id) }}" style="display: inline-block; margin-right: 10px;">
+    <form method="post" action="{{ url_for('warnings_flag_student', student_id=student.id) }}" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center;">
       <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <input type="text" name="notes" placeholder="Reason for flagging..." style="padding: 10px; width: 300px; margin-right: 10px;">
-      <button type="submit" class="btn" style="background: #637FBE; color: white; border: none;">
+      <select name="status" style="padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e5e7eb;">
+        <option value="under_review">Under Review</option>
+        <option value="confirmed">Confirmed</option>
+      </select>
+      <input type="text" name="notes" placeholder="Reason for flagging..." style="padding: 10px; width: 300px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e5e7eb;">
+      <button type="submit" class="btn" style="background: #dc2626; color: white; border: none;">
         🚩 Flag Student
       </button>
     </form>
     {% endif %}
 
-    <form method="post" action="{{ url_for('warnings_clear_all', student_id=student.id) }}" 
-          style="display: inline-block;"
-          onsubmit="return confirm('Clear all warnings for this student?');">
-      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <button type="submit" class="btn">
-        Clear All Warnings
-      </button>
-    </form>
+    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #334155;">
+      <form method="post" action="{{ url_for('warnings_clear_all', student_id=student.id) }}" 
+            style="display: inline-block;"
+            onsubmit="return confirm('Clear all warnings and reset flag status for this student? This cannot be undone.');">
+        <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+        <button type="submit" class="btn" style="background: #334155; color: #94a3b8;">
+          🗑 Clear All Warnings & Reset
+        </button>
+      </form>
+    </div>
   </div>
 
-  <!-- Flag Notes -->
-  {% if student.flag_notes %}
-  <div style="background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; padding: 15px; margin-bottom: 30px; border-radius: 6px;">
-    <strong>Flag Notes:</strong> {{ student.flag_notes }}
+  <!-- Flag Status Info -->
+  {% if student.flag_notes or student.flagged_at %}
+  <div style="background: {% if student.flag_status == 'confirmed' %}rgba(220, 38, 38, 0.1){% elif student.flag_status == 'under_review' %}rgba(245, 158, 11, 0.1){% elif student.flag_status == 'cleared' %}rgba(16, 185, 129, 0.1){% else %}rgba(99, 127, 190, 0.1){% endif %}; border-left: 4px solid {% if student.flag_status == 'confirmed' %}#dc2626{% elif student.flag_status == 'under_review' %}#f59e0b{% elif student.flag_status == 'cleared' %}#10b981{% else %}#637FBE{% endif %}; padding: 15px; margin-bottom: 30px; border-radius: 6px;">
+    <div style="display: flex; justify-content: space-between; align-items: start;">
+      <div>
+        <strong>Current Status:</strong> 
+        <span style="text-transform: uppercase; font-weight: bold; color: {% if student.flag_status == 'confirmed' %}#dc2626{% elif student.flag_status == 'under_review' %}#f59e0b{% elif student.flag_status == 'cleared' %}#10b981{% else %}#94a3b8{% endif %};">
+          {{ student.flag_status|replace("_", " ") }}
+        </span>
+        {% if student.flag_notes %}
+        <p style="margin: 8px 0 0; color: #e5e7eb;">{{ student.flag_notes }}</p>
+        {% endif %}
+      </div>
+      <div style="text-align: right; color: #94a3b8; font-size: 13px;">
+        {% if student.flagged_at %}
+        <div>First flagged: {{ student.flagged_at.strftime("%Y-%m-%d %H:%M") }}</div>
+        {% endif %}
+        {% if student.flagged_by %}
+        <div>By: {{ student.flagged_by.name }}</div>
+        {% endif %}
+      </div>
+    </div>
   </div>
+  {% endif %}
+
+  <!-- Flag History -->
+  {% if student.flag_history_json and student.flag_history_json|length > 0 %}
+  <details class="card" style="margin-bottom: 30px;">
+    <summary style="cursor: pointer; font-weight: bold; user-select: none;">📜 Flag History ({{ student.flag_history_json|length }} entries)</summary>
+    <div style="margin-top: 15px;">
+      {% for entry in student.flag_history_json|reverse %}
+      <div style="padding: 10px; margin-bottom: 10px; background: rgba(99, 127, 190, 0.05); border-radius: 6px; border-left: 3px solid {% if entry.status == 'confirmed' %}#dc2626{% elif entry.status == 'under_review' %}#f59e0b{% elif entry.status == 'cleared' %}#10b981{% else %}#94a3b8{% endif %};">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-weight: 500; text-transform: uppercase; color: {% if entry.status == 'confirmed' %}#dc2626{% elif entry.status == 'under_review' %}#f59e0b{% elif entry.status == 'cleared' %}#10b981{% else %}#94a3b8{% endif %};">
+            {{ entry.status|replace("_", " ") }}
+          </span>
+          <small style="color: #64748b;">{{ entry.timestamp[:16] if entry.timestamp else "" }}</small>
+        </div>
+        {% if entry.notes %}
+        <p style="margin: 5px 0 0; color: #94a3b8; font-size: 13px;">{{ entry.notes }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </details>
   {% endif %}
 
   <!-- Add Manual Warning -->
