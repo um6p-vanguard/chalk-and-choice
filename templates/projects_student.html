@@ -18,12 +18,17 @@
 {% if tab == 'completed' %}
   {% if completed_collections %}
     {% for group in completed_collections %}
-      <div class="card" style="margin-bottom:12px; padding:12px;">
-        <div class="muted" style="font-size:0.85rem;">Collection</div>
-        <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
-      </div>
-      {% for row in group.rows %}
       <details class="card" style="margin-bottom:16px;">
+        <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
+          <div>
+            <div class="muted" style="font-size:0.85rem;">Collection</div>
+            <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
+          </div>
+          <div class="muted">{{ group.rows|length }} project(s)</div>
+        </summary>
+        <div style="margin-top:12px;">
+          {% for row in group.rows %}
+          <details class="card" style="margin-bottom:16px;">
         <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
           <div>
             <h3 style="margin:0;">{{ row.project.title }}</h3>
@@ -90,8 +95,10 @@
             </div>
           {% endif %}
         </div>
+          </details>
+          {% endfor %}
+        </div>
       </details>
-      {% endfor %}
     {% endfor %}
   {% else %}
     <div class="card">
@@ -101,12 +108,17 @@
 {% else %}
   {% if available_collections %}
     {% for group in available_collections %}
-      <div class="card" style="margin-bottom:12px; padding:12px;">
-        <div class="muted" style="font-size:0.85rem;">Collection</div>
-        <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
-      </div>
-      {% for row in group.rows %}
       <details class="card" style="margin-bottom:16px;">
+        <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
+          <div>
+            <div class="muted" style="font-size:0.85rem;">Collection</div>
+            <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
+          </div>
+          <div class="muted">{{ group.rows|length }} project(s)</div>
+        </summary>
+        <div style="margin-top:12px;">
+          {% for row in group.rows %}
+          <details class="card" style="margin-bottom:16px;">
         <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
           <div>
             <h3 style="margin:0;">{{ row.project.title }}</h3>
@@ -183,8 +195,10 @@
             <p class="muted" style="margin-top:10px;">No tasks configured yet.</p>
           {% endif %}
         </div>
+          </details>
+          {% endfor %}
+        </div>
       </details>
-      {% endfor %}
     {% endfor %}
   {% else %}
     <div class="card">
@@ -199,12 +213,17 @@
       <p class="muted" style="margin-top:6px;">Finish the listed prerequisite projects to unlock these.</p>
       {% if locked_collections %}
         {% for group in locked_collections %}
-        <div style="margin-top:12px;">
-          <div class="muted" style="font-size:0.85rem;">Collection</div>
-          <strong>{{ group.name }}</strong>
-        </div>
-          {% for row in group.rows %}
-          <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
+        <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
+          <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
+            <div>
+              <div class="muted" style="font-size:0.85rem;">Collection</div>
+              <strong>{{ group.name }}</strong>
+            </div>
+            <div class="muted">{{ group.rows|length }} project(s)</div>
+          </summary>
+          <div style="margin-top:10px;">
+            {% for row in group.rows %}
+            <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
             <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
             <div style="margin-top:8px;">
               {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
@@ -221,8 +240,10 @@
                 <p class="muted" style="margin:6px 0 0 0;">No prerequisites listed.</p>
               {% endif %}
             </div>
-          </details>
-          {% endfor %}
+            </details>
+            {% endfor %}
+          </div>
+        </details>
         {% endfor %}
       {% else %}
         <p class="muted" style="margin-top:10px;">Great! Nothing is locked right now.</p>

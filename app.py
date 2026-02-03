@@ -680,8 +680,10 @@ def render_md(text):
     out = []
     in_list = False
     in_code = False
+    in_math = False
     code_lines = []
     code_lang = ""
+    math_lines = []
 
     lines = raw.split("\n")
     for line in lines:
@@ -701,6 +703,33 @@ def render_md(text):
 
         if in_code:
             code_lines.append(line)
+            continue
+
+        trimmed = line.strip()
+        if not in_math:
+            if trimmed.startswith("$$") and trimmed.endswith("$$") and len(trimmed) > 4:
+                if in_list:
+                    out.append("</ul>")
+                    in_list = False
+                content = trimmed[2:-2].strip()
+                math_html = escape(content)
+                out.append(f"<div class=\"md-math\">$$\n{math_html}\n$$</div>")
+                continue
+            if trimmed == "$$":
+                if in_list:
+                    out.append("</ul>")
+                    in_list = False
+                in_math = True
+                math_lines = []
+                continue
+        else:
+            if trimmed == "$$":
+                math_html = escape("\n".join(math_lines))
+                out.append(f"<div class=\"md-math\">$$\n{math_html}\n$$</div>")
+                in_math = False
+                math_lines = []
+                continue
+            math_lines.append(line)
             continue
 
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
@@ -732,6 +761,9 @@ def render_md(text):
         lang_attr = f' data-lang="{escape(code_lang)}"' if code_lang else ""
         code_html = escape("\n".join(code_lines))
         out.append(f"<pre class=\"md-code\"><code{lang_attr}>{code_html}</code></pre>")
+    if in_math:
+        math_html = escape("\n".join(math_lines))
+        out.append(f"<div class=\"md-math\">$$\n{math_html}\n$$</div>")
 
     if in_list:
         out.append("</ul>")

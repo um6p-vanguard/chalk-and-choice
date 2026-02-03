@@ -66,7 +66,7 @@
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
         <div class="muted" style="font-size:0.9rem;">Question {{ current_index + 1 }} of {{ total_questions }}{% if q.title %} • <span data-markdown-inline>{{ q.title }}</span>{% endif %}</div>
-        <div class="markdown-block q" style="margin:8px 0 12px 0;" data-markdown-prompt="{{ q.id }}">{{ q.prompt }}</div>
+        <div class="markdown-block question-prompt" style="margin:8px 0 12px 0;" data-markdown-prompt="{{ q.id }}">{{ q.prompt }}</div>
         {% if q.code_snippet %}
           <pre class="code-block"><code>{{ q.code_snippet }}</code></pre>
         {% endif %}

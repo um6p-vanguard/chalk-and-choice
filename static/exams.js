@@ -23,14 +23,21 @@
     const parts = [];
     let inList = false;
     let inCode = false;
+    let inMath = false;
     let codeLines = [];
     let codeLang = "";
+    let mathLines = [];
     const flushCode = () => {
       const langAttr = codeLang ? ` data-lang="${escapeHtml(codeLang)}"` : "";
       const codeHtml = escapeHtml(codeLines.join("\n"));
       parts.push(`<pre class="md-code"><code${langAttr}>${codeHtml}</code></pre>`);
       codeLines = [];
       codeLang = "";
+    };
+    const flushMath = () => {
+      const mathHtml = escapeHtml(mathLines.join("\n"));
+      parts.push(`<div class="md-math">$$\n${mathHtml}\n$$</div>`);
+      mathLines = [];
     };
     lines.forEach((line) => {
       const fence = line.trim().match(/^```(.*)$/);
@@ -50,6 +57,36 @@
       }
       if (inCode) {
         codeLines.push(line);
+        return;
+      }
+      const trimmed = line.trim();
+      if (!inMath) {
+        if (trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
+          if (inList) {
+            parts.push("</ul>");
+            inList = false;
+          }
+          const content = trimmed.slice(2, -2).trim();
+          const mathHtml = escapeHtml(content);
+          parts.push(`<div class="md-math">$$\n${mathHtml}\n$$</div>`);
+          return;
+        }
+        if (trimmed === "$$") {
+          if (inList) {
+            parts.push("</ul>");
+            inList = false;
+          }
+          inMath = true;
+          mathLines = [];
+          return;
+        }
+      } else {
+        if (trimmed === "$$") {
+          flushMath();
+          inMath = false;
+          return;
+        }
+        mathLines.push(line);
         return;
       }
       const heading = line.match(/^(#{1,6})\s+(.*)$/);
@@ -83,6 +120,9 @@
     });
     if (inCode) {
       flushCode();
+    }
+    if (inMath) {
+      flushMath();
     }
     if (inList) parts.push("</ul>");
     return parts.join("");
