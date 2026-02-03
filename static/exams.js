@@ -775,6 +775,7 @@
     const customButtons = root.querySelectorAll("[data-run-custom]");
     if (!buttons.length && !customButtons.length) return;
     let pyodidePromise = null;
+    let packagesPromise = null;
 
     const ensurePyodide = async () => {
       if (!window.loadPyodide) {
@@ -784,6 +785,14 @@
         pyodidePromise = loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/" });
       }
       return pyodidePromise;
+    };
+    const ensurePackages = async () => {
+      const pyodide = await ensurePyodide();
+      if (!packagesPromise) {
+        packagesPromise = pyodide.loadPackage(["numpy", "matplotlib"]);
+      }
+      await packagesPromise;
+      return pyodide;
     };
 
     const logUrl = root.dataset.runLogUrl;
@@ -983,6 +992,28 @@
           details.appendChild(errLabel);
           details.appendChild(errBlock);
         }
+        if (Array.isArray(sample.plot_images) && sample.plot_images.length) {
+          const plotWrap = document.createElement("div");
+          plotWrap.style.marginTop = "10px";
+          sample.plot_images.forEach((imgData, idx) => {
+            if (!imgData) return;
+            const label = document.createElement("div");
+            label.className = "muted";
+            label.style.marginTop = idx === 0 ? "0" : "8px";
+            label.textContent = `Plot ${idx + 1}`;
+            const img = document.createElement("img");
+            img.src = `data:image/png;base64,${imgData}`;
+            img.alt = `Plot ${idx + 1}`;
+            img.style.display = "block";
+            img.style.maxWidth = "100%";
+            img.style.border = "1px solid #1f2937";
+            img.style.borderRadius = "8px";
+            img.style.marginTop = "6px";
+            plotWrap.appendChild(label);
+            plotWrap.appendChild(img);
+          });
+          details.appendChild(plotWrap);
+        }
 
         card.appendChild(toggle);
         card.appendChild(details);
@@ -991,14 +1022,50 @@
     };
 
     const executeSamples = async (triggerBtn, samples, modeOverride, codeOverride) => {
-      const pyodide = await ensurePyodide();
+      const pyodide = await ensurePackages();
       const codeInput = root.querySelector(`[data-code-input="${triggerBtn.dataset.question}"]`);
       const codeValue = codeOverride !== undefined ? codeOverride : (codeInput ? codeInput.value : "");
       pyodide.globals.set("runner_code", codeValue);
       pyodide.globals.set("runner_samples", samples);
       pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
       const output = await pyodide.runPythonAsync(`
-import io, sys, traceback, json, builtins, ast
+import io, sys, traceback, json, builtins, ast, base64
+
+plt = None
+np = None
+try:
+    import numpy as np  # preload to keep user imports fast
+except Exception:
+    np = None
+try:
+    import matplotlib
+    try:
+        matplotlib.use("module://matplotlib_pyodide.wasm_backend")
+    except Exception:
+        pass
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
+
+def _collect_plots():
+    if plt is None:
+        return []
+    images = []
+    try:
+        figs = list(plt.get_fignums())
+        for num in figs:
+            fig = plt.figure(num)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+        plt.close("all")
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+        return []
+    return images
 
 code = str(runner_code)
 samples = runner_samples.to_py()
@@ -1103,6 +1170,7 @@ for sample in samples:
             else:
                 if output_value.strip() != expected_output:
                     status = "mismatch"
+        plot_images = _collect_plots()
 
         results.append({
             "name": name,
@@ -1112,6 +1180,7 @@ for sample in samples:
             "expected": expected_output_display,
             "error": error_text,
             "mode": "function",
+            "plot_images": plot_images,
         })
 
     else:
@@ -1150,6 +1219,7 @@ for sample in samples:
 
         if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
             status = "mismatch"
+        plot_images = _collect_plots()
 
         results.append({
             "name": name,
@@ -1159,6 +1229,7 @@ for sample in samples:
             "expected": expected_output,
             "error": error_text,
             "mode": "script",
+            "plot_images": plot_images,
         })
 
 json.dumps(results)
@@ -1194,7 +1265,12 @@ json.dumps(results)
         try {
           const parsed = await executeSamples(btn, samples, btn.getAttribute("data-mode") || "script", codeArea.value);
           renderResults(resultsContainer, parsed, summaryEl);
-          postLog(questionId, parsed);
+          const sanitized = parsed.map((entry) => {
+            if (!entry || typeof entry !== "object") return entry;
+            const { plot_images, ...rest } = entry;
+            return rest;
+          });
+          postLog(questionId, sanitized);
         } catch (err) {
           console.error(err);
           resultsContainer.textContent = `Unable to run samples: ${err.message || err}`;
