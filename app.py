@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -2331,11 +2331,56 @@ def _disallow_input(*args, **kwargs):
 
 SAFE_CODE_BUILTINS["input"] = _disallow_input
 
+# Allow limited imports for numerical methods / plotting
+ALLOWED_CODE_IMPORTS = {"numpy", "matplotlib"}
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level and level > 0:
+        raise ImportError("Relative imports are not allowed.")
+    base = (name or "").split(".")[0]
+    if base not in ALLOWED_CODE_IMPORTS:
+        raise ImportError(f"Import of '{name}' is not allowed.")
+    module = importlib.import_module(name)
+    # Emulate default __import__ return behavior
+    if fromlist:
+        return module
+    return importlib.import_module(base)
+
+SAFE_CODE_BUILTINS["__import__"] = _safe_import
+
 def safe_env():
     """
     Return a fresh environment dict with safe builtins.
     """
     return {"__builtins__": dict(SAFE_CODE_BUILTINS)}
+
+def _init_plot_backend():
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+    except Exception:
+        return False
+    return True
+
+def _collect_plot_images():
+    try:
+        import matplotlib.pyplot as plt
+    except Exception:
+        return []
+    images = []
+    try:
+        for num in plt.get_fignums():
+            fig = plt.figure(num)
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+        plt.close("all")
+    except Exception:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
+    return images
 
 def _run_code_tests_worker(code_text, tests, mode):
     results = []
@@ -2358,6 +2403,7 @@ def _run_code_tests_worker(code_text, tests, mode):
     mode = (mode or "script").strip().lower()
     if mode not in ("script", "function"):
         mode = "script"
+    _init_plot_backend()
     env_base = None
     if mode == "function":
         try:
@@ -2376,6 +2422,7 @@ def _run_code_tests_worker(code_text, tests, mode):
                     "expected": test.get("expected") or test.get("output") or "",
                     "error": tb,
                     "hidden": hidden,
+                    "plot_images": [],
                 })
             return results
     for idx, test in enumerate(tests):
@@ -2415,6 +2462,7 @@ def _run_code_tests_worker(code_text, tests, mode):
                     error_text = traceback.format_exc()
                 finally:
                     sys.stdout = original_stdout
+            plot_images = _collect_plot_images()
             if status == "passed" and expected_trimmed:
                 if expected_literal_defined:
                     if result_value != expected_literal:
@@ -2430,6 +2478,7 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "expected": expected_display,
                 "error": error_text,
                 "hidden": hidden,
+                "plot_images": plot_images,
             })
         else:
             sample_input = test.get("input") or ""
@@ -2457,6 +2506,7 @@ def _run_code_tests_worker(code_text, tests, mode):
                 status = "error"
                 error_text = traceback.format_exc()
             output_value = stdout_buffer.getvalue()
+            plot_images = _collect_plot_images()
             if status == "passed" and expected_output.strip():
                 if output_value.rstrip() != expected_output.rstrip():
                     status = "mismatch"
@@ -2469,6 +2519,7 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "expected": expected_output,
                 "error": error_text,
                 "hidden": hidden,
+                "plot_images": plot_images,
             })
     return results
 

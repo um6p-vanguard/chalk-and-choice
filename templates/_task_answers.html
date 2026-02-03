@@ -248,6 +248,14 @@
                         <div class="muted">Expected</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
                       </div>
+                      {% if case.plot_images %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Plots</div>
+                          {% for img in case.plot_images %}
+                            <img src="data:image/png;base64,{{ img }}" alt="Plot {{ loop.index }}" style="display:block; max-width:100%; border:1px solid #1f2937; border-radius:8px; margin-top:6px;">
+                          {% endfor %}
+                        </div>
+                      {% endif %}
                       {% if case.error %}
                         <div style="margin-top:8px;">
                           <div class="muted">Error</div>
@@ -288,6 +296,14 @@
                         <div class="muted">Expected</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
                       </div>
+                      {% if case.plot_images %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Plots</div>
+                          {% for img in case.plot_images %}
+                            <img src="data:image/png;base64,{{ img }}" alt="Plot {{ loop.index }}" style="display:block; max-width:100%; border:1px solid #1f2937; border-radius:8px; margin-top:6px;">
+                          {% endfor %}
+                        </div>
+                      {% endif %}
                       {% if case.error %}
                         <div style="margin-top:8px;">
                           <div class="muted">Error</div>
