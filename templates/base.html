@@ -100,6 +100,9 @@
       options: {
         skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
       },
+      startup: {
+        typeset: false,
+      },
     };
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
@@ -142,6 +145,13 @@
     <div class="muted">SASE Portal</div>
     {% block scripts %}{% endblock %}
   </div>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
+        window.MathJax.typesetPromise().catch(() => {});
+      }
+    });
+  </script>
   {% if student_name %}
   <script>
     (function () {
