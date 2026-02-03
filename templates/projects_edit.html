@@ -21,6 +21,12 @@
     <input type="text" name="title" value="{{ form_data.title }}" required>
     
     <div class="sp"></div>
+
+    <label>Collection</label>
+    <input type="text" name="collection" value="{{ form_data.collection }}" placeholder="comp101">
+    <p class="muted" style="margin-top:4px; font-size:0.9rem;">Used to group projects on the student view.</p>
+    
+    <div class="sp"></div>
     
     <label>Description</label>
     <textarea name="description" rows="4" placeholder="Short description of the project (supports markdown)">{{ form_data.description }}</textarea>

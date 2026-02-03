@@ -16,8 +16,13 @@
 <div class="sp"></div>
 
 {% if tab == 'completed' %}
-  {% if completed_projects %}
-    {% for row in completed_projects %}
+  {% if completed_collections %}
+    {% for group in completed_collections %}
+      <div class="card" style="margin-bottom:12px; padding:12px;">
+        <div class="muted" style="font-size:0.85rem;">Collection</div>
+        <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
+      </div>
+      {% for row in group.rows %}
       <details class="card" style="margin-bottom:16px;">
         <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
           <div>
@@ -86,6 +91,7 @@
           {% endif %}
         </div>
       </details>
+      {% endfor %}
     {% endfor %}
   {% else %}
     <div class="card">
@@ -93,8 +99,13 @@
     </div>
   {% endif %}
 {% else %}
-  {% if available_projects %}
-    {% for row in available_projects %}
+  {% if available_collections %}
+    {% for group in available_collections %}
+      <div class="card" style="margin-bottom:12px; padding:12px;">
+        <div class="muted" style="font-size:0.85rem;">Collection</div>
+        <h3 style="margin:4px 0 0 0;">{{ group.name }}</h3>
+      </div>
+      {% for row in group.rows %}
       <details class="card" style="margin-bottom:16px;">
         <summary class="row" style="justify-content:space-between; align-items:center; cursor:pointer;">
           <div>
@@ -173,6 +184,7 @@
           {% endif %}
         </div>
       </details>
+      {% endfor %}
     {% endfor %}
   {% else %}
     <div class="card">
@@ -185,26 +197,32 @@
   <div class="card">
     <h3 style="margin:0;">Locked projects</h3>
       <p class="muted" style="margin-top:6px;">Finish the listed prerequisite projects to unlock these.</p>
-      {% if locked_projects %}
-        {% for row in locked_projects %}
-        <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
-          <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
-          <div style="margin-top:8px;">
-            {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
-            <p class="muted" style="margin:4px 0;">
-              <span style="color:#f87171;">Locked — finish prerequisites.</span>
-            </p>
-            {% if row.dependencies %}
-              <ul style="margin:6px 0 0 18px;">
-                {% for dep in row.dependencies %}
-                  <li>{{ dep }}</li>
-                {% endfor %}
-              </ul>
-            {% else %}
-              <p class="muted" style="margin:6px 0 0 0;">No prerequisites listed.</p>
-            {% endif %}
-          </div>
-        </details>
+      {% if locked_collections %}
+        {% for group in locked_collections %}
+        <div style="margin-top:12px;">
+          <div class="muted" style="font-size:0.85rem;">Collection</div>
+          <strong>{{ group.name }}</strong>
+        </div>
+          {% for row in group.rows %}
+          <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
+            <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
+            <div style="margin-top:8px;">
+              {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
+              <p class="muted" style="margin:4px 0;">
+                <span style="color:#f87171;">Locked — finish prerequisites.</span>
+              </p>
+              {% if row.dependencies %}
+                <ul style="margin:6px 0 0 18px;">
+                  {% for dep in row.dependencies %}
+                    <li>{{ dep }}</li>
+                  {% endfor %}
+                </ul>
+              {% else %}
+                <p class="muted" style="margin:6px 0 0 0;">No prerequisites listed.</p>
+              {% endif %}
+            </div>
+          </details>
+          {% endfor %}
         {% endfor %}
       {% else %}
         <p class="muted" style="margin-top:10px;">Great! Nothing is locked right now.</p>

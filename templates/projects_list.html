@@ -11,6 +11,7 @@
         <tr>
           <th>Code</th>
           <th>Title</th>
+          <th>Collection</th>
           <th>Tasks</th>
           <th>Required</th>
           <th>Published</th>
@@ -22,6 +23,7 @@
         <tr>
           <td><code>{{ project.code }}</code></td>
           <td>{{ project.title }}</td>
+          <td>{{ project.collection or "comp101" }}</td>
           <td>{{ project.tasks|length }}</td>
           <td>
             {% if project.required_task_count %}

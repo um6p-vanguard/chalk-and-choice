@@ -18,7 +18,7 @@ from models import (db, Student, User, Form,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
-from sqlalchemy import func
+from sqlalchemy import func, inspect, text
 from sqlalchemy.orm import subqueryload
 
 # --------------------------------------------------------------------
@@ -111,6 +111,32 @@ LEADERBOARD_METRICS = {
     "logtime": {"label": "Log time", "description": "Student activity time based on online sessions."},
 }
 
+def _ensure_project_collection_column():
+    try:
+        inspector = inspect(db.engine)
+        if "projects" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("projects")}
+        if "collection" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE projects "
+                        "ADD COLUMN collection VARCHAR(64) NOT NULL DEFAULT 'comp101'"
+                    )
+                )
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE projects "
+                    "SET collection='comp101' "
+                    "WHERE collection IS NULL OR collection=''"
+                )
+            )
+    except Exception:
+        # Fail open: don't block app start if migration fails
+        pass
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -122,6 +148,7 @@ def create_app(db_path=DB_URI):
     db.init_app(app)
     with app.app_context():
         db.create_all()
+        _ensure_project_collection_column()
     return app
 
 app = create_app()
@@ -3772,6 +3799,7 @@ def projects_delete(code):
 def projects_new():
     form_data = {
         "title": request.form.get("title") or "",
+        "collection": request.form.get("collection") or "comp101",
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
         "required_task_count": request.form.get("required_task_count") or "",
@@ -3783,6 +3811,7 @@ def projects_new():
         if not verify_csrf():
             abort(400, "bad csrf")
         title = form_data["title"].strip()
+        collection = form_data["collection"].strip() or "comp101"
         if not title:
             error = "Project title is required."
         required_count = None
@@ -3813,6 +3842,7 @@ def projects_new():
             project = Project(
                 code=code,
                 title=title,
+                collection=collection,
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
                 required_task_count=required_count,
@@ -3865,6 +3895,7 @@ def projects_edit(code):
             abort(400, "bad csrf")
         
         title = (request.form.get("title") or "").strip()
+        collection = (request.form.get("collection") or "").strip()
         description = (request.form.get("description") or "").strip()
         instructions = (request.form.get("instructions") or "").strip()
         required_task_count = (request.form.get("required_task_count") or "").strip()
@@ -3874,6 +3905,7 @@ def projects_edit(code):
         
         if not error:
             project.title = title
+            project.collection = collection or "comp101"
             project.description = description or None
             project.instructions = instructions or None
             
@@ -3891,6 +3923,7 @@ def projects_edit(code):
     
     form_data = {
         "title": project.title,
+        "collection": project.collection or "comp101",
         "description": project.description or "",
         "instructions": project.instructions or "",
         "required_task_count": str(project.required_task_count) if project.required_task_count else "",
@@ -4349,6 +4382,19 @@ def student_projects():
             available_rows.append(row)
         else:
             locked_rows.append(row)
+    def group_rows(rows):
+        groups = {}
+        order = []
+        for row in rows:
+            name = (row["project"].collection or "comp101").strip() or "comp101"
+            if name not in groups:
+                groups[name] = []
+                order.append(name)
+            groups[name].append(row)
+        return [{"name": name, "rows": groups[name]} for name in order]
+    available_groups = group_rows(available_rows)
+    locked_groups = group_rows(locked_rows)
+    completed_groups = group_rows(completed_rows)
     tab = request.args.get("tab", "active").lower()
     if tab not in ("active", "completed"):
         tab = "active"
@@ -4357,6 +4403,9 @@ def student_projects():
         available_projects=available_rows,
         locked_projects=locked_rows,
         completed_projects=completed_rows,
+        available_collections=available_groups,
+        locked_collections=locked_groups,
+        completed_collections=completed_groups,
         selected_tab=tab,
         user=current_user(),
         student_name=student.name,

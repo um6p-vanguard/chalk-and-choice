@@ -278,6 +278,7 @@ class Project(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(12), unique=True, index=True, nullable=False)
     title = db.Column(db.String(255), nullable=False)
+    collection = db.Column(db.String(64), nullable=False, default="comp101")
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)
     required_task_count = db.Column(db.Integer, nullable=True)
