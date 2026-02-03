@@ -19,17 +19,56 @@
   };
 
   const renderMarkdownText = (text) => {
-    const lines = (text || "").split(/\n/);
+    const lines = (text || "").replace(/\r\n/g, "\n").split("\n");
     const parts = [];
     let inList = false;
+    let inCode = false;
+    let codeLines = [];
+    let codeLang = "";
+    const flushCode = () => {
+      const langAttr = codeLang ? ` data-lang="${escapeHtml(codeLang)}"` : "";
+      const codeHtml = escapeHtml(codeLines.join("\n"));
+      parts.push(`<pre class="md-code"><code${langAttr}>${codeHtml}</code></pre>`);
+      codeLines = [];
+      codeLang = "";
+    };
     lines.forEach((line) => {
+      const fence = line.trim().match(/^```(.*)$/);
+      if (fence) {
+        if (inCode) {
+          flushCode();
+          inCode = false;
+        } else {
+          if (inList) {
+            parts.push("</ul>");
+            inList = false;
+          }
+          inCode = true;
+          codeLang = (fence[1] || "").trim();
+        }
+        return;
+      }
+      if (inCode) {
+        codeLines.push(line);
+        return;
+      }
+      const heading = line.match(/^(#{1,6})\s+(.*)$/);
+      if (heading) {
+        if (inList) {
+          parts.push("</ul>");
+          inList = false;
+        }
+        const level = heading[1].length;
+        parts.push(`<h${level} class="md-heading">${inlineMarkdown(heading[2].trim())}</h${level}>`);
+        return;
+      }
       const listMatch = line.match(/^\s*-\s+(.*)/);
       if (listMatch) {
         if (!inList) {
-          parts.push("<ul style=\"margin:6px 0 6px 18px; padding:0;\">");
+          parts.push("<ul class=\"md-list\">");
           inList = true;
         }
-        parts.push(`<li style="margin:2px 0;">${inlineMarkdown(listMatch[1])}</li>`);
+        parts.push(`<li>${inlineMarkdown(listMatch[1])}</li>`);
         return;
       }
       if (inList) {
@@ -39,14 +78,27 @@
       if (!line.trim()) {
         parts.push("<br>");
       } else {
-        parts.push(`<p style="margin:4px 0;">${inlineMarkdown(line)}</p>`);
+        parts.push(`<p class="md-p">${inlineMarkdown(line)}</p>`);
       }
     });
+    if (inCode) {
+      flushCode();
+    }
     if (inList) parts.push("</ul>");
     return parts.join("");
   };
 
   const renderMarkdownInline = (text) => inlineMarkdown(text || "").replace(/\n/g, "<br>");
+
+  const typesetMath = (root) => {
+    const mj = window.MathJax;
+    if (!mj || typeof mj.typesetPromise !== "function") return;
+    const nodes = root ? [root] : [document.body];
+    if (typeof mj.typesetClear === "function") {
+      mj.typesetClear(nodes);
+    }
+    mj.typesetPromise(nodes).catch(() => {});
+  };
 
   function disableClipboardOnInput(element) {
     if (!element || element.dataset.clipboardGuard === "1") return;
@@ -1453,6 +1505,7 @@ json.dumps(results)
       const preview = document.querySelector(`[data-markdown-preview="${qid}"]`);
       if (!preview) return;
       preview.innerHTML = renderMarkdownText(area.value || "");
+      typesetMath(preview);
     };
     areas.forEach((area) => {
       disableClipboardOnInput(area);
@@ -1476,6 +1529,7 @@ json.dumps(results)
       const content = node.textContent || "";
       node.innerHTML = renderMarkdownInline(content);
     });
+    typesetMath();
   }
 
   function setupCodeReset() {

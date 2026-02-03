@@ -40,7 +40,7 @@
           <tr>
             <td>
               <div><strong>{{ task.title }}</strong></div>
-              {% if task.description %}<div class="muted" style="font-size:0.9rem;">{{ task.description }}</div>{% endif %}
+              {% if task.description %}<div class="muted markdown-block" style="font-size:0.9rem;">{{ task.description|markdown }}</div>{% endif %}
             </td>
             <td>
               {% if sub %}

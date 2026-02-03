@@ -29,8 +29,8 @@
       <div style="border:1px solid #1f2937; border-radius:12px; padding:14px; background:#0b1220;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
           <div style="flex:1;">
-            <div class="muted" style="font-size:0.9rem;">Question {{ loop.index }}{% if q.title %} • {{ q.title }}{% endif %}</div>
-            {% if q.prompt %}<p style="margin:6px 0 0 0; white-space:pre-line;">{{ q.prompt }}</p>{% endif %}
+            <div class="muted" style="font-size:0.9rem;">Question {{ loop.index }}{% if q.title %} • <span>{{ q.title|markdown_inline }}</span>{% endif %}</div>
+            {% if q.prompt %}<div class="markdown-block" style="margin:6px 0 0 0;">{{ q.prompt|markdown }}</div>{% endif %}
           </div>
           <div class="row" style="gap:6px; flex-wrap:wrap; justify-content:flex-end;">
             {% if show_meta %}
@@ -46,7 +46,7 @@
           {% if q.statement %}
             <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px dashed #334155;">
               <strong>Problem statement</strong>
-              <p class="muted" style="margin:6px 0 0 0; white-space:pre-line;">{{ q.statement }}</p>
+              <div class="markdown-block muted" style="margin:6px 0 0 0;">{{ q.statement|markdown }}</div>
             </div>
           {% endif %}
           {% if q.mode == "function" and q.function_signature %}
@@ -73,7 +73,7 @@
                   {% set chosen = idx in selected %}
                   <div style="border:1px solid {{ '#38bdf8' if chosen else '#1f2937' }}; border-radius:10px; padding:10px; background:{{ '#0b1530' if chosen else '#0b1220' }};">
                     <div class="muted" style="font-size:0.85rem;">Option {{ loop.index }}</div>
-                    <div style="margin-top:6px;">{{ opt }}</div>
+                    <div class="markdown-block" style="margin-top:6px;">{{ opt|markdown }}</div>
                     {% if chosen %}
                       <span style="display:inline-block; margin-top:8px; font-size:0.8rem; padding:4px 8px; border-radius:14px; background:#0ea5e9; color:#0b1220;">Selected</span>
                     {% endif %}
@@ -114,7 +114,7 @@
             {% set filled = answer_val.split("||") if answer_val else [] %}
             <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;">
               {% for segment in segments %}
-                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if segment %}<span>{{ segment|markdown_inline }}</span>{% endif %}
                 {% if not loop.last %}
                   {% set val = filled[loop.index0] if loop.index0 < filled|length else "" %}
                   <span style="padding:6px 10px; border-radius:10px; background:#1f2937; border:1px solid #334155; min-width:80px; text-align:center;">{{ val or "—" }}</span>
@@ -127,7 +127,7 @@
             {% set filled = answer_val.split("||") if answer_val else [] %}
             <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center;">
               {% for segment in segments %}
-                {% if segment %}<span>{{ segment }}</span>{% endif %}
+                {% if segment %}<span>{{ segment|markdown_inline }}</span>{% endif %}
                 {% if not loop.last %}
                   {% set val = filled[loop.index0] if loop.index0 < filled|length else "" %}
                   <span style="padding:6px 10px; border-radius:10px; background:#1f2937; border:1px solid #334155; min-width:80px; text-align:center;">{{ val or "—" }}</span>
@@ -151,7 +151,7 @@
                     {% set opt = options[idx] if idx < (options|length) else "" %}
                     <li>
                       Option {{ idx + 1 }}
-                      {% if opt %}- {{ opt }}{% endif %}
+                      {% if opt %}- {{ opt|markdown_inline }}{% endif %}
                     </li>
                   {% endfor %}
                 </ul>
@@ -163,7 +163,7 @@
               {% if correct_tokens %}
                 <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
                   {% for tok in correct_tokens %}
-                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ tok }}</span>
+                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ tok|markdown_inline }}</span>
                   {% endfor %}
                 </div>
               {% else %}
@@ -174,7 +174,7 @@
               {% if answers_expected %}
                 <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
                   {% for ans in answers_expected %}
-                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ ans }}</span>
+                    <span style="padding:4px 8px; border-radius:10px; border:1px solid #334155; background:#0f172a;">{{ ans|markdown_inline }}</span>
                   {% endfor %}
                 </div>
                 {% if q.case_sensitive %}

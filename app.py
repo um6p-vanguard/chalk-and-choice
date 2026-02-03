@@ -711,9 +711,23 @@ def render_md(text):
 
     return Markup("".join(out))
 
+def render_md_inline(text):
+    if text is None:
+        return Markup("")
+    raw = str(text).replace("\r\n", "\n")
+    esc = escape(raw)
+    esc = re.sub(r"`([^`]+)`", r"<code>\1</code>", esc)
+    esc = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", esc)
+    esc = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", esc)
+    return Markup(esc.replace("\n", "<br>"))
+
 @app.template_filter("markdown")
 def markdown_filter(text):
     return render_md(text)
+
+@app.template_filter("markdown_inline")
+def markdown_inline_filter(text):
+    return render_md_inline(text)
 
 @app.before_request
 def update_student_last_seen():
