@@ -2332,7 +2332,7 @@ def _disallow_input(*args, **kwargs):
 SAFE_CODE_BUILTINS["input"] = _disallow_input
 
 # Allow limited imports for numerical methods / plotting
-ALLOWED_CODE_IMPORTS = {"numpy", "matplotlib"}
+ALLOWED_CODE_IMPORTS = {"numpy", "matplotlib", "math"}
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level and level > 0:
