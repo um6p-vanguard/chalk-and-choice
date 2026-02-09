@@ -707,8 +707,8 @@
     expectedLabel.textContent = "Expected return";
     wrapper.appendChild(expectedLabel);
 
-    const expectedInput = document.createElement("input");
-    expectedInput.type = "text";
+    const expectedInput = document.createElement("textarea");
+    expectedInput.rows = 3;
     expectedInput.dataset.field = "sample-expected";
     expectedInput.placeholder = "25";
     expectedInput.value = sample.expected || sample.output || "";
@@ -1112,8 +1112,8 @@ samples = runner_samples.to_py()
 mode = str(runner_mode)
 
 # ---- Hard limits (tune as you like) ----
-MAX_SETUP_OPS = 50_000    # for exec(code) in function mode
-MAX_RUN_OPS   = 200_000   # for each sample run
+MAX_SETUP_OPS = 500_000    # for exec(code) in function mode
+MAX_RUN_OPS   = 2_000_000  # for each sample run
 
 class TimeLimitExceeded(Exception):
     pass
