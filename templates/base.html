@@ -82,12 +82,21 @@
     .code-editor-shell { border:1px solid var(--border); border-radius:10px; background:#0b1220; margin-top:8px; overflow:hidden; }
     .code-editor-host { height:320px; }
     /* Markdown helpers */
-    .md-heading { margin:10px 0 6px; line-height:1.3; }
-    .md-p { margin:6px 0; line-height:1.55; }
-    .md-list { margin:6px 0 6px 18px; padding:0; line-height:1.5; }
-    .md-list li { margin:4px 0; }
-    .md-code { background:#0b1220; border:1px solid var(--border); border-radius:10px; padding:12px; margin:10px 0; overflow:auto; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
-    .md-code code { white-space:pre; display:block; }
+    .md-block { line-height:1.6; overflow-wrap:anywhere; }
+    .md-block > :first-child { margin-top:0; }
+    .md-block > :last-child { margin-bottom:0; }
+    .md-block h1, .md-block h2, .md-block h3, .md-block h4, .md-block h5, .md-block h6, .md-heading { margin:10px 0 6px; line-height:1.3; }
+    .md-block p, .md-p { margin:6px 0; line-height:1.55; }
+    .md-block ul, .md-block ol, .md-list { margin:6px 0 6px 18px; padding:0; line-height:1.5; }
+    .md-block li, .md-list li { margin:4px 0; }
+    .md-block blockquote { margin:10px 0; padding:8px 12px; border-left:3px solid var(--border); color:#cbd5e1; background:#0b1220; border-radius:8px; }
+    .md-block pre, .md-code { background:#0b1220; border:1px solid var(--border); border-radius:10px; padding:12px; margin:10px 0; overflow:auto; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .md-block pre code, .md-code code { white-space:pre; display:block; background:transparent; }
+    .md-block code { background:#0b1220; border:1px solid var(--border); border-radius:6px; padding:1px 4px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .md-block hr { border:none; border-top:1px solid var(--border); margin:12px 0; }
+    .md-block table { width:100%; border-collapse:collapse; margin:10px 0; }
+    .md-block th, .md-block td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
+    .md-block img { max-width:100%; border-radius:8px; }
     .md-math { margin:10px 0; }
   </style>
   <script>

@@ -7,8 +7,8 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <label>Title</label>
     <input type="text" name="title" required value="{{ form.title }}">
-    <label>Body</label>
-    <textarea name="body" rows="10" required>{{ form.body }}</textarea>
+    <label>Body (Markdown)</label>
+    <textarea name="body" rows="10" required placeholder="# Title&#10;&#10;- bullet&#10;1. ordered&#10;[link](https://example.com)&#10;&#10;```python&#10;print('hello')&#10;```">{{ form.body }}</textarea>
     <label style="display:flex; align-items:center; gap:6px; margin-top:10px;">
       <input type="checkbox" name="is_published" value="1" {% if form.is_published %}checked{% endif %}> Published
     </label>

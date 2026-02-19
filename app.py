@@ -9,6 +9,14 @@ from werkzeug.utils import secure_filename
 from werkzeug.exceptions import NotFound
 from itsdangerous import URLSafeSerializer
 from markupsafe import Markup, escape
+try:
+    import markdown as markdown_lib
+except Exception:
+    markdown_lib = None
+try:
+    import bleach
+except Exception:
+    bleach = None
 
 from models import (db, Student, User, Form,
                     FormResponse,
@@ -663,22 +671,144 @@ def verify_csrf(form_field="csrf"):
 def inject_csrf():
     return {"csrf_token": csrf_token}
 
-# Minimal markdown renderer with headings, inline code, fenced code blocks, lists.
-def render_md(text):
-    if text is None:
-        return Markup("")
+# Markdown rendering helpers.
+_MD_BLOCKED_URL_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.IGNORECASE)
+_MD_EXTENSIONS = ["extra", "sane_lists", "nl2br"]
 
-    raw = str(text).replace("\r\n", "\n")
 
-    def fmt_inline(chunk: str) -> str:
-        esc = escape(chunk)
-        esc = re.sub(r"`([^`]+)`", r"<code>\1</code>", esc)
-        esc = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", esc)
-        esc = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", esc)
-        return esc
+def _safe_markdown_url(url):
+    value = (url or "").strip()
+    if not value:
+        return "#"
+    return "#" if _MD_BLOCKED_URL_RE.match(value) else value
 
+
+def _inline_md_basic(chunk: str) -> str:
+    esc = str(escape(chunk or ""))
+    esc = re.sub(r"`([^`]+)`", r"<code>\1</code>", esc)
+    esc = re.sub(r"~~([^~]+)~~", r"<del>\1</del>", esc)
+    esc = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", esc)
+    esc = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", esc)
+
+    def replace_links(match):
+        label = match.group(1)
+        href = _safe_markdown_url(match.group(2))
+        return (
+            f'<a href="{escape(href)}" target="_blank" '
+            f'rel="nofollow noopener noreferrer">{label}</a>'
+        )
+
+    esc = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", replace_links, esc)
+    return esc
+
+
+def _extract_math_blocks(raw):
+    lines = raw.split("\n")
+    out_lines = []
+    math_blocks = {}
+    in_math = False
+    math_lines = []
+    math_idx = 0
+
+    def add_math_block(content):
+        nonlocal math_idx
+        token = f"@@MD_MATH_BLOCK_{math_idx}@@"
+        math_idx += 1
+        math_html = escape(content)
+        math_blocks[token] = f"<div class=\"md-math\">$$\n{math_html}\n$$</div>"
+        return token
+
+    for line in lines:
+        trimmed = line.strip()
+        if in_math:
+            if trimmed == "$$":
+                out_lines.append(add_math_block("\n".join(math_lines)))
+                in_math = False
+                math_lines = []
+                continue
+            math_lines.append(line)
+            continue
+        single_line_math = re.match(r"^\s*\$\$(.+?)\$\$\s*$", line)
+        if single_line_math:
+            out_lines.append(add_math_block(single_line_math.group(1).strip()))
+            continue
+        if trimmed == "$$":
+            in_math = True
+            math_lines = []
+            continue
+        out_lines.append(line)
+
+    if in_math:
+        out_lines.append(add_math_block("\n".join(math_lines)))
+
+    return "\n".join(out_lines), math_blocks
+
+
+def _restore_math_blocks(rendered, math_blocks):
+    if not math_blocks:
+        return rendered
+    html = rendered
+    for token, replacement in math_blocks.items():
+        html = html.replace(f"<p>{token}</p>", replacement)
+        html = html.replace(token, replacement)
+    return html
+
+
+def _sanitize_md_html(rendered):
+    if bleach is None:
+        return rendered
+
+    allowed_tags = set(getattr(bleach.sanitizer, "ALLOWED_TAGS", set()))
+    allowed_tags.update(
+        {
+            "p", "br",
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "ul", "ol", "li",
+            "pre", "code",
+            "blockquote", "hr",
+            "table", "thead", "tbody", "tr", "th", "td",
+            "del",
+            "img",
+        }
+    )
+    allowed_attrs = dict(getattr(bleach.sanitizer, "ALLOWED_ATTRIBUTES", {}))
+    allowed_attrs.update(
+        {
+            "a": ["href", "title", "rel", "target"],
+            "code": ["class"],
+            "img": ["src", "alt", "title"],
+        }
+    )
+    allowed_protocols = set(getattr(bleach.sanitizer, "ALLOWED_PROTOCOLS", {"http", "https", "mailto"}))
+    allowed_protocols.update({"http", "https", "mailto"})
+
+    cleaned = bleach.clean(
+        rendered,
+        tags=allowed_tags,
+        attributes=allowed_attrs,
+        protocols=allowed_protocols,
+        strip=True,
+        strip_comments=True,
+    )
+
+    def link_attrs_callback(attrs, new=False):
+        href = attrs.get((None, "href"), "")
+        if not href:
+            return attrs
+        if _MD_BLOCKED_URL_RE.match(href):
+            attrs[(None, "href")] = "#"
+        attrs[(None, "target")] = "_blank"
+        rel = set(str(attrs.get((None, "rel"), "")).split())
+        rel.update({"nofollow", "noopener", "noreferrer"})
+        attrs[(None, "rel")] = " ".join(sorted(rel))
+        return attrs
+
+    return bleach.linkify(cleaned, callbacks=[link_attrs_callback], skip_tags=["pre", "code"])
+
+
+def _render_md_basic(raw):
     out = []
-    in_list = False
+    list_kind = None
     in_code = False
     in_math = False
     code_lines = []
@@ -708,17 +838,17 @@ def render_md(text):
         trimmed = line.strip()
         if not in_math:
             if trimmed.startswith("$$") and trimmed.endswith("$$") and len(trimmed) > 4:
-                if in_list:
-                    out.append("</ul>")
-                    in_list = False
+                if list_kind:
+                    out.append(f"</{list_kind}>")
+                    list_kind = None
                 content = trimmed[2:-2].strip()
                 math_html = escape(content)
                 out.append(f"<div class=\"md-math\">$$\n{math_html}\n$$</div>")
                 continue
             if trimmed == "$$":
-                if in_list:
-                    out.append("</ul>")
-                    in_list = False
+                if list_kind:
+                    out.append(f"</{list_kind}>")
+                    list_kind = None
                 in_math = True
                 math_lines = []
                 continue
@@ -734,28 +864,35 @@ def render_md(text):
 
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
-            if in_list:
-                out.append("</ul>")
-                in_list = False
+            if list_kind:
+                out.append(f"</{list_kind}>")
+                list_kind = None
             level = len(heading.group(1))
-            content = fmt_inline(heading.group(2).strip())
+            content = _inline_md_basic(heading.group(2).strip())
             out.append(f"<h{level} class=\"md-heading\">{content}</h{level}>")
             continue
 
-        is_list = line.strip().startswith("- ")
-        if is_list:
-            if not in_list:
-                out.append("<ul class=\"md-list\">")
-                in_list = True
-            out.append(f"<li>{fmt_inline(line.strip()[2:])}</li>")
+        unordered = re.match(r"^\s*[-*+]\s+(.*)$", line)
+        ordered = re.match(r"^\s*\d+[.)]\s+(.*)$", line)
+        if unordered or ordered:
+            next_kind = "ul" if unordered else "ol"
+            if list_kind and list_kind != next_kind:
+                out.append(f"</{list_kind}>")
+                list_kind = None
+            if not list_kind:
+                css_class = "md-list md-list-ol" if next_kind == "ol" else "md-list"
+                out.append(f"<{next_kind} class=\"{css_class}\">")
+                list_kind = next_kind
+            item = unordered.group(1) if unordered else ordered.group(1)
+            out.append(f"<li>{_inline_md_basic(item)}</li>")
         else:
-            if in_list:
-                out.append("</ul>")
-                in_list = False
+            if list_kind:
+                out.append(f"</{list_kind}>")
+                list_kind = None
             if line.strip() == "":
                 out.append("<br>")
             else:
-                out.append(f"<p class=\"md-p\">{fmt_inline(line)}</p>")
+                out.append(f"<p class=\"md-p\">{_inline_md_basic(line)}</p>")
 
     if in_code:
         lang_attr = f' data-lang="{escape(code_lang)}"' if code_lang else ""
@@ -764,21 +901,39 @@ def render_md(text):
     if in_math:
         math_html = escape("\n".join(math_lines))
         out.append(f"<div class=\"md-math\">$$\n{math_html}\n$$</div>")
+    if list_kind:
+        out.append(f"</{list_kind}>")
 
-    if in_list:
-        out.append("</ul>")
+    return "".join(out)
 
-    return Markup("".join(out))
+
+def _render_md_html(raw):
+    if markdown_lib is None:
+        return _render_md_basic(raw)
+    try:
+        source, math_blocks = _extract_math_blocks(raw)
+        rendered = markdown_lib.markdown(source, extensions=_MD_EXTENSIONS, output_format="html5")
+        rendered = _sanitize_md_html(rendered)
+        return _restore_math_blocks(rendered, math_blocks)
+    except Exception:
+        return _render_md_basic(raw)
+
+
+def render_md(text):
+    if text is None:
+        return Markup("")
+    raw = str(text).replace("\r\n", "\n")
+    html = _render_md_html(raw).strip()
+    if not html:
+        return Markup("")
+    return Markup(f"<div class=\"md-block\">{html}</div>")
+
 
 def render_md_inline(text):
     if text is None:
         return Markup("")
     raw = str(text).replace("\r\n", "\n")
-    esc = escape(raw)
-    esc = re.sub(r"`([^`]+)`", r"<code>\1</code>", esc)
-    esc = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", esc)
-    esc = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", esc)
-    return Markup(esc.replace("\n", "<br>"))
+    return Markup(_inline_md_basic(raw).replace("\n", "<br>"))
 
 @app.template_filter("markdown")
 def markdown_filter(text):
