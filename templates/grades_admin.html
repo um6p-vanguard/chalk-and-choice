@@ -10,6 +10,8 @@
   {% endif %}
   <form method="post" style="margin-top:12px;">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="student_query" value="{{ search_filters.student_query }}">
+    <input type="hidden" name="assignment_query" value="{{ search_filters.assignment_query }}">
     <label>Student email</label>
     <input type="email" name="student_email" placeholder="student@example.com" required>
     <label>Assignment/Test name</label>
@@ -37,6 +39,8 @@
   <p class="muted" style="margin:6px 0;">Paste JSON or CSV with columns: <code>student_email</code>, <code>assignment</code>, <code>score</code>, <code>max_score</code>, <code>remarks</code>.</p>
   <form method="post" action="{{ url_for('grades_import') }}">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <input type="hidden" name="student_query" value="{{ search_filters.student_query }}">
+    <input type="hidden" name="assignment_query" value="{{ search_filters.assignment_query }}">
     <div class="row" style="align-items:center; gap:12px;">
       <label style="margin:0;">Format</label>
       <select name="payload_format" style="flex:0 0 160px;">
@@ -52,9 +56,31 @@
 <div class="sp"></div>
 
 <div class="card">
-  <div class="row" style="justify-content:space-between; align-items:center;">
-    <h3 style="margin:0;">Recent grades</h3>
-    <span class="muted">Showing latest {{ grades|length }} entries</span>
+  <div class="row" style="justify-content:space-between; align-items:flex-end; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h3 style="margin:0;">{{ "Filtered grades" if has_filters else "Recent grades" }}</h3>
+      <span class="muted">
+        {% if has_filters %}
+          Showing {{ grades|length }} matching entr{{ "y" if grades|length == 1 else "ies" }}
+        {% else %}
+          Showing latest {{ grades|length }} entries
+        {% endif %}
+      </span>
+    </div>
+    <form method="get" class="row" style="gap:8px; align-items:flex-end; flex-wrap:wrap;">
+      <div style="min-width:220px;">
+        <label style="margin-bottom:4px;">Search by student</label>
+        <input type="text" name="student_query" value="{{ search_filters.student_query }}" placeholder="Student name or email">
+      </div>
+      <div style="min-width:220px;">
+        <label style="margin-bottom:4px;">Search by assignment</label>
+        <input type="text" name="assignment_query" value="{{ search_filters.assignment_query }}" placeholder="Quiz 1">
+      </div>
+      <button class="btn" type="submit">Search</button>
+      <a class="btn" href="{{ url_for('grades_admin') }}">Clear</a>
+      <a class="btn" href="{{ url_for('grades_export', format='csv', student_query=search_filters.student_query, assignment_query=search_filters.assignment_query) }}">Export CSV</a>
+      <a class="btn" href="{{ url_for('grades_export', format='json', student_query=search_filters.student_query, assignment_query=search_filters.assignment_query) }}">Export JSON</a>
+    </form>
   </div>
   {% if grades %}
     <table style="margin-top:12px;">
@@ -79,6 +105,8 @@
           <td style="min-width:220px;">
             <form method="post" action="{{ url_for('grades_update', grade_id=grade.id) }}" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
               <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+              <input type="hidden" name="student_query" value="{{ search_filters.student_query }}">
+              <input type="hidden" name="assignment_query" value="{{ search_filters.assignment_query }}">
               <input type="number" name="score" step="0.01" min="0" value="{{ grade.score }}" style="width:80px;">
               <span class="muted">/</span>
               <input type="number" name="max_score" step="0.01" min="0" value="{{ grade.max_score }}" style="width:80px;">
@@ -91,7 +119,7 @@
       </tbody>
     </table>
   {% else %}
-    <p class="muted" style="margin-top:12px;">No grades recorded yet.</p>
+    <p class="muted" style="margin-top:12px;">{{ "No grades match the current search." if has_filters else "No grades recorded yet." }}</p>
   {% endif %}
 </div>
 {% endblock %}

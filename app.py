@@ -50,6 +50,51 @@ def _parse_date_only(value):
     except Exception:
         return None
 
+def _grades_search_filters_from_request(values):
+    return {
+        "student_query": (values.get("student_query") or "").strip(),
+        "assignment_query": (values.get("assignment_query") or "").strip(),
+    }
+
+def _grades_admin_url(filters=None):
+    filters = filters or {}
+    params = {}
+    if filters.get("student_query"):
+        params["student_query"] = filters["student_query"]
+    if filters.get("assignment_query"):
+        params["assignment_query"] = filters["assignment_query"]
+    return url_for("grades_admin", **params)
+
+def _grades_query(filters=None):
+    filters = filters or {}
+    student_query = (filters.get("student_query") or "").strip().lower()
+    assignment_query = (filters.get("assignment_query") or "").strip().lower()
+    query = Grade.query.options(subqueryload(Grade.student))
+    if student_query:
+        pattern = f"%{student_query}%"
+        query = query.outerjoin(Student, Student.id == Grade.student_id).filter(
+            db.or_(
+                func.lower(Grade.student_name).like(pattern),
+                func.lower(Student.email).like(pattern),
+            )
+        )
+    if assignment_query:
+        query = query.filter(func.lower(Grade.assignment).like(f"%{assignment_query}%"))
+    return query.order_by(Grade.created_at.desc())
+
+def _serialize_grade_export_row(grade):
+    return {
+        "id": grade.id,
+        "student_name": grade.student_name,
+        "student_email": (grade.student.email if grade.student else ""),
+        "assignment": grade.assignment,
+        "score": grade.score,
+        "max_score": grade.max_score,
+        "remarks": grade.remarks or "",
+        "created_at": (grade.created_at.isoformat() if grade.created_at else ""),
+        "updated_at": (grade.updated_at.isoformat() if grade.updated_at else ""),
+    }
+
 # --------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------
@@ -5439,6 +5484,7 @@ def projects_review_decision(submission_id):
 def grades_admin():
     message = session.pop("grades_status", None)
     error = session.pop("grades_error", None)
+    search_filters = _grades_search_filters_from_request(request.values)
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
@@ -5450,27 +5496,31 @@ def grades_admin():
         student = _find_student_by_email(student_email)
         if not student:
             session["grades_error"] = "Student not found for email provided."
-            return redirect(url_for("grades_admin"))
+            return redirect(_grades_admin_url(search_filters))
         if not assignment:
             session["grades_error"] = "Assignment/test name is required."
-            return redirect(url_for("grades_admin"))
+            return redirect(_grades_admin_url(search_filters))
         try:
             score = float(score_raw)
             max_score = float(max_raw)
         except Exception:
             session["grades_error"] = "Score and maximum score must be numbers."
-            return redirect(url_for("grades_admin"))
+            return redirect(_grades_admin_url(search_filters))
         _create_grade_entry(student, assignment, score, max_score, remarks)
         db.session.commit()
         session["grades_status"] = f"Recorded grade for {student.name}."
-        return redirect(url_for("grades_admin"))
+        return redirect(_grades_admin_url(search_filters))
 
-    grades = Grade.query.order_by(Grade.created_at.desc()).limit(200).all()
+    has_filters = bool(search_filters["student_query"] or search_filters["assignment_query"])
+    query = _grades_query(search_filters)
+    grades = query.all() if has_filters else query.limit(200).all()
     return render_template(
         "grades_admin.html",
         grades=grades,
+        has_filters=has_filters,
         message=message,
         error=error,
+        search_filters=search_filters,
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -5480,6 +5530,7 @@ def grades_admin():
 def grades_update(grade_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    search_filters = _grades_search_filters_from_request(request.form)
     grade = Grade.query.get_or_404(grade_id)
     score_raw = request.form.get("score") or ""
     max_raw = request.form.get("max_score") or ""
@@ -5489,17 +5540,18 @@ def grades_update(grade_id):
         grade.max_score = float(max_raw)
     except Exception:
         session["grades_error"] = "Score and maximum score must be numbers."
-        return redirect(url_for("grades_admin"))
+        return redirect(_grades_admin_url(search_filters))
     grade.remarks = remarks or None
     db.session.commit()
     session["grades_status"] = f"Updated grade for {grade.student_name}."
-    return redirect(url_for("grades_admin"))
+    return redirect(_grades_admin_url(search_filters))
 
 @app.post("/grades/import")
 @require_user()
 def grades_import():
     if not verify_csrf():
         abort(400, "bad csrf")
+    search_filters = _grades_search_filters_from_request(request.form)
     payload = request.form.get("payload") or ""
     fmt = (request.form.get("payload_format") or "json").lower()
     records = []
@@ -5512,7 +5564,7 @@ def grades_import():
                 records.append(row)
         except Exception as exc:
             session["grades_error"] = f"Unable to parse CSV: {exc}"
-            return redirect(url_for("grades_admin"))
+            return redirect(_grades_admin_url(search_filters))
     else:
         try:
             data = json.loads(payload or "[]")
@@ -5525,7 +5577,7 @@ def grades_import():
                     records.append(row)
         except Exception as exc:
             session["grades_error"] = f"Invalid JSON payload: {exc}"
-            return redirect(url_for("grades_admin"))
+            return redirect(_grades_admin_url(search_filters))
 
     for idx, row in enumerate(records, start=1):
         email = str(row.get("student_email") or row.get("email") or "").strip()
@@ -5562,7 +5614,59 @@ def grades_import():
     else:
         db.session.rollback()
         session["grades_error"] = errors[0] if errors else "No grades imported."
-    return redirect(url_for("grades_admin"))
+    return redirect(_grades_admin_url(search_filters))
+
+@app.get("/grades/export")
+@require_user()
+def grades_export():
+    search_filters = _grades_search_filters_from_request(request.args)
+    fmt = (request.args.get("format") or "csv").strip().lower()
+    has_filters = bool(search_filters["student_query"] or search_filters["assignment_query"])
+    query = _grades_query(search_filters)
+    grades = query.all() if has_filters else query.limit(200).all()
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "json":
+        response = make_response(
+            json.dumps([_serialize_grade_export_row(grade) for grade in grades], indent=2, ensure_ascii=False)
+        )
+        response.mimetype = "application/json"
+        response.headers["Content-Disposition"] = f'attachment; filename="grades_{timestamp}.json"'
+        return response
+
+    if fmt == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "id",
+            "student_name",
+            "student_email",
+            "assignment",
+            "score",
+            "max_score",
+            "remarks",
+            "created_at",
+            "updated_at",
+        ])
+        for grade in grades:
+            row = _serialize_grade_export_row(grade)
+            writer.writerow([
+                row["id"],
+                row["student_name"],
+                row["student_email"],
+                row["assignment"],
+                row["score"],
+                row["max_score"],
+                row["remarks"],
+                row["created_at"],
+                row["updated_at"],
+            ])
+        response = make_response(output.getvalue())
+        response.mimetype = "text/csv"
+        response.headers["Content-Disposition"] = f'attachment; filename="grades_{timestamp}.csv"'
+        return response
+
+    abort(400, "unsupported export format")
 
 @app.route("/my-grades")
 @require_student()
