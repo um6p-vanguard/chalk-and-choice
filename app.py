@@ -1,4 +1,5 @@
 import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib
+from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -22,7 +23,7 @@ from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
-                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
+                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
@@ -1210,6 +1211,8 @@ def password_new():
 def index():
     u = current_user()
     student = current_student()
+    if u and getattr(u, "role", "") == "mentor":
+        return redirect(url_for("mentor_dashboard"))
     if student and not u:
         return blog_index()
     exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
@@ -2133,6 +2136,78 @@ def _student_group_ids(student):
         return set()
     memberships = getattr(student, "group_memberships", [])
     return {m.group_id for m in memberships if m.group_id}
+
+def _mentor_group_ids(user):
+    if not user or getattr(user, "role", "") != "mentor":
+        return None
+    return {review.group_id for review in getattr(user, "group_reviews", []) if review.group_id}
+
+def _restricted_review_student_ids(user):
+    """Return the student ids a mentor may access; None means unrestricted."""
+    group_ids = _mentor_group_ids(user)
+    if group_ids is None:
+        return None
+    if not group_ids:
+        return set()
+    memberships = StudentGroupMembership.query.filter(StudentGroupMembership.group_id.in_(group_ids)).all()
+    return {membership.student_id for membership in memberships if membership.student_id}
+
+def _review_scope_limited(user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    return allowed_student_ids is not None
+
+def _apply_review_scope_to_submission_query(query, user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return query
+    if not allowed_student_ids:
+        return query.filter(ProjectTaskSubmission.id == -1)
+    return query.filter(ProjectTaskSubmission.student_id.in_(allowed_student_ids))
+
+def _apply_review_scope_to_student_query(query, user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return query
+    if not allowed_student_ids:
+        return query.filter(Student.id == -1)
+    return query.filter(Student.id.in_(allowed_student_ids))
+
+def _can_user_review_student(user, student, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return True
+    if not student or not student.id:
+        return False
+    return student.id in allowed_student_ids
+
+def _can_user_review_submission(user, submission, allowed_student_ids=None):
+    if not submission:
+        return False
+    return _can_user_review_student(user, submission.student, allowed_student_ids=allowed_student_ids)
+
+def _can_user_manage_private_note(user, note, allowed_student_ids=None):
+    if not user or not note:
+        return False
+    if not _can_user_review_student(user, note.student, allowed_student_ids=allowed_student_ids):
+        return False
+    if getattr(user, "role", "") == "mentor":
+        return note.author_user_id == user.id
+    return True
+
+def _visible_groups_for_student(user, student, mentor_group_ids=None):
+    groups = [group for group in getattr(student, "groups", []) if group] if student else []
+    if mentor_group_ids is None:
+        mentor_group_ids = _mentor_group_ids(user)
+    if mentor_group_ids is None:
+        return sorted(groups, key=lambda group: ((group.name or "").lower(), group.id))
+    return sorted(
+        [group for group in groups if group.id in mentor_group_ids],
+        key=lambda group: ((group.name or "").lower(), group.id),
+    )
 
 def _project_visible_to_student(project, student):
     assignments = project.group_assignments or []
@@ -5033,6 +5108,10 @@ def project_task_file_download(submission_id, question_id):
             abort(403)
         if submission.project and not _project_visible_to_student(submission.project, student):
             abort(403)
+    if user:
+        allowed_student_ids = _restricted_review_student_ids(user)
+        if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+            abort(403)
     attempt_id = request.args.get("attempt_id")
     attempt = None
     if attempt_id:
@@ -5064,8 +5143,12 @@ def project_task_file_download(submission_id, question_id):
 def project_reset_student_progress(code, student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     # delete all task submissions for this student/project
     subs = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student.id).all()
     for sub in subs:
@@ -5081,8 +5164,12 @@ def project_reset_student_progress(code, student_id):
 def projects_submission_task_validate(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "accepted"
@@ -5100,8 +5187,12 @@ def projects_submission_task_validate(code, student_id, task_id):
 def projects_submission_task_need_rework(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "rejected"
@@ -5115,8 +5206,12 @@ def projects_submission_task_need_rework(code, student_id, task_id):
 def projects_submission_task_reset(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first()
     if submission:
@@ -5164,9 +5259,15 @@ def projects_task_log_run(code, task_id):
 @app.route("/projects/<code>/submissions")
 @require_user()
 def projects_submissions_overview(code):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     tasks = project.tasks or []
-    submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id).order_by(ProjectTaskSubmission.last_activity_at.desc()).all()
+    submissions = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(project_id=project.id),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).order_by(ProjectTaskSubmission.last_activity_at.desc()).all()
     grouped = {}
     for sub in submissions:
         sid = sub.student_id
@@ -5208,15 +5309,20 @@ def projects_submissions_overview(code):
         "projects_submissions_overview.html",
         project=project,
         student_rows=student_rows,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
 @app.route("/projects/<code>/submissions/<int:student_id>")
 @require_user()
 def projects_student_submissions(code, student_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     tasks = project.tasks or []
     submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student_id).all()
     submissions_map = {sub.task_id: sub for sub in submissions}
@@ -5226,15 +5332,20 @@ def projects_student_submissions(code, student_id):
         student=student,
         tasks=tasks,
         submissions_map=submissions_map,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
 @app.route("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>")
 @require_user()
 def projects_submission_task_detail(code, student_id, task_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student_id).first_or_404()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
@@ -5269,7 +5380,7 @@ def projects_submission_task_detail(code, student_id, task_id):
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
         latest_attempt=latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5277,6 +5388,8 @@ def projects_submission_task_detail(code, student_id, task_id):
 @require_user()
 def projects_reviews():
     user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    mentor_group_ids = _mentor_group_ids(user)
     sort_mode = request.args.get("sort", "newest")
     project_filter = request.args.get("project_id")
     warning_filter = request.args.get("warning_filter", "all")  # all, flagged, warned, clean
@@ -5286,7 +5399,11 @@ def projects_reviews():
     except ValueError:
         project_filter_id = None
     
-    query = ProjectTaskSubmission.query.filter_by(status="pending_review")
+    query = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review"),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
     
     if project_filter_id:
         query = query.filter_by(project_id=project_filter_id)
@@ -5327,14 +5444,25 @@ def projects_reviews():
     # Add warning information for each submission
     for sub in submissions:
         sub.has_warnings_for_this_task = _submission_has_warnings(sub.student, sub) if sub.student else False
+        sub.visible_groups = _visible_groups_for_student(user, sub.student, mentor_group_ids=mentor_group_ids) if sub.student else []
     
     # Get warning counts for statistics
-    flagged_count = Student.query.filter_by(is_flagged=True).count()
-    warned_students = Student.query.filter(Student.warnings_json != None).all()
+    students_query = _apply_review_scope_to_student_query(
+        Student.query,
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+    flagged_count = students_query.filter_by(is_flagged=True).count()
+    warned_students = students_query.filter(Student.warnings_json != None).all()
     warned_count = sum(1 for s in warned_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0)
-    
-    # Mentors can see all pending reviews, regardless of group assignments.
-    projects = Project.query.order_by(Project.title.asc()).all()
+
+    projects = _apply_review_scope_to_submission_query(
+        Project.query.join(ProjectTaskSubmission, ProjectTaskSubmission.project_id == Project.id).filter(
+            ProjectTaskSubmission.status == "pending_review"
+        ),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).distinct().order_by(Project.title.asc()).all()
     return render_template(
         "projects_reviews.html",
         submissions=submissions,
@@ -5344,7 +5472,8 @@ def projects_reviews():
         flagged_count=flagged_count,
         warned_count=warned_count,
         projects=projects,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5352,13 +5481,20 @@ def projects_reviews():
 @require_user()
 def projects_reviews_mine():
     user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     attempts = ProjectTaskAttempt.query.filter(
         ProjectTaskAttempt.reviewed_by_user_id == user.id,
         ProjectTaskAttempt.reviewed_at != None,
     ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
+    if allowed_student_ids is not None:
+        attempts = [
+            attempt for attempt in attempts
+            if attempt.submission and attempt.submission.student_id in allowed_student_ids
+        ]
     return render_template(
         "projects_reviews_mine.html",
         attempts=attempts,
+        review_scope_limited=(allowed_student_ids is not None),
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -5366,7 +5502,11 @@ def projects_reviews_mine():
 @app.route("/projects/reviews/<int:submission_id>")
 @require_user()
 def projects_review_detail(submission_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = submission.task
     project = submission.project
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
@@ -5410,7 +5550,7 @@ def projects_review_detail(submission_id):
         active_attempt=active_attempt,
         is_latest_attempt=is_latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5419,11 +5559,15 @@ def projects_review_detail(submission_id):
 def projects_review_decision(submission_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+        abort(403)
     action = request.form.get("action")
     notes = (request.form.get("review_notes") or "").strip()
     attempt_id = request.form.get("attempt_id")
-    reviewer = current_user()
+    reviewer = user
     reviewed_status = None
     if action == "accept":
         reviewed_status = "accepted"
@@ -5474,6 +5618,154 @@ def projects_review_decision(submission_id):
     if review_attempt:
         return redirect(url_for("projects_reviews_mine"))
     return redirect(url_for("projects_reviews"))
+
+@app.route("/mentor/dashboard")
+@require_user()
+def mentor_dashboard():
+    user = current_user()
+    if not user or getattr(user, "role", "") != "mentor":
+        return redirect(url_for("dashboard_for_role"))
+
+    group_ids = _mentor_group_ids(user) or set()
+    groups = []
+    memberships = []
+    if group_ids:
+        groups = StudentGroup.query.filter(StudentGroup.id.in_(group_ids)).order_by(StudentGroup.name.asc()).all()
+        memberships = StudentGroupMembership.query.filter(
+            StudentGroupMembership.group_id.in_(group_ids)
+        ).options(subqueryload(StudentGroupMembership.student)).all()
+
+    allowed_student_ids = _restricted_review_student_ids(user)
+    pending_reviews = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review"),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).order_by(ProjectTaskSubmission.submitted_at.asc()).all()
+    for submission in pending_reviews:
+        submission.has_warnings_for_this_task = _submission_has_warnings(submission.student, submission) if submission.student else False
+        submission.visible_groups = _visible_groups_for_student(user, submission.student, mentor_group_ids=group_ids) if submission.student else []
+
+    pending_by_student = defaultdict(list)
+    pending_count_by_student = defaultdict(int)
+    for submission in pending_reviews:
+        if submission.student_id:
+            pending_by_student[submission.student_id].append(submission)
+            pending_count_by_student[submission.student_id] += 1
+
+    notes = []
+    if allowed_student_ids:
+        notes = StudentPrivateNote.query.filter(
+            StudentPrivateNote.student_id.in_(allowed_student_ids)
+        ).order_by(StudentPrivateNote.created_at.desc()).all()
+    note_count_by_student = defaultdict(int)
+    latest_note_by_student = {}
+    for note in notes:
+        if note.student_id:
+            note_count_by_student[note.student_id] += 1
+            latest_note_by_student.setdefault(note.student_id, note)
+
+    students_by_group = defaultdict(list)
+    distinct_student_ids = set()
+    for membership in memberships:
+        if not membership.student or not membership.student_id:
+            continue
+        students_by_group[membership.group_id].append(membership.student)
+        distinct_student_ids.add(membership.student_id)
+
+    group_rows = []
+    for group in groups:
+        student_rows = []
+        for student in sorted(students_by_group.get(group.id, []), key=lambda s: ((s.name or "").lower(), s.id)):
+            student_rows.append({
+                "student": student,
+                "pending_count": pending_count_by_student.get(student.id, 0),
+                "note_count": note_count_by_student.get(student.id, 0),
+                "latest_note": latest_note_by_student.get(student.id),
+                "latest_pending": pending_by_student.get(student.id, [None])[0],
+            })
+        group_rows.append({
+            "group": group,
+            "student_rows": student_rows,
+            "student_count": len(student_rows),
+            "pending_count": sum(row["pending_count"] for row in student_rows),
+            "notes_count": sum(row["note_count"] for row in student_rows),
+        })
+
+    return render_template(
+        "mentor_dashboard.html",
+        group_rows=group_rows,
+        pending_reviews=pending_reviews[:12],
+        recent_notes=notes[:8],
+        total_group_count=len(group_rows),
+        total_student_count=len(distinct_student_ids),
+        total_pending_count=len(pending_reviews),
+        total_note_count=len(notes),
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/students/<int:student_id>/notes", methods=["GET", "POST"])
+@require_user()
+def student_private_notes(student_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    mentor_group_ids = _mentor_group_ids(user)
+    student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            error = "Note text is required."
+        else:
+            db.session.add(StudentPrivateNote(
+                student_id=student.id,
+                author_user_id=(user.id if user else None),
+                body=body,
+            ))
+            db.session.commit()
+            return redirect(url_for("student_private_notes", student_id=student.id))
+
+    notes = StudentPrivateNote.query.filter_by(student_id=student.id).order_by(StudentPrivateNote.created_at.desc()).all()
+    pending_reviews = ProjectTaskSubmission.query.filter_by(
+        student_id=student.id,
+        status="pending_review",
+    ).order_by(ProjectTaskSubmission.submitted_at.desc()).all()
+    groups = _visible_groups_for_student(user, student, mentor_group_ids=mentor_group_ids)
+
+    return render_template(
+        "student_private_notes.html",
+        student=student,
+        notes=notes,
+        pending_reviews=pending_reviews,
+        groups=groups,
+        error=error,
+        current_user_id=(user.id if user else None),
+        unrestricted_note_delete=(getattr(user, "role", "") != "mentor"),
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/students/<int:student_id>/notes/<int:note_id>/delete")
+@require_user()
+def student_private_note_delete(student_id, note_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    note = StudentPrivateNote.query.filter_by(id=note_id, student_id=student.id).first_or_404()
+    if not _can_user_manage_private_note(user, note, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    db.session.delete(note)
+    db.session.commit()
+    return redirect(url_for("student_private_notes", student_id=student.id))
 
 # --------------------------------------------------------------------
 # Gradebook
@@ -5688,18 +5980,26 @@ def student_grades():
 @require_user()
 def warnings_list():
     """View all students with warnings or flags."""
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    students_query = _apply_review_scope_to_student_query(
+        Student.query,
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
     # Get all flagged students
-    flagged = Student.query.filter_by(is_flagged=True).order_by(Student.name.asc()).all()
+    flagged = students_query.filter_by(is_flagged=True).order_by(Student.name.asc()).all()
     
     # Get students with warnings but not flagged
-    all_students = Student.query.filter(Student.warnings_json != None).order_by(Student.name.asc()).all()
+    all_students = students_query.filter(Student.warnings_json != None).order_by(Student.name.asc()).all()
     warned = [s for s in all_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0]
     
     return render_template(
         "warnings_list.html",
         flagged_students=flagged,
         warned_students=warned,
-        user=current_user(),
+        review_scope_limited=_review_scope_limited(user, allowed_student_ids=allowed_student_ids),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5707,7 +6007,11 @@ def warnings_list():
 @require_user()
 def warnings_student_detail(student_id):
     """View detailed warnings for a specific student."""
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
     
     # Get student's submissions for context
@@ -5720,7 +6024,7 @@ def warnings_student_detail(student_id):
         warnings=warnings,
         exam_submissions=exam_submissions,
         task_submissions=task_submissions,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5731,7 +6035,11 @@ def warnings_flag_student(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     notes = (request.form.get("notes") or "").strip()
     
     student.is_flagged = True
@@ -5747,7 +6055,11 @@ def warnings_unflag_student(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     student.is_flagged = False
     student.flag_notes = None
     db.session.commit()
@@ -5761,7 +6073,11 @@ def warnings_add_manual(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     warning_type = (request.form.get("type") or "manual").strip()
     description = (request.form.get("description") or "").strip()
     severity = (request.form.get("severity") or "medium").strip()
@@ -5781,7 +6097,11 @@ def warnings_clear_all(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     student.warnings_json = []
     student.is_flagged = False
     student.flag_notes = None
@@ -5796,6 +6116,9 @@ def thanks():
 @app.route("/dashboard")
 @require_user()
 def dashboard_for_role():
+    user = current_user()
+    if user and getattr(user, "role", "") == "mentor":
+        return redirect(url_for("mentor_dashboard"))
     return redirect(url_for("index"))
 
 @app.route("/student")

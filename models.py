@@ -93,6 +93,18 @@ class StudentGroupReviewer(db.Model):
         UniqueConstraint('user_id', 'group_id', name='uq_group_reviewer'),
     )
 
+class StudentPrivateNote(db.Model):
+    __tablename__ = "student_private_notes"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False, index=True)
+    author_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True, index=True)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    student = db.relationship('Student', backref=db.backref('private_notes', cascade="all,delete-orphan", order_by="StudentPrivateNote.created_at.desc()"))
+    author = db.relationship('User', backref=db.backref('student_private_notes', cascade="all,delete-orphan"))
+
 class AttendanceSheet(db.Model):
     __tablename__ = "attendance_sheets"
     id = db.Column(db.Integer, primary_key=True)

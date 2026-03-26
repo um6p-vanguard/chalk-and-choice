@@ -12,6 +12,11 @@
   <p style="color: #94a3b8; margin-bottom: 30px;">
     Monitor and manage students with suspicious activity or academic integrity concerns.
   </p>
+  {% if review_scope_limited %}
+  <p style="color: #94a3b8; margin-bottom: 30px;">
+    Showing only students from groups assigned to you.
+  </p>
+  {% endif %}
 
   {% if flagged_students %}
   <div style="background: rgba(99, 127, 190, 0.1); border-left: 4px solid #637FBE; padding: 20px; margin-bottom: 30px; border-radius: 6px;">

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">Private notes for {{ student.name }}</h3>
+      <p class="muted" style="margin:4px 0;">{{ student.email }}</p>
+      {% if groups %}
+        <p class="muted" style="margin:4px 0;">Groups:
+          {% for group in groups %}
+            <strong>{{ group.name }}</strong>{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </p>
+      {% endif %}
+      <p class="muted" style="margin:4px 0 0 0;">These notes are only visible to staff users. Students cannot see them.</p>
+    </div>
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('dashboard_for_role') }}">Dashboard</a>
+      <a class="btn" href="{{ url_for('warnings_student_detail', student_id=student.id) }}">Warnings</a>
+    </div>
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="row" style="gap:16px; align-items:flex-start;">
+  <div class="card" style="flex:1; min-width:320px;">
+    <h3 style="margin:0;">Add private note</h3>
+    {% if error %}
+      <p class="text-danger" style="margin-top:8px;">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('student_private_notes', student_id=student.id) }}" style="margin-top:12px;">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <label>Note</label>
+      <textarea name="body" rows="6" placeholder="Add context about this student for mentors and staff..." required></textarea>
+      <div class="row" style="justify-content:flex-end; margin-top:12px;">
+        <button class="btn btn-primary" type="submit">Save note</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="flex:1; min-width:320px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Pending reviews</h3>
+      <span class="muted" style="font-size:0.9rem;">{{ pending_reviews|length }}</span>
+    </div>
+    {% if pending_reviews %}
+      <table style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Task</th>
+            <th>Submitted</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sub in pending_reviews %}
+            <tr>
+              <td>{{ sub.project.title if sub.project else "—" }}</td>
+              <td>{{ sub.task.title if sub.task else "—" }}</td>
+              <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>
+              <td style="text-align:right;">
+                <a class="btn" href="{{ url_for('projects_review_detail', submission_id=sub.id) }}">Open</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted" style="margin:12px 0 0 0;">No pending reviews for this student.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Saved notes</h3>
+    <span class="muted" style="font-size:0.9rem;">{{ notes|length }} total</span>
+  </div>
+  {% if notes %}
+    <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+      {% for note in notes %}
+        <div style="border:1px solid var(--border); border-radius:10px; padding:14px; background:#0b1220;">
+          <div class="row" style="justify-content:space-between; align-items:flex-start;">
+            <div>
+              <strong>{{ note.author.name if note.author else "Unknown author" }}</strong>
+              <div class="muted" style="font-size:0.85rem;">
+                {{ note.created_at.strftime("%b %d %H:%M") if note.created_at else "—" }}
+                {% if note.updated_at and note.updated_at != note.created_at %}
+                  • Updated {{ note.updated_at.strftime("%b %d %H:%M") }}
+                {% endif %}
+              </div>
+            </div>
+            {% if unrestricted_note_delete or note.author_user_id == current_user_id %}
+              <form method="post" action="{{ url_for('student_private_note_delete', student_id=student.id, note_id=note.id) }}" onsubmit="return confirm('Delete this private note?');">
+                <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+                <button class="btn btn-danger" type="submit">Delete</button>
+              </form>
+            {% endif %}
+          </div>
+          <p class="muted" style="margin:10px 0 0 0; white-space:pre-line;">{{ note.body }}</p>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="margin:12px 0 0 0;">No private notes saved for this student yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
