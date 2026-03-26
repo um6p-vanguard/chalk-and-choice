@@ -128,36 +128,429 @@ ATTENDANCE_STATUS_OPTIONS = [
 ]
 ATTENDANCE_STATUS_VALUES = {value for value, _ in ATTENDANCE_STATUS_OPTIONS}
 
-PROJECT_TASKS_SCHEMA = {
-    "type": "object",
-    "required": ["tasks"],
-    "properties": {
-        "tasks": {
-            "description": "List of task definitions to create for the project.",
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "object",
-                "required": ["title", "questions"],
-                "properties": {
-                    "title": {"type": "string"},
-                    "description": {"type": ["string", "null"]},
-                    "instructions": {"type": ["string", "null"]},
-                    "required": {"type": "boolean", "default": True},
-                    "auto_grade": {"type": "boolean", "default": True},
-                    "requires_review": {"type": "boolean", "default": False},
-                    "questions": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": "Question objects that follow the same structure as the task builder (multi-choice, code, text, tokens, etc.)."
-                    },
-                },
-                "additionalProperties": False,
-            },
-        },
-    },
-    "additionalProperties": False,
+QUESTION_TYPE_ALIASES = {
+    "mcq": "mcq",
+    "single_choice": "mcq",
+    "single_select": "mcq",
+    "multiple_choice": "mcq",
+    "radio": "mcq",
+    "multi": "multi",
+    "multi_select": "multi",
+    "multiple_select": "multi",
+    "checkbox": "multi",
+    "checkboxes": "multi",
+    "text": "text",
+    "free_text": "text",
+    "long_text": "text",
+    "open_text": "text",
+    "code": "code",
+    "coding": "code",
+    "python_code": "code",
+    "programming": "code",
+    "tokens": "tokens",
+    "token_fill": "tokens",
+    "drag_tokens": "tokens",
+    "fill": "fill",
+    "fill_blank": "fill",
+    "fill_in_blank": "fill",
+    "file": "file",
+    "upload": "file",
+    "file_upload": "file",
 }
+
+CODE_MODE_ALIASES = {
+    "script": "script",
+    "stdin": "script",
+    "program": "script",
+    "program_io": "script",
+    "standard_input": "script",
+    "function": "function",
+    "callable": "function",
+    "call_return": "function",
+    "class": "class",
+    "object": "class",
+    "method": "class",
+    "object_method": "class",
+}
+
+def _first_present(mapping, *keys):
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+def _coerce_bool(value, default=False):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in ("1", "true", "yes", "y", "on"):
+            return True
+        if token in ("0", "false", "no", "n", "off"):
+            return False
+    return bool(value)
+
+def _coerce_string(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+def _coerce_token_list(value):
+    if isinstance(value, str):
+        return [tok.strip() for tok in value.replace("\n", ",").split(",") if tok.strip()]
+    if isinstance(value, list):
+        return [str(tok).strip() for tok in value if str(tok).strip()]
+    return []
+
+def _coerce_int_list(value):
+    items = []
+    if isinstance(value, str):
+        tokens = [tok.strip() for tok in value.replace(";", ",").replace("\n", ",").split(",") if tok.strip()]
+    elif isinstance(value, list):
+        tokens = value
+    else:
+        tokens = []
+    for tok in tokens:
+        try:
+            items.append(int(tok))
+        except Exception:
+            continue
+    return items
+
+def _normalize_question_type_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return QUESTION_TYPE_ALIASES.get(token, token)
+
+def _normalize_code_mode_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return CODE_MODE_ALIASES.get(token, token)
+
+def _coerce_code_expected(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            ast.literal_eval(text)
+            return text
+        except Exception:
+            return repr(text)
+    return repr(value)
+
+def _extract_choice_options(value):
+    options = []
+    implied_correct = []
+    if isinstance(value, str):
+        options = [line.strip() for line in value.splitlines() if line.strip()]
+        return options, implied_correct
+    if not isinstance(value, list):
+        return options, implied_correct
+    for item in value:
+        if isinstance(item, dict):
+            text = _coerce_string(_first_present(item, "text", "label", "option", "value")).strip()
+            if not text:
+                continue
+            options.append(text)
+            if _coerce_bool(_first_present(item, "is_correct", "correct"), False):
+                implied_correct.append(len(options) - 1)
+        else:
+            text = _coerce_string(item).strip()
+            if text:
+                options.append(text)
+    return options, implied_correct
+
+def _build_project_tasks_schema():
+    minimal_payload = {
+        "tasks": [
+            {
+                "title": "Lists warmup",
+                "description": "Short practice on Python lists.",
+                "instructions": "Answer every question. Code questions run in Python only.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_lists_mcq",
+                        "type": "mcq",
+                        "title": "Indexing",
+                        "prompt": "Which expression returns the first element of `items`?",
+                        "points": 2,
+                        "choices": [
+                            {"text": "items[0]", "is_correct": True},
+                            {"text": "items[1]"},
+                            {"text": "items[-0]"}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    class_payload = {
+        "tasks": [
+            {
+                "title": "Accumulator class",
+                "description": "Implement and test a small Python class.",
+                "instructions": "Write the class exactly as described. Each test creates a fresh object named `obj`.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_accumulator_class",
+                        "type": "code",
+                        "title": "Build Accumulator",
+                        "prompt": "Implement the `Accumulator` class.",
+                        "points": 10,
+                        "problem_statement": "Create a class `Accumulator` with `__init__(start)`, `add(amount)` that returns the updated total, and `total()` that returns the current total.",
+                        "starter_code": "class Accumulator:\n    pass\n",
+                        "code_mode": "class",
+                        "class_signature": "class Accumulator:",
+                        "class_init": "Accumulator(3)",
+                        "tests": [
+                            {
+                                "name": "initial total",
+                                "method_call": "obj.total()",
+                                "expected_result": 3
+                            },
+                            {
+                                "name": "add returns new total",
+                                "method_call": "obj.add(2)",
+                                "expected_result": 5
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    return {
+        "schema_name": "project_task_import",
+        "schema_version": 2,
+        "summary": "Reference document for importing project tasks from JSON. The importer accepts the payload shape below plus the documented aliases. Unknown extra fields are ignored.",
+        "paste_payload_shape": {
+            "type": "object",
+            "required": ["tasks"],
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "List of task definitions to create. The importer also accepts the alias keys `project_tasks` and `items`.",
+                    "items": {
+                        "type": "object",
+                        "required": ["title", "questions"],
+                        "properties": {
+                            "title": {"type": "string", "description": "Task title. Alias: `name`."},
+                            "description": {"type": ["string", "null"], "description": "Short summary shown above the task."},
+                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students."},
+                            "required": {"type": "boolean", "default": True},
+                            "auto_grade": {"type": "boolean", "default": True},
+                            "requires_review": {"type": "boolean", "default": False},
+                            "questions": {
+                                "type": "array",
+                                "minItems": 1,
+                                "description": "Question definitions. Alias: `items`."
+                            }
+                        },
+                        "additionalProperties": True
+                    }
+                }
+            },
+            "additionalProperties": True
+        },
+        "accepted_aliases": {
+            "root": {
+                "tasks": ["tasks", "project_tasks", "items"]
+            },
+            "task_fields": {
+                "title": ["title", "name"],
+                "description": ["description", "summary"],
+                "instructions": ["instructions", "student_instructions"],
+                "required": ["required", "is_required"],
+                "auto_grade": ["auto_grade", "autograde", "automatic_grading"],
+                "requires_review": ["requires_review", "mentor_review", "manual_review"],
+                "questions": ["questions", "items"]
+            },
+            "question_common_fields": {
+                "type": ["type", "question_type", "kind"],
+                "id": ["id", "question_id"],
+                "title": ["title", "name", "label"],
+                "prompt": ["prompt", "question", "question_text"],
+                "points": ["points", "score", "max_points"],
+                "code_snippet": ["code_snippet", "context_code", "reference_code"]
+            },
+            "question_type_aliases": QUESTION_TYPE_ALIASES,
+            "code_mode_aliases": CODE_MODE_ALIASES,
+            "code_question_fields": {
+                "statement": ["statement", "problem_statement", "description"],
+                "starter": ["starter", "starter_code", "starter_template"],
+                "mode": ["mode", "code_mode"],
+                "samples": ["samples", "tests", "test_cases"],
+                "function_signature": ["function_signature", "signature", "callable_signature"],
+                "class_signature": ["class_signature", "signature"],
+                "class_init": ["class_init", "init_call", "constructor_call", "object_initializer"]
+            },
+            "code_sample_fields": {
+                "common": {
+                    "name": ["name", "label"],
+                    "hidden": ["hidden", "is_hidden"]
+                },
+                "script_mode": {
+                    "input": ["input", "stdin"],
+                    "output": ["output", "expected_stdout", "expected"]
+                },
+                "function_mode": {
+                    "call": ["call", "function_call", "expression"],
+                    "expected": ["expected", "expected_return", "expected_result", "output"]
+                },
+                "class_mode": {
+                    "call": ["call", "method_call", "expression"],
+                    "expected": ["expected", "expected_return", "expected_result", "output"],
+                    "init_call": ["init_call", "constructor_call", "object_initializer"]
+                }
+            }
+        },
+        "question_reference": {
+            "common_rules": [
+                "Every question needs a `type` and a visible `prompt`.",
+                "Question `id` is optional. The importer will generate one if missing.",
+                "For booleans, use real JSON booleans: true or false.",
+                "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects."
+            ],
+            "types": {
+                "mcq": {
+                    "required_fields": ["type", "prompt", "choices", "correct answer"],
+                    "recommended_shape": {
+                        "type": "mcq",
+                        "prompt": "Question text",
+                        "choices": [
+                            {"text": "Option A", "is_correct": True},
+                            {"text": "Option B", "is_correct": False}
+                        ]
+                    },
+                    "notes": [
+                        "You can use `options` as a list of strings or `choices` as a list of objects.",
+                        "If you do not use `is_correct`, provide `correct_indices` with 0-based indexes."
+                    ]
+                },
+                "multi": {
+                    "required_fields": ["type", "prompt", "choices", "at least one correct answer"],
+                    "recommended_shape": {
+                        "type": "multi",
+                        "prompt": "Select all correct answers.",
+                        "choices": [
+                            {"text": "Option A", "is_correct": True},
+                            {"text": "Option B", "is_correct": True},
+                            {"text": "Option C", "is_correct": False}
+                        ]
+                    }
+                },
+                "text": {
+                    "required_fields": ["type", "prompt"],
+                    "recommended_shape": {
+                        "type": "text",
+                        "prompt": "Explain your reasoning.",
+                        "placeholder": "Write 3-5 sentences.",
+                        "lines": 5
+                    }
+                },
+                "tokens": {
+                    "required_fields": ["type", "prompt", "template", "correct_tokens"],
+                    "recommended_shape": {
+                        "type": "tokens",
+                        "prompt": "Drag the correct tokens into the blanks.",
+                        "template": "[[blank]]([[blank]](myvar))",
+                        "correct_tokens": ["print", "str"],
+                        "distractor_tokens": ["len", "int"]
+                    }
+                },
+                "fill": {
+                    "required_fields": ["type", "prompt", "template", "answers"],
+                    "recommended_shape": {
+                        "type": "fill",
+                        "prompt": "Complete the statement.",
+                        "template": "carname = \"[[blank]]\"",
+                        "answers": ["Volvo"],
+                        "case_sensitive": False
+                    }
+                },
+                "file": {
+                    "required_fields": ["type", "prompt"],
+                    "recommended_shape": {
+                        "type": "file",
+                        "prompt": "Upload your ZIP submission.",
+                        "accept": ".zip",
+                        "max_mb": 5
+                    }
+                },
+                "code": {
+                    "required_fields": ["type", "prompt", "problem_statement", "code_mode", "tests"],
+                    "shared_shape": {
+                        "type": "code",
+                        "prompt": "Short visible question prompt.",
+                        "problem_statement": "Detailed coding instructions.",
+                        "starter_code": "# optional starter code",
+                        "code_mode": "script | function | class"
+                    },
+                    "modes": {
+                        "script": {
+                            "use_when": "Students write a full program that reads stdin and prints stdout.",
+                            "example": {
+                                "type": "code",
+                                "prompt": "Echo two lines.",
+                                "problem_statement": "Read two lines and print them in reverse order.",
+                                "code_mode": "script",
+                                "tests": [
+                                    {
+                                        "name": "two words",
+                                        "stdin": "apple\nbanana\n",
+                                        "expected_stdout": "banana\napple\n"
+                                    }
+                                ]
+                            }
+                        },
+                        "function": {
+                            "use_when": "Students implement a function and each test calls it directly.",
+                            "example": {
+                                "type": "code",
+                                "prompt": "Implement square.",
+                                "problem_statement": "Write a function that returns the square of n.",
+                                "code_mode": "function",
+                                "function_signature": "def square(n):",
+                                "tests": [
+                                    {
+                                        "name": "square of five",
+                                        "function_call": "square(5)",
+                                        "expected_return": 25
+                                    }
+                                ]
+                            }
+                        },
+                        "class": {
+                            "use_when": "Students implement a class. Each test creates a fresh object named `obj` using `class_init` before evaluating the method call or expression.",
+                            "example": class_payload["tasks"][0]["questions"][0]
+                        }
+                    }
+                }
+            }
+        },
+        "example_payloads": {
+            "minimal_payload": minimal_payload,
+            "class_code_payload": class_payload
+        }
+    }
+
+PROJECT_TASKS_SCHEMA = _build_project_tasks_schema()
 
 LEADERBOARD_METRICS = {
     "total_points": {"label": "Total points", "description": "Sum of all recorded grade scores."},
@@ -1775,56 +2168,54 @@ def _normalize_exam_questions(payload):
     for idx, raw in enumerate(payload):
         if not isinstance(raw, dict):
             raise ValueError("Question payload must be objects.")
-        q_type = (raw.get("type") or "").strip().lower()
+        q_type = _normalize_question_type_name(_first_present(raw, "type", "question_type", "kind"))
         if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill", "file"):
             raise ValueError(f"Unsupported question type '{q_type}'.")
-        prompt = (raw.get("prompt") or "").strip()
+        prompt_value = _first_present(raw, "prompt", "question", "question_text")
+        if not prompt_value and q_type == "code":
+            prompt_value = _first_present(raw, "statement", "problem_statement", "description")
+        prompt = _coerce_string(prompt_value).strip()
         if not prompt:
             raise ValueError("Every question needs a prompt.")
-        q_id = (raw.get("id") or "").strip() or f"q{idx+1}"
+        q_id = _coerce_string(_first_present(raw, "id", "question_id")).strip() or f"q{idx+1}"
         if q_id in seen:
             q_id = f"{q_id}_{idx+1}"
         seen.add(q_id)
         normalized = {"id": q_id, "type": q_type, "prompt": prompt}
-        title = (raw.get("title") or "").strip()
+        title = _coerce_string(_first_present(raw, "title", "name", "label")).strip()
         if title:
             normalized["title"] = title
-        snippet = raw.get("code_snippet")
-        if isinstance(snippet, str):
-            snippet = snippet.strip("\n")
-            if snippet:
-                normalized["code_snippet"] = snippet
+        snippet = _first_present(raw, "code_snippet", "context_code", "reference_code")
+        if snippet is not None:
+            snippet_text = _coerce_string(snippet).strip("\n")
+            if snippet_text:
+                normalized["code_snippet"] = snippet_text
         try:
-            points = int(raw.get("points") or 1)
+            points = int(_first_present(raw, "points", "score", "max_points") or 1)
         except Exception:
             points = 1
         normalized["points"] = max(0, points)
 
         if q_type in ("mcq", "multi"):
-            options_raw = raw.get("options") or []
-            if isinstance(options_raw, str):
-                options = [line.strip() for line in options_raw.splitlines() if line.strip()]
-            else:
-                options = [(line or "").strip() for line in options_raw if (line or "").strip()]
+            options_raw = _first_present(raw, "options", "choices") or []
+            options, implied_correct = _extract_choice_options(options_raw)
             if len(options) < 2:
                 raise ValueError("Multiple-choice questions need at least two options.")
             normalized["options"] = options
-            normalized["shuffle"] = bool(raw.get("shuffle"))
-            correct_raw = raw.get("correct_indices") or []
-            correct_indices = []
-            if isinstance(correct_raw, str):
-                tokens = [tok.strip() for tok in correct_raw.replace(";", ",").split(",") if tok.strip()]
-                for tok in tokens:
+            normalized["shuffle"] = _coerce_bool(_first_present(raw, "shuffle", "shuffle_options"), False)
+            correct_raw = _first_present(raw, "correct_indices", "correct_option_indexes", "correct_indexes")
+            correct_indices = _coerce_int_list(correct_raw)
+            if not correct_indices and implied_correct:
+                correct_indices = implied_correct
+            if not correct_indices:
+                correct_labels = _coerce_token_list(_first_present(raw, "correct_options", "correct_answers"))
+                for label in correct_labels:
                     try:
-                        correct_indices.append(int(tok))
-                    except Exception:
+                        correct_indices.append(options.index(label))
+                    except ValueError:
                         continue
-            elif isinstance(correct_raw, list):
-                for tok in correct_raw:
-                    try:
-                        correct_indices.append(int(tok))
-                    except Exception:
-                        continue
+            correct_indices = [idx_val for idx_val in correct_indices if 0 <= idx_val < len(options)]
+            correct_indices = list(dict.fromkeys(correct_indices))
             if q_type == "mcq":
                 if len(correct_indices) != 1:
                     raise ValueError("Provide exactly one correct option index for MCQ questions.")
@@ -1833,77 +2224,66 @@ def _normalize_exam_questions(payload):
                     raise ValueError("Provide at least one correct option index for multi-select questions.")
             normalized["correct_indices"] = correct_indices
         elif q_type == "text":
-            normalized["placeholder"] = (raw.get("placeholder") or "").strip()
-            lines_raw = raw.get("lines") or raw.get("rows")
+            normalized["placeholder"] = _coerce_string(_first_present(raw, "placeholder", "answer_placeholder", "response_placeholder")).strip()
+            lines_raw = _first_present(raw, "lines", "rows", "answer_lines")
             try:
                 line_count = int(lines_raw) if lines_raw not in (None, "") else 4
             except Exception:
                 line_count = 4
             normalized["lines"] = max(1, min(line_count, 12))
         elif q_type == "tokens":
-            template = (raw.get("template") or "").strip()
+            template = _coerce_string(_first_present(raw, "template", "expression_template", "text_template")).strip()
             if "[[blank]]" not in template:
                 raise ValueError("Token questions require [[blank]] markers.")
             blank_count = template.count("[[blank]]")
-            correct_raw = raw.get("correct_tokens") or ""
-            if isinstance(correct_raw, str):
-                tokens = [t.strip() for t in correct_raw.replace("\n", ",").split(",") if t.strip()]
-            elif isinstance(correct_raw, list):
-                tokens = [str(t).strip() for t in correct_raw if str(t).strip()]
-            else:
-                tokens = []
+            correct_raw = _first_present(raw, "correct_tokens", "answers", "expected_tokens") or ""
+            tokens = _coerce_token_list(correct_raw)
             if len(tokens) != blank_count:
                 raise ValueError("Provide one correct token for each [[blank]].")
-            distractor_raw = raw.get("distractor_tokens") or ""
-            if isinstance(distractor_raw, str):
-                distractors = [t.strip() for t in distractor_raw.replace("\n", ",").split(",") if t.strip()]
-            elif isinstance(distractor_raw, list):
-                distractors = [str(t).strip() for t in distractor_raw if str(t).strip()]
-            else:
-                distractors = []
+            distractor_raw = _first_present(raw, "distractor_tokens", "distractors", "extra_tokens") or ""
+            distractors = _coerce_token_list(distractor_raw)
             normalized["template"] = template
             normalized["correct_tokens"] = tokens
             normalized["distractor_tokens"] = distractors
         elif q_type == "fill":
-            template = (raw.get("template") or "").strip()
+            template = _coerce_string(_first_present(raw, "template", "expression_template", "text_template")).strip()
             if "[[blank]]" not in template:
                 raise ValueError("Fill questions require [[blank]] markers.")
             blank_count = template.count("[[blank]]")
-            answers_raw = raw.get("answers") or ""
-            if isinstance(answers_raw, str):
-                answers = [a.strip() for a in answers_raw.replace("\n", ",").split(",") if a.strip()]
-            elif isinstance(answers_raw, list):
-                answers = [str(a).strip() for a in answers_raw if str(a).strip()]
-            else:
-                answers = []
+            answers_raw = _first_present(raw, "answers", "correct_answers", "expected_answers") or ""
+            answers = _coerce_token_list(answers_raw)
             if len(answers) != blank_count:
                 raise ValueError("Provide one answer per [[blank]].")
             normalized["template"] = template
             normalized["answers"] = answers
-            normalized["case_sensitive"] = bool(raw.get("case_sensitive"))
+            normalized["case_sensitive"] = _coerce_bool(_first_present(raw, "case_sensitive", "match_case"), False)
         elif q_type == "file":
-            accept = (raw.get("accept") or ".zip").strip() or ".zip"
+            accept_raw = _first_present(raw, "accept", "accepted_extensions")
+            if isinstance(accept_raw, list):
+                accept = ", ".join(_coerce_token_list(accept_raw)).strip() or ".zip"
+            else:
+                accept = _coerce_string(accept_raw).strip() or ".zip"
             try:
-                max_mb = int(raw.get("max_mb") or 5)
+                max_mb = int(_first_present(raw, "max_mb", "max_size_mb") or 5)
             except Exception:
                 max_mb = 5
             normalized["accept"] = accept
             normalized["max_mb"] = max(1, min(max_mb, UPLOAD_MAX_MB))
         else:  # code
-            statement = (raw.get("statement") or "").strip()
+            statement = _coerce_string(_first_present(raw, "statement", "problem_statement", "description")).strip()
             if not statement:
                 raise ValueError("Code questions need a statement/description.")
             normalized["statement"] = statement
-            normalized["starter"] = raw.get("starter") or ""
+            normalized["starter"] = _coerce_string(_first_present(raw, "starter", "starter_code", "starter_template"))
             normalized["language"] = "python"
-            mode = (raw.get("mode") or "script").strip().lower()
-            if mode not in ("script", "function"):
+            mode = _normalize_code_mode_name(_first_present(raw, "mode", "code_mode") or "script")
+            if mode not in ("script", "function", "class"):
                 mode = "script"
             normalized["mode"] = mode
             samples_clean = []
-            samples_raw = raw.get("samples") or []
+            samples_raw = _first_present(raw, "samples", "tests", "test_cases") or []
             if mode == "function":
-                signature = (raw.get("function_signature") or "").strip()
+                signature = _coerce_string(_first_present(raw, "function_signature", "signature", "callable_signature")).strip()
                 if not signature.startswith("def"):
                     raise ValueError("Function questions need a signature like 'def foo(x):'.")
                 normalized["function_signature"] = signature
@@ -1911,31 +2291,60 @@ def _normalize_exam_questions(payload):
                     for s_idx, sample in enumerate(samples_raw):
                         if not isinstance(sample, dict):
                             continue
-                        call_expr = (sample.get("call") or sample.get("input") or "").strip()
+                        call_expr = _coerce_string(_first_present(sample, "call", "function_call", "expression", "input")).strip()
                         if not call_expr:
                             continue
-                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
-                        expected = (sample.get("expected") or sample.get("output") or "").strip()
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
+                        expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
                         samples_clean.append({
                             "name": name,
                             "call": call_expr,
                             "expected": expected,
                             "input": call_expr,
-                            "hidden": bool(sample.get("hidden")),
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
                         })
                 if not samples_clean:
                     raise ValueError("Function code questions need at least one sample call.")
+            elif mode == "class":
+                class_signature = _coerce_string(_first_present(raw, "class_signature", "signature")).strip()
+                if not class_signature.startswith("class"):
+                    raise ValueError("Class code questions need a signature like 'class Foo:'.")
+                class_init = _coerce_string(_first_present(raw, "class_init", "init_call", "constructor_call", "object_initializer")).strip()
+                if not class_init:
+                    raise ValueError("Class code questions need an __init__ call like 'Foo(1, 2)'.")
+                normalized["class_signature"] = class_signature
+                normalized["class_init"] = class_init
+                if isinstance(samples_raw, list):
+                    for s_idx, sample in enumerate(samples_raw):
+                        if not isinstance(sample, dict):
+                            continue
+                        call_expr = _coerce_string(_first_present(sample, "call", "method_call", "expression", "input")).strip()
+                        if not call_expr:
+                            continue
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Method test {s_idx+1}"
+                        expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
+                        sample_init = _coerce_string(_first_present(sample, "init_call", "constructor_call", "object_initializer")).strip() or class_init
+                        samples_clean.append({
+                            "name": name,
+                            "call": call_expr,
+                            "expected": expected,
+                            "input": call_expr,
+                            "init_call": sample_init,
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
+                        })
+                if not samples_clean:
+                    raise ValueError("Class code questions need at least one method call.")
             else:
                 if isinstance(samples_raw, list):
                     for s_idx, sample in enumerate(samples_raw):
                         if not isinstance(sample, dict):
                             continue
-                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
                         samples_clean.append({
                             "name": name,
-                            "input": sample.get("input") or "",
-                            "output": sample.get("output") or "",
-                            "hidden": bool(sample.get("hidden")),
+                            "input": _coerce_string(_first_present(sample, "input", "stdin")),
+                            "output": _coerce_string(_first_present(sample, "output", "expected_stdout", "expected")),
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
                         })
             normalized["samples"] = samples_clean
 
@@ -2491,9 +2900,12 @@ def _paginate_posts(query, page, per_page=10):
     }
 
 def _import_project_tasks_from_config(project, config):
-    if not isinstance(config, dict):
-        raise ValueError("Config must be a JSON object.")
-    tasks_data = config.get("tasks")
+    if isinstance(config, list):
+        tasks_data = config
+    elif isinstance(config, dict):
+        tasks_data = _first_present(config, "tasks", "project_tasks", "items")
+    else:
+        raise ValueError("Config must be a JSON object or an array of tasks.")
     if not isinstance(tasks_data, list) or not tasks_data:
         raise ValueError("Config must include a non-empty 'tasks' array.")
     existing = ProjectTask.query.filter_by(project_id=project.id).count() or 0
@@ -2501,10 +2913,10 @@ def _import_project_tasks_from_config(project, config):
     for offset, entry in enumerate(tasks_data, start=1):
         if not isinstance(entry, dict):
             raise ValueError(f"Task #{offset} must be an object.")
-        title = (entry.get("title") or "").strip()
+        title = _coerce_string(_first_present(entry, "title", "name")).strip()
         if not title:
             raise ValueError(f"Task #{offset} is missing a title.")
-        questions_payload = entry.get("questions")
+        questions_payload = _first_present(entry, "questions", "items")
         if not isinstance(questions_payload, list) or not questions_payload:
             raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
         try:
@@ -2513,17 +2925,18 @@ def _import_project_tasks_from_config(project, config):
             raise ValueError(f"Task '{title}': {exc}")
         except Exception:
             raise ValueError(f"Task '{title}': unable to parse questions.")
-        description = (entry.get("description") or "").strip()
-        instructions = (entry.get("instructions") or "").strip()
+        description = _coerce_string(_first_present(entry, "description", "summary")).strip()
+        instructions = _coerce_string(_first_present(entry, "instructions", "student_instructions")).strip()
+        requires_review = _coerce_bool(_first_present(entry, "requires_review", "mentor_review", "manual_review"), False)
         task = ProjectTask(
             project_id=project.id,
             title=title,
             description=description or None,
             instructions=instructions or None,
             questions_json=questions,
-            required=bool(entry.get("required", True)),
-            auto_grade=bool(entry.get("auto_grade", True)),
-            requires_review=bool(entry.get("requires_review", False)),
+            required=_coerce_bool(_first_present(entry, "required", "is_required"), True),
+            auto_grade=_coerce_bool(_first_present(entry, "auto_grade", "autograde", "automatic_grading"), True),
+            requires_review=requires_review,
             order_index=existing + offset,
         )
         new_tasks.append(task)
@@ -2720,10 +3133,14 @@ def _run_code_tests_worker(code_text, tests, mode):
     results = []
     if not tests:
         return results
+    mode = (mode or "script").strip().lower()
+    if mode not in ("script", "function", "class"):
+        mode = "script"
     if not code_text:
         for idx, test in enumerate(tests):
             hidden = bool(test.get("hidden"))
             name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
             results.append({
                 "name": name,
                 "status": "error",
@@ -2731,23 +3148,24 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": "",
                 "expected": test.get("expected") or test.get("output") or "",
                 "error": "No code submitted.",
+                "mode": mode,
+                "init_call": init_call,
                 "hidden": hidden,
             })
         return results
-    mode = (mode or "script").strip().lower()
-    if mode not in ("script", "function"):
-        mode = "script"
     _init_plot_backend()
     env_base = None
-    if mode == "function":
+    if mode in ("function", "class"):
         try:
             env_base = safe_env()
+            env_base["__name__"] = "__main__"
             exec(code_text, env_base, env_base)
         except Exception:
             tb = traceback.format_exc()
             for idx, test in enumerate(tests):
                 hidden = bool(test.get("hidden"))
                 name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
                 results.append({
                     "name": name,
                     "status": "error",
@@ -2755,6 +3173,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                     "output": "",
                     "expected": test.get("expected") or test.get("output") or "",
                     "error": tb,
+                    "mode": mode,
+                    "init_call": init_call,
                     "hidden": hidden,
                     "plot_images": [],
                 })
@@ -2762,7 +3182,7 @@ def _run_code_tests_worker(code_text, tests, mode):
     for idx, test in enumerate(tests):
         hidden = bool(test.get("hidden"))
         name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
-        if mode == "function":
+        if mode in ("function", "class"):
             call_expr = (test.get("call") or test.get("input") or "").strip()
             expected_output = (test.get("expected") or test.get("output") or "")
             expected_display = expected_output
@@ -2779,6 +3199,7 @@ def _run_code_tests_worker(code_text, tests, mode):
             error_text = ""
             output_value = ""
             result_value = None
+            init_call = ""
             if not call_expr:
                 status = "error"
                 error_text = "Missing call expression."
@@ -2788,6 +3209,11 @@ def _run_code_tests_worker(code_text, tests, mode):
                 original_stdout = sys.stdout
                 sys.stdout = stdout
                 try:
+                    if mode == "class":
+                        init_call = (test.get("init_call") or "").strip()
+                        if not init_call:
+                            raise RuntimeError("Missing __init__ call.")
+                        env["obj"] = eval(init_call, env, env)
                     result = eval(call_expr, env, env)
                     result_value = result
                     output_value = repr(result)
@@ -2811,6 +3237,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": output_value,
                 "expected": expected_display,
                 "error": error_text,
+                "mode": mode,
+                "init_call": init_call,
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
@@ -2852,6 +3280,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": output_value,
                 "expected": expected_output,
                 "error": error_text,
+                "mode": "script",
+                "init_call": "",
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
@@ -2864,6 +3294,9 @@ def _run_code_tests_backend(code_text, tests, mode):
     """
     if not tests:
         return [], False
+    mode = (mode or "script").strip().lower()
+    if mode not in ("script", "function", "class"):
+        mode = "script"
 
     try:
         ctx = multiprocessing.get_context("fork")
@@ -2879,6 +3312,7 @@ def _run_code_tests_backend(code_text, tests, mode):
             for idx, t in enumerate(tests):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
                 res.append({
                     "name": name,
                     "status": "error",
@@ -2886,6 +3320,8 @@ def _run_code_tests_backend(code_text, tests, mode):
                     "output": "",
                     "expected": t.get("expected") or t.get("output") or "",
                     "error": repr(e),
+                    "mode": mode,
+                    "init_call": init_call,
                     "hidden": hidden,
                 })
         result_queue.put(res)
@@ -2906,13 +3342,16 @@ def _run_code_tests_backend(code_text, tests, mode):
         for idx, t in enumerate(tests):
             hidden = bool(t.get("hidden"))
             name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
             results.append({
                 "name": name,
                 "status": "timeout",
-                "input": "",
+                "input": t.get("call") or t.get("input") or "",
                 "output": "",
-                "expected": "",
+                "expected": t.get("expected") or t.get("output") or "",
                 "error": "Time limit exceeded",
+                "mode": mode,
+                "init_call": init_call,
                 "hidden": hidden,
             })
     else:
@@ -2923,13 +3362,16 @@ def _run_code_tests_backend(code_text, tests, mode):
             for idx, t in enumerate(tests):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
                 results.append({
                     "name": name,
                     "status": "error",
-                    "input": "",
+                    "input": t.get("call") or t.get("input") or "",
                     "output": "",
-                    "expected": "",
+                    "expected": t.get("expected") or t.get("output") or "",
                     "error": "No results from worker process",
+                    "mode": mode,
+                    "init_call": init_call,
                     "hidden": hidden,
                 })
 
@@ -2953,6 +3395,8 @@ def _split_visible_hidden_results(results):
                 "output": res.get("output") or "",
                 "expected": res.get("expected") or "",
                 "error": res.get("error") or "",
+                "mode": res.get("mode") or "script",
+                "init_call": res.get("init_call") or "",
             })
             visible.append(base)
     return visible, hidden
@@ -4517,12 +4961,17 @@ def projects_task_import(code):
             except Exception:
                 db.session.rollback()
                 error = "Unable to import tasks. Please review your JSON."
-    schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2)
+    schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2, ensure_ascii=False)
+    starter_payloads = {
+        "minimal": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["minimal_payload"], indent=2, ensure_ascii=False),
+        "class_code": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["class_code_payload"], indent=2, ensure_ascii=False),
+    }
     return render_template(
         "projects_task_import.html",
         project=project,
         payload=payload,
         schema_json=schema_json,
+        starter_payloads=starter_payloads,
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),

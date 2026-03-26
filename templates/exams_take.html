@@ -141,6 +141,18 @@
                     <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.function_signature }}</pre>
                   </div>
                 {% endif %}
+                {% if q.mode == "class" and q.class_signature %}
+                  <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                    <strong>Implement</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.class_signature }}</pre>
+                  </div>
+                {% endif %}
+                {% if q.mode == "class" and q.class_init %}
+                  <div style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0f172a;">
+                    <strong>Before each test</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">obj = {{ q.class_init }}</pre>
+                  </div>
+                {% endif %}
               </div>
               <div class="code-question-editor" style="flex:1 1 360px; min-width:320px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
@@ -159,7 +171,7 @@
                     <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-sample-summary="{{ q.id }}">Not run</span>
                   </div>
                   {% if public_samples %}
-                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
+                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
                   {% endif %}
                 </div>
                 {% if public_samples %}
@@ -170,11 +182,16 @@
                           <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
                           {% if q.mode == "function" %}
                             <span class="muted" style="font-size:0.85rem;">Call: <code>{{ sample.call or sample.input }}</code></span>
+                          {% elif q.mode == "class" %}
+                            <span class="muted" style="font-size:0.85rem;">Method call: <code>{{ sample.call or sample.input }}</code></span>
                           {% else %}
                             <span class="muted" style="font-size:0.85rem;">Std in</span>
                           {% endif %}
                         </div>
-                        {% if q.mode != "function" and sample.input %}
+                        {% if q.mode == "class" and (sample.init_call or q.class_init) %}
+                          <div class="muted" style="margin-top:6px; font-size:0.85rem;">Init: <code>{{ sample.init_call or q.class_init }}</code></div>
+                        {% endif %}
+                        {% if q.mode not in ("function", "class") and sample.input %}
                           <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; white-space:pre-wrap;">{{ sample.input }}</pre>
                         {% endif %}
                       </li>
@@ -194,11 +211,17 @@
                 {% if q.mode == "function" %}
                   <label style="display:block; margin-top:6px;">Function call</label>
                   <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                {% elif q.mode == "class" %}
+                  <label style="display:block; margin-top:6px;">Method call / expression</label>
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="obj.my_method(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                  {% if q.class_init %}
+                    <div class="muted" style="margin-top:6px;">A fresh object is created before each run: <code>obj = {{ q.class_init }}</code></div>
+                  {% endif %}
                 {% else %}
                   <label style="display:block; margin-top:6px;">Standard input</label>
                   <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
                 {% endif %}
-                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
                 <div data-custom-results="{{ q.id }}" class="code-custom-results" style="margin-top:8px; font-size:0.95rem;"></div>
               </div>
             </div>

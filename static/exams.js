@@ -228,10 +228,10 @@
         if (!card) return;
         const modeField = card.querySelector('[data-field="code-mode"]');
         const mode = modeField ? (modeField.value || "script") : "script";
-        const selector = mode === "function" ? '[data-sample-list="function"]' : '[data-sample-list="script"]';
+        const selector = mode === "script" ? '[data-sample-list="script"]' : '[data-sample-list="callable"]';
         const container = card.querySelector(selector);
         if (container) {
-          const row = mode === "function" ? buildFunctionSampleRow() : buildScriptSampleRow();
+          const row = mode === "script" ? buildScriptSampleRow() : buildCallableSampleRow({}, mode);
           container.appendChild(row);
           syncHidden();
         }
@@ -379,6 +379,7 @@
         <span class="muted">Mode:</span>
         <button type="button" class="btn" data-mode-choice="script">Script (stdin/stdout)</button>
         <button type="button" class="btn" data-mode-choice="function">Function (call/return)</button>
+        <button type="button" class="btn" data-mode-choice="class">Class (init + method call)</button>
       `;
       card.appendChild(modePicker);
 
@@ -395,6 +396,39 @@
       signatureInput.value = data.function_signature || "";
       signatureWrap.appendChild(signatureInput);
       card.appendChild(signatureWrap);
+
+      const classSignatureWrap = document.createElement("div");
+      classSignatureWrap.dataset.codeMode = "class-signature";
+      classSignatureWrap.style.marginTop = "10px";
+      const classSignatureLabel = document.createElement("label");
+      classSignatureLabel.textContent = "Class signature";
+      classSignatureWrap.appendChild(classSignatureLabel);
+      const classSignatureInput = document.createElement("input");
+      classSignatureInput.type = "text";
+      classSignatureInput.dataset.field = "class-signature";
+      classSignatureInput.placeholder = "class Counter:";
+      classSignatureInput.value = data.class_signature || "";
+      classSignatureWrap.appendChild(classSignatureInput);
+      card.appendChild(classSignatureWrap);
+
+      const initWrap = document.createElement("div");
+      initWrap.dataset.codeMode = "class-init";
+      initWrap.style.marginTop = "10px";
+      const initLabel = document.createElement("label");
+      initLabel.textContent = "__init__ call";
+      initWrap.appendChild(initLabel);
+      const initInput = document.createElement("input");
+      initInput.type = "text";
+      initInput.dataset.field = "class-init";
+      initInput.placeholder = "Counter(0)";
+      initInput.value = data.class_init || "";
+      initWrap.appendChild(initInput);
+      const initHelp = document.createElement("p");
+      initHelp.className = "muted";
+      initHelp.style.marginTop = "6px";
+      initHelp.textContent = "A fresh object is created before each test and exposed as obj.";
+      initWrap.appendChild(initHelp);
+      card.appendChild(initWrap);
 
       const sampleHeader = document.createElement("div");
       sampleHeader.className = "row";
@@ -418,17 +452,17 @@
       scriptSampleList.style.gap = "10px";
       card.appendChild(scriptSampleList);
 
-      const functionSampleList = document.createElement("div");
-      functionSampleList.dataset.sampleList = "function";
-      functionSampleList.style.display = "flex";
-      functionSampleList.style.flexDirection = "column";
-      functionSampleList.style.gap = "10px";
-      card.appendChild(functionSampleList);
+      const callableSampleList = document.createElement("div");
+      callableSampleList.dataset.sampleList = "callable";
+      callableSampleList.style.display = "flex";
+      callableSampleList.style.flexDirection = "column";
+      callableSampleList.style.gap = "10px";
+      card.appendChild(callableSampleList);
 
       const samples = Array.isArray(data.samples) && data.samples.length ? data.samples : [{}];
       samples.forEach((sample) => {
         if (sample.call) {
-          functionSampleList.appendChild(buildFunctionSampleRow(sample));
+          callableSampleList.appendChild(buildCallableSampleRow(sample, data.mode || "function"));
         } else {
           scriptSampleList.appendChild(buildScriptSampleRow(sample));
         }
@@ -436,15 +470,25 @@
       if (!scriptSampleList.children.length) {
         scriptSampleList.appendChild(buildScriptSampleRow());
       }
-      if (!functionSampleList.children.length) {
-        functionSampleList.appendChild(buildFunctionSampleRow());
+      if (!callableSampleList.children.length) {
+        callableSampleList.appendChild(buildCallableSampleRow({}, data.mode || "function"));
       }
 
       const updateModeUI = () => {
         const mode = modeField.value || "script";
         scriptSampleList.style.display = mode === "script" ? "flex" : "none";
-        functionSampleList.style.display = mode === "function" ? "flex" : "none";
+        callableSampleList.style.display = mode === "script" ? "none" : "flex";
         signatureWrap.style.display = mode === "function" ? "block" : "none";
+        classSignatureWrap.style.display = mode === "class" ? "block" : "none";
+        initWrap.style.display = mode === "class" ? "block" : "none";
+        sampleHelper.textContent = mode === "script"
+          ? "Provide input/output pairs for script mode."
+          : mode === "class"
+            ? "Set the __init__ call once, then provide method calls or expressions that run against obj."
+            : "Provide function calls and expected returns for function mode.";
+        callableSampleList.querySelectorAll("[data-sample-row]").forEach((row) => {
+          setCallableSampleRowMode(row, mode);
+        });
         modePicker.querySelectorAll("button[data-mode-choice]").forEach((btn) => {
           const active = btn.dataset.modeChoice === mode;
           btn.classList.toggle("btn-primary", active);
@@ -675,7 +719,34 @@
     return wrapper;
   }
 
-  function buildFunctionSampleRow(sample = {}) {
+  function callableSampleMeta(mode) {
+    if (mode === "class") {
+      return {
+        callLabel: "Method call / expression",
+        callPlaceholder: "obj.increment()",
+        expectedLabel: "Expected result",
+      };
+    }
+    return {
+      callLabel: "Function call",
+      callPlaceholder: "square(5)",
+      expectedLabel: "Expected return",
+    };
+  }
+
+  function setCallableSampleRowMode(wrapper, mode) {
+    if (!wrapper) return;
+    const meta = callableSampleMeta(mode);
+    wrapper.dataset.callableMode = mode || "function";
+    const callLabel = wrapper.querySelector('[data-role="sample-call-label"]');
+    const callInput = wrapper.querySelector('[data-field="sample-call"]');
+    const expectedLabel = wrapper.querySelector('[data-role="sample-expected-label"]');
+    if (callLabel) callLabel.textContent = meta.callLabel;
+    if (callInput) callInput.placeholder = meta.callPlaceholder;
+    if (expectedLabel) expectedLabel.textContent = meta.expectedLabel;
+  }
+
+  function buildCallableSampleRow(sample = {}, mode = "function") {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
     wrapper.style.border = "1px dashed #334155";
@@ -693,24 +764,22 @@
     wrapper.appendChild(nameInput);
 
     const callLabel = document.createElement("label");
-    callLabel.textContent = "Function call";
+    callLabel.dataset.role = "sample-call-label";
     wrapper.appendChild(callLabel);
 
     const callInput = document.createElement("input");
     callInput.type = "text";
     callInput.dataset.field = "sample-call";
-    callInput.placeholder = "square(5)";
     callInput.value = sample.call || sample.input || "";
     wrapper.appendChild(callInput);
 
     const expectedLabel = document.createElement("label");
-    expectedLabel.textContent = "Expected return";
+    expectedLabel.dataset.role = "sample-expected-label";
     wrapper.appendChild(expectedLabel);
 
     const expectedInput = document.createElement("textarea");
     expectedInput.rows = 3;
     expectedInput.dataset.field = "sample-expected";
-    expectedInput.placeholder = "25";
     expectedInput.value = sample.expected || sample.output || "";
     wrapper.appendChild(expectedInput);
 
@@ -734,6 +803,7 @@
     removeBtn.textContent = "Remove sample";
     wrapper.appendChild(removeBtn);
 
+    setCallableSampleRowMode(wrapper, mode);
     return wrapper;
   }
 
@@ -771,11 +841,23 @@
         payload.starter = getFieldValue(card, "starter");
         if (mode === "function") {
           payload.function_signature = getFieldValue(card, "function-signature");
-          const rows = card.querySelectorAll('[data-sample-list="function"] [data-sample-row]');
+          const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
           payload.samples = Array.from(rows).map((row) => ({
             name: getFieldValue(row, "sample-name"),
             call: getFieldValue(row, "sample-call"),
             expected: getFieldValue(row, "sample-expected"),
+            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
+          }));
+        } else if (mode === "class") {
+          const classInit = getFieldValue(card, "class-init");
+          payload.class_signature = getFieldValue(card, "class-signature");
+          payload.class_init = classInit;
+          const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
+          payload.samples = Array.from(rows).map((row) => ({
+            name: getFieldValue(row, "sample-name"),
+            call: getFieldValue(row, "sample-call"),
+            expected: getFieldValue(row, "sample-expected"),
+            init_call: classInit,
             hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         } else {
@@ -983,8 +1065,19 @@
           toggle.textContent = open ? "Details" : "Hide details";
         });
 
-        const labelInput = sample.mode === "function" ? "Call" : "Input";
+        const labelInput = sample.mode === "class" ? "Method call" : sample.mode === "function" ? "Call" : "Input";
+        const outputLabel = sample.mode === "script" ? "Your output" : "Your result";
+        const expectedLabel = sample.mode === "script" ? "Expected output" : "Expected result";
+        if (sample.mode === "class" && sample.init_call) {
+          const initBlock = document.createElement("div");
+          initBlock.innerHTML = `
+            <div class="muted">Init</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.init_call || "")}</pre>
+          `;
+          details.appendChild(initBlock);
+        }
         const inputBlock = document.createElement("div");
+        inputBlock.style.marginTop = sample.mode === "class" && sample.init_call ? "8px" : "0";
         inputBlock.innerHTML = `
           <div class="muted">${labelInput}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.input || "")}</pre>
@@ -993,14 +1086,14 @@
         const outputBlock = document.createElement("div");
         outputBlock.style.marginTop = "8px";
         outputBlock.innerHTML = `
-          <div class="muted">Your output</div>
+          <div class="muted">${outputLabel}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.output || "")}</pre>
         `;
 
         const expectedBlock = document.createElement("div");
         expectedBlock.style.marginTop = "8px";
         expectedBlock.innerHTML = `
-          <div class="muted">Expected output</div>
+          <div class="muted">${expectedLabel}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.expected || "")}</pre>
         `;
 
@@ -1013,7 +1106,7 @@
           const diffLabel = document.createElement("div");
           diffLabel.className = "muted";
           diffLabel.style.marginTop = "8px";
-          diffLabel.textContent = "Diff (expected vs your output)";
+          diffLabel.textContent = sample.mode === "script" ? "Diff (expected vs your output)" : "Diff (expected vs your result)";
           details.appendChild(diffLabel);
           details.appendChild(diffWrap);
         }
@@ -1065,9 +1158,17 @@
       const pyodide = await ensurePackages();
       const codeInput = root.querySelector(`[data-code-input="${triggerBtn.dataset.question}"]`);
       const codeValue = codeOverride !== undefined ? codeOverride : (codeInput ? codeInput.value : "");
+      const mode = modeOverride || triggerBtn.getAttribute("data-mode") || "script";
+      const classInit = triggerBtn.getAttribute("data-class-init") || "";
+      const runnerSamples = mode === "class"
+        ? (Array.isArray(samples) ? samples : []).map((sample) => ({
+          ...sample,
+          init_call: sample && sample.init_call ? sample.init_call : classInit,
+        }))
+        : samples;
       pyodide.globals.set("runner_code", codeValue);
-      pyodide.globals.set("runner_samples", samples);
-      pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
+      pyodide.globals.set("runner_samples", runnerSamples);
+      pyodide.globals.set("runner_mode", mode);
       const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins, ast, base64
 
@@ -1145,11 +1246,11 @@ def _safe_eval(expr, glb, lcl, limit):
         sys.settrace(None)
 
 results = []
-namespace = {}
+namespace = {"__name__": "__main__"}
 setup_error = None
 
-# ---------- Setup for function mode ----------
-if mode == "function":
+# ---------- Setup for callable modes ----------
+if mode in ("function", "class"):
     try:
         _safe_exec(code, namespace, namespace, MAX_SETUP_OPS)
     except TimeLimitExceeded:
@@ -1161,10 +1262,11 @@ if mode == "function":
 for sample in samples:
     name = sample.get("name") or "Sample"
 
-    if mode == "function":
+    if mode in ("function", "class"):
         call_expr = (sample.get("call") or sample.get("input") or "").strip()
         expected_output_display = (sample.get("expected") or sample.get("output") or "")
         expected_output = expected_output_display.strip()
+        init_call = (sample.get("init_call") or "").strip() if mode == "class" else ""
         expected_literal = None
         expected_literal_defined = False
         if expected_output:
@@ -1186,12 +1288,17 @@ for sample in samples:
             status = "error"
             error_text = setup_error
         else:
+            sample_ns = dict(namespace)
             stdout = io.StringIO()
             original_stdout = sys.stdout
             sys.stdout = stdout
             try:
                 try:
-                    result = _safe_eval(call_expr, namespace, namespace, MAX_RUN_OPS)
+                    if mode == "class":
+                        if not init_call:
+                            raise RuntimeError("Missing __init__ call.")
+                        sample_ns["obj"] = _safe_eval(init_call, sample_ns, sample_ns, MAX_RUN_OPS)
+                    result = _safe_eval(call_expr, sample_ns, sample_ns, MAX_RUN_OPS)
                     result_value = result
                     output_value = repr(result)
                 except TimeLimitExceeded:
@@ -1219,7 +1326,8 @@ for sample in samples:
             "output": output_value,
             "expected": expected_output_display,
             "error": error_text,
-            "mode": "function",
+            "mode": mode,
+            "init_call": init_call,
             "plot_images": plot_images,
         })
 
@@ -1334,14 +1442,22 @@ json.dumps(results)
         const summaryEl = root.querySelector(`[data-custom-summary="${questionId}"]`);
         if (!questionId || !container) return;
         let samples = [];
-        if (mode === "function") {
+        if (mode === "function" || mode === "class") {
           const callInput = root.querySelector(`[data-custom-call="${questionId}"]`);
           const callExpr = callInput ? callInput.value.trim() : "";
           if (!callExpr) {
-            container.textContent = "Enter a function call to run.";
+            container.textContent = mode === "class"
+              ? "Enter a method call or expression to run."
+              : "Enter a function call to run.";
             return;
           }
-          samples = [{ name: "Custom run", call: callExpr, input: callExpr, expected: "" }];
+          samples = [{
+            name: "Custom run",
+            call: callExpr,
+            input: callExpr,
+            expected: "",
+            init_call: mode === "class" ? (btn.dataset.classInit || "") : "",
+          }];
         } else {
           const stdinField = root.querySelector(`[data-custom-stdin="${questionId}"]`);
           const stdinValue = stdinField ? stdinField.value : "";

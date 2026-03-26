@@ -55,6 +55,18 @@
               <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ q.function_signature }}</pre>
             </div>
           {% endif %}
+          {% if q.mode == "class" and q.class_signature %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
+              <div class="muted">Class</div>
+              <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ q.class_signature }}</pre>
+            </div>
+          {% endif %}
+          {% if q.mode == "class" and q.class_init %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
+              <div class="muted">Init</div>
+              <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">obj = {{ q.class_init }}</pre>
+            </div>
+          {% endif %}
         {% endif %}
         <div style="margin-top:12px; padding:12px; border-radius:10px; border:1px solid #334155; background:#0f172a;">
           <div class="muted" style="font-size:0.9rem;">Student answer</div>
@@ -217,7 +229,9 @@
               <div class="muted" style="margin-top:8px; font-size:0.9rem;">
                 Samples: {{ visible_passed }}/{{ visible_cases|length }} passed • Hidden: {{ hidden_passed }}/{{ hidden_cases|length }} passed
               </div>
-              {% set input_label = "Call" if q.mode == "function" else "Input" %}
+              {% set input_label = "Method call" if q.mode == "class" else ("Call" if q.mode == "function" else "Input") %}
+              {% set output_label = "Result" if q.mode in ("function", "class") else "Output" %}
+              {% set expected_label = "Expected result" if q.mode in ("function", "class") else "Expected" %}
               {% if visible_cases %}
                 <div style="margin-top:10px;">
                   <div class="muted" style="font-size:0.85rem;">Sample tests</div>
@@ -236,16 +250,22 @@
                         <strong>{{ case.name or "Sample" }}</strong>
                         <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
                       </div>
+                      {% if case.init_call %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Init</div>
+                          <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.init_call }}</pre>
+                        </div>
+                      {% endif %}
                       <div style="margin-top:8px;">
                         <div class="muted">{{ input_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Output</div>
+                        <div class="muted">{{ output_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Expected</div>
+                        <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
                       </div>
                       {% if case.plot_images %}
@@ -284,16 +304,22 @@
                         <strong>{{ case.name or "Hidden test" }}</strong>
                         <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
                       </div>
+                      {% if case.init_call %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Init</div>
+                          <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.init_call }}</pre>
+                        </div>
+                      {% endif %}
                       <div style="margin-top:8px;">
                         <div class="muted">{{ input_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Output</div>
+                        <div class="muted">{{ output_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Expected</div>
+                        <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
                       </div>
                       {% if case.plot_images %}

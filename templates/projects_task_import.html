@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">Import tasks for {{ project.title }}</h3>
-      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged.</p>
+      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer now supports script, function, and class-based code questions.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
   </div>
@@ -18,6 +18,7 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <label>Task JSON</label>
     <textarea name="payload" rows="20" style="width:100%; font-family:ui-monospace;" required>{{ payload }}</textarea>
+    <p class="muted" style="margin-top:6px;">Top-level shape: <code>{"tasks": [...]}</code>. The importer also accepts a few aliases such as <code>project_tasks</code>, <code>items</code>, <code>choices</code>, <code>tests</code>, <code>function_call</code>, and <code>method_call</code>.</p>
     <div class="sp"></div>
     <button class="btn btn-primary" type="submit">Import tasks</button>
     <a class="btn" href="{{ url_for('projects_tasks_schema') }}" target="_blank" rel="noopener">Download schema</a>
@@ -25,8 +26,50 @@
 </div>
 <div class="sp"></div>
 <div class="card">
-  <h3 style="margin:0;">Schema</h3>
-  <p class="muted" style="margin-top:6px;">Reference schema for the JSON payload. Each task's <code>questions</code> array accepts the same fields as the regular builder.</p>
+  <div class="row" style="justify-content:space-between; align-items:center; gap:10px;">
+    <h3 style="margin:0;">Starter Payloads</h3>
+    <div class="row" style="gap:8px; flex-wrap:wrap;">
+      <button type="button" class="btn" data-load-starter="minimal">Load minimal starter</button>
+      <button type="button" class="btn" data-load-starter="class_code">Load class code starter</button>
+    </div>
+  </div>
+  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The class starter demonstrates the new <code>code_mode: "class"</code> format.</p>
+  <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:12px;">
+    <div>
+      <strong>Minimal starter</strong>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.minimal }}</pre>
+    </div>
+    <div>
+      <strong>Class code starter</strong>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.class_code }}</pre>
+    </div>
+  </div>
+</div>
+<div class="sp"></div>
+<div class="card">
+  <h3 style="margin:0;">Import Reference</h3>
+  <p class="muted" style="margin-top:6px;">Verbose schema and examples for humans or LLMs generating task JSON. It includes accepted aliases, per-question guidance, and code-mode examples.</p>
   <pre class="code-block" style="max-height:320px; overflow:auto;">{{ schema_json }}</pre>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  const textarea = document.querySelector('textarea[name="payload"]');
+  if (!textarea) return;
+  const starters = {
+    minimal: {{ starter_payloads.minimal|tojson }},
+    class_code: {{ starter_payloads.class_code|tojson }},
+  };
+  document.querySelectorAll('[data-load-starter]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-load-starter');
+      if (!key || !(key in starters)) return;
+      textarea.value = starters[key];
+      textarea.focus();
+      textarea.setSelectionRange(0, 0);
+    });
+  });
+})();
+</script>
 {% endblock %}
