@@ -293,6 +293,7 @@ class Project(db.Model):
     collection = db.Column(db.String(64), nullable=False, default="comp101")
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)
+    deadline_at = db.Column(db.DateTime, nullable=True)
     required_task_count = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)

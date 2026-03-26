@@ -584,6 +584,24 @@ def _ensure_project_collection_column():
         # Fail open: don't block app start if migration fails
         pass
 
+def _ensure_project_deadline_column():
+    try:
+        inspector = inspect(db.engine)
+        if "projects" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("projects")}
+        if "deadline_at" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE projects "
+                        "ADD COLUMN deadline_at DATETIME NULL"
+                    )
+                )
+    except Exception:
+        # Fail open: don't block app start if migration fails
+        pass
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -596,6 +614,7 @@ def create_app(db_path=DB_URI):
     with app.app_context():
         db.create_all()
         _ensure_project_collection_column()
+        _ensure_project_deadline_column()
     return app
 
 app = create_app()
@@ -4553,6 +4572,7 @@ def projects_new():
         "collection": request.form.get("collection") or "comp101",
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
+        "deadline_at": request.form.get("deadline_at") or "",
         "required_task_count": request.form.get("required_task_count") or "",
         "points": request.form.get("points") or "",
         "retry_cooldown_minutes": request.form.get("retry_cooldown_minutes") or "",
@@ -4563,8 +4583,14 @@ def projects_new():
             abort(400, "bad csrf")
         title = form_data["title"].strip()
         collection = form_data["collection"].strip() or "comp101"
+        deadline_at = None
         if not title:
             error = "Project title is required."
+        deadline_raw = form_data["deadline_at"].strip()
+        if deadline_raw and not error:
+            deadline_at = parse_dt_local(deadline_raw)
+            if not deadline_at:
+                error = "Deadline must be a valid date and time."
         required_count = None
         rtc_raw = form_data["required_task_count"].strip()
         if rtc_raw:
@@ -4596,6 +4622,7 @@ def projects_new():
                 collection=collection,
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
+                deadline_at=deadline_at,
                 required_task_count=required_count,
                 is_active=False,
                 points=points_value,
@@ -4640,25 +4667,40 @@ def projects_show(code):
 def projects_edit(code):
     project = Project.query.filter_by(code=code).first_or_404()
     error = None
+    form_data = {
+        "title": request.form.get("title") if request.method == "POST" else project.title,
+        "collection": request.form.get("collection") if request.method == "POST" else (project.collection or "comp101"),
+        "description": request.form.get("description") if request.method == "POST" else (project.description or ""),
+        "instructions": request.form.get("instructions") if request.method == "POST" else (project.instructions or ""),
+        "deadline_at": request.form.get("deadline_at") if request.method == "POST" else (project.deadline_at.strftime("%Y-%m-%dT%H:%M") if project.deadline_at else ""),
+        "required_task_count": request.form.get("required_task_count") if request.method == "POST" else (str(project.required_task_count) if project.required_task_count else ""),
+    }
     
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
         
-        title = (request.form.get("title") or "").strip()
-        collection = (request.form.get("collection") or "").strip()
-        description = (request.form.get("description") or "").strip()
-        instructions = (request.form.get("instructions") or "").strip()
-        required_task_count = (request.form.get("required_task_count") or "").strip()
+        title = (form_data["title"] or "").strip()
+        collection = (form_data["collection"] or "").strip()
+        description = (form_data["description"] or "").strip()
+        instructions = (form_data["instructions"] or "").strip()
+        deadline_raw = (form_data["deadline_at"] or "").strip()
+        required_task_count = (form_data["required_task_count"] or "").strip()
+        deadline_at = None
         
         if not title:
             error = "Project title is required."
+        if deadline_raw and not error:
+            deadline_at = parse_dt_local(deadline_raw)
+            if not deadline_at:
+                error = "Deadline must be a valid date and time."
         
         if not error:
             project.title = title
             project.collection = collection or "comp101"
             project.description = description or None
             project.instructions = instructions or None
+            project.deadline_at = deadline_at
             
             if required_task_count:
                 try:
@@ -4671,14 +4713,6 @@ def projects_edit(code):
             if not error:
                 db.session.commit()
                 return redirect(url_for("projects_show", code=project.code))
-    
-    form_data = {
-        "title": project.title,
-        "collection": project.collection or "comp101",
-        "description": project.description or "",
-        "instructions": project.instructions or "",
-        "required_task_count": str(project.required_task_count) if project.required_task_count else "",
-    }
     
     return render_template(
         "projects_edit.html",

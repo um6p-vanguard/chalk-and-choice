@@ -33,6 +33,9 @@
           <div>
             <h3 style="margin:0;">{{ row.project.title }}</h3>
             <p class="muted" style="margin:4px 0;"><span style="color:#4ade80;">Completed</span></p>
+            {% if row.project.deadline_at %}
+              <div class="muted" style="margin:4px 0 0 0;" data-project-deadline data-deadline-iso="{{ row.project.deadline_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">Deadline: {{ row.project.deadline_at.strftime("%b %d %H:%M UTC") }}</div>
+            {% endif %}
           </div>
           <div class="muted">{{ row.completed_count }} / {{ row.total_tasks }} tasks done</div>
         </summary>
@@ -129,6 +132,9 @@
                 <span style="color:#fde047;">In progress</span>
               {% endif %}
             </p>
+            {% if row.project.deadline_at %}
+              <div class="muted" style="margin:4px 0 0 0;" data-project-deadline data-deadline-iso="{{ row.project.deadline_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">Deadline: {{ row.project.deadline_at.strftime("%b %d %H:%M UTC") }}</div>
+            {% endif %}
           </div>
           {% if row.tasks %}
             <div class="muted">{{ row.completed_count }} / {{ row.total_tasks }} tasks done</div>
@@ -227,6 +233,9 @@
             <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
             <div style="margin-top:8px;">
               {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
+              {% if row.project.deadline_at %}
+                <p class="muted" style="margin:4px 0;" data-project-deadline data-deadline-iso="{{ row.project.deadline_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">Deadline: {{ row.project.deadline_at.strftime("%b %d %H:%M UTC") }}</p>
+              {% endif %}
               <p class="muted" style="margin:4px 0;">
                 <span style="color:#f87171;">Locked — finish prerequisites.</span>
               </p>
@@ -255,7 +264,6 @@
 <script>
 (function(){
   const blocks = document.querySelectorAll("[data-markdown-project]");
-  if (!blocks.length) return;
   const escapeHtml = (str) => (str || "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[ch] || ch));
   const inline = (text) => escapeHtml(text || "").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>");
   const render = (text) => {
@@ -277,6 +285,49 @@
     return parts.join("");
   };
   blocks.forEach((el) => { el.innerHTML = render(el.textContent || ""); el.style.whiteSpace = "normal"; });
+
+  const deadlineEls = document.querySelectorAll("[data-project-deadline]");
+  if (!deadlineEls.length) return;
+
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const formatUtc = (date) => {
+    const mon = months[date.getUTCMonth()] || "";
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    const hours = String(date.getUTCHours()).padStart(2, "0");
+    const mins = String(date.getUTCMinutes()).padStart(2, "0");
+    return `${mon} ${day} ${hours}:${mins} UTC`;
+  };
+  const formatRemaining = (ms) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m left`;
+    if (hours > 0) return `${hours}h ${minutes}m left`;
+    if (minutes > 0) return `${minutes}m ${seconds}s left`;
+    return `${seconds}s left`;
+  };
+  const renderDeadlines = () => {
+    const now = Date.now();
+    deadlineEls.forEach((el) => {
+      const iso = el.getAttribute("data-deadline-iso");
+      if (!iso) return;
+      const deadline = new Date(iso);
+      if (Number.isNaN(deadline.getTime())) return;
+      const diff = deadline.getTime() - now;
+      const absolute = formatUtc(deadline);
+      if (diff > 0) {
+        el.textContent = `Deadline: ${absolute} (${formatRemaining(diff)})`;
+        el.style.color = "#fde047";
+      } else {
+        el.textContent = `Deadline: ${absolute} (passed)`;
+        el.style.color = "#f87171";
+      }
+    });
+  };
+  renderDeadlines();
+  window.setInterval(renderDeadlines, 1000);
 })();
 </script>
 {% endblock %}

@@ -23,6 +23,10 @@
     <label>Instructions</label>
     <textarea name="instructions" rows="4" placeholder="Shown to students before the tasks.">{{ form_data.instructions }}</textarea>
 
+    <label>Deadline (UTC)</label>
+    <input type="datetime-local" name="deadline_at" value="{{ form_data.deadline_at }}">
+    <p class="muted" style="margin-top:4px;">Optional. If set, students will see the deadline and a live countdown on project cards.</p>
+
     <label>Required tasks to complete</label>
     <input type="number" min="0" name="required_task_count" placeholder="Leave blank to require all tasks" value="{{ form_data.required_task_count }}">
 

@@ -13,6 +13,11 @@
           All tasks must be completed.
         {% endif %}
       </p>
+      {% if project.deadline_at %}
+        <p class="muted" style="margin:6px 0;">Deadline: {{ project.deadline_at.strftime("%b %d %H:%M UTC") }}</p>
+      {% else %}
+        <p class="muted" style="margin:6px 0;">Deadline: none</p>
+      {% endif %}
       {% if project.instructions %}
         <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
           <strong>Student instructions</strong>
@@ -41,7 +46,7 @@
       <span style="color:#f87171;">Draft (hidden from students)</span>
     {% endif %}
   </p>
-  <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_minutes }} min</strong></p>
+  <p class="muted" style="margin-top:4px;">Points: <strong>{{ project.points }}</strong> • Retry cooldown: <strong>{{ project.retry_cooldown_minutes }} min</strong> • Deadline: <strong>{{ project.deadline_at.strftime("%b %d %H:%M UTC") if project.deadline_at else "None" }}</strong></p>
 </div>
 
 {% if status_message %}

@@ -39,6 +39,12 @@
     <p class="muted" style="margin-top:4px; font-size:0.9rem;">Shown to students when they view the project.</p>
     
     <div class="sp"></div>
+
+    <label>Deadline (UTC)</label>
+    <input type="datetime-local" name="deadline_at" value="{{ form_data.deadline_at }}">
+    <p class="muted" style="margin-top:4px; font-size:0.9rem;">Optional. Students will see this deadline and a live countdown on project cards.</p>
+
+    <div class="sp"></div>
     
     <label>Required task count</label>
     <input type="number" name="required_task_count" value="{{ form_data.required_task_count }}" min="0" placeholder="Leave empty to require all tasks">
