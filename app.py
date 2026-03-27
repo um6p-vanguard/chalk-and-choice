@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal
 from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
@@ -3148,6 +3148,33 @@ def _collect_plot_images():
             pass
     return images
 
+class CodeExecutionTimedOut(Exception):
+    pass
+
+def _run_with_code_timeout(seconds, callback):
+    if not seconds or seconds <= 0:
+        return callback()
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return callback()
+
+    def _handle_timeout(signum, frame):
+        raise CodeExecutionTimedOut("Execution time limit exceeded.")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        return callback()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+def _code_batch_timeout_seconds(test_count, mode):
+    per_step_limit = max(float(CODE_RUN_TIME_LIMIT_SEC or 0), 0.1)
+    setup_steps = 1 if mode in ("function", "class") else 0
+    per_test_steps = 2 if mode == "class" else 1
+    return per_step_limit * (max(1, int(test_count or 0)) * per_test_steps + setup_steps) + 1.0
+
 def _run_code_tests_worker(code_text, tests, mode):
     results = []
     if not tests:
@@ -3174,24 +3201,34 @@ def _run_code_tests_worker(code_text, tests, mode):
         return results
     _init_plot_backend()
     env_base = None
+    setup_failure_status = "error"
+    setup_failure_message = ""
     if mode in ("function", "class"):
         try:
             env_base = safe_env()
             env_base["__name__"] = "__main__"
-            exec(code_text, env_base, env_base)
+            _run_with_code_timeout(
+                CODE_RUN_TIME_LIMIT_SEC,
+                lambda: exec(code_text, env_base, env_base),
+            )
+        except CodeExecutionTimedOut:
+            setup_failure_status = "timeout"
+            setup_failure_message = "Setup time limit exceeded."
         except Exception:
-            tb = traceback.format_exc()
+            setup_failure_status = "error"
+            setup_failure_message = traceback.format_exc()
+        if setup_failure_message:
             for idx, test in enumerate(tests):
                 hidden = bool(test.get("hidden"))
                 name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
                 init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
                 results.append({
                     "name": name,
-                    "status": "error",
+                    "status": setup_failure_status,
                     "input": test.get("call") or test.get("input") or "",
                     "output": "",
                     "expected": test.get("expected") or test.get("output") or "",
-                    "error": tb,
+                    "error": setup_failure_message,
                     "mode": mode,
                     "init_call": init_call,
                     "hidden": hidden,
@@ -3232,10 +3269,19 @@ def _run_code_tests_worker(code_text, tests, mode):
                         init_call = (test.get("init_call") or "").strip()
                         if not init_call:
                             raise RuntimeError("Missing __init__ call.")
-                        env["obj"] = eval(init_call, env, env)
-                    result = eval(call_expr, env, env)
+                        env["obj"] = _run_with_code_timeout(
+                            CODE_RUN_TIME_LIMIT_SEC,
+                            lambda: eval(init_call, env, env),
+                        )
+                    result = _run_with_code_timeout(
+                        CODE_RUN_TIME_LIMIT_SEC,
+                        lambda: eval(call_expr, env, env),
+                    )
                     result_value = result
                     output_value = repr(result)
+                except CodeExecutionTimedOut:
+                    status = "timeout"
+                    error_text = "Execution time limit exceeded."
                 except Exception:
                     status = "error"
                     error_text = traceback.format_exc()
@@ -3280,12 +3326,19 @@ def _run_code_tests_worker(code_text, tests, mode):
                 original_stdout = sys.stdout
                 sys.stdout = stdout_buffer
                 try:
-                    exec(code_text, env, env)
+                    _run_with_code_timeout(
+                        CODE_RUN_TIME_LIMIT_SEC,
+                        lambda: exec(code_text, env, env),
+                    )
+                except CodeExecutionTimedOut:
+                    status = "timeout"
+                    error_text = "Execution time limit exceeded."
                 finally:
                     sys.stdout = original_stdout
             except Exception:
-                status = "error"
-                error_text = traceback.format_exc()
+                if status != "timeout":
+                    status = "error"
+                    error_text = traceback.format_exc()
             output_value = stdout_buffer.getvalue()
             plot_images = _collect_plot_images()
             if status == "passed" and expected_output.strip():
@@ -3347,7 +3400,7 @@ def _run_code_tests_backend(code_text, tests, mode):
 
     proc = ctx.Process(target=_child)
     proc.start()
-    proc.join(CODE_RUN_TIME_LIMIT_SEC)
+    proc.join(_code_batch_timeout_seconds(len(tests), mode))
 
     timed_out = False
     results = []
