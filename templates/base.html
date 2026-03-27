@@ -98,6 +98,40 @@
     .md-block th, .md-block td { border:1px solid var(--border); padding:6px 8px; text-align:left; }
     .md-block img { max-width:100%; border-radius:8px; }
     .md-math { margin:10px 0; }
+    .nav-badge {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:18px;
+      height:18px;
+      margin-left:6px;
+      padding:0 6px;
+      border-radius:999px;
+      background:var(--danger);
+      color:#fff;
+      font-size:0.75rem;
+      font-weight:700;
+      line-height:1;
+      vertical-align:middle;
+    }
+    .modal-open { overflow:hidden; }
+    .modal-backdrop {
+      position:fixed;
+      inset:0;
+      z-index:1000;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+      background:rgba(2, 6, 23, 0.82);
+    }
+    .modal-backdrop.is-open { display:flex; }
+    .modal-panel {
+      width:min(760px, calc(100vw - 32px));
+      max-height:min(85vh, 900px);
+      overflow:auto;
+      border-color:var(--brand);
+    }
   </style>
   <script>
     window.MathJax = {
@@ -145,6 +179,11 @@
           <a href="{{ url_for('student_projects') }}" style="margin-left:10px;">Projects</a>
           <a href="{{ url_for('leaderboards_public') }}" style="margin-left:10px;">Leaderboards</a>
           <a href="{{ url_for('student_grades') }}" style="margin-left:10px;">My Grades</a>
+          {% if student_unseen_announcements %}
+          <a href="#" id="student-announcements-toggle" style="margin-left:10px;">
+            Announcements <span class="nav-badge">{{ student_unseen_announcements|length }}</span>
+          </a>
+          {% endif %}
           <a class="btn" href="{{ url_for('logout') }}" style="margin-left:10px;">Logout</a>
         {% else %}
           <a class="btn" href="{{ url_for('login') }}">Login</a>
@@ -152,21 +191,23 @@
       </div>
     </div>
     <div class="sp"></div>
-    {% if student_unseen_announcements %}
-    <div class="card" style="border-color:var(--brand);">
+    {% block content %}{% endblock %}
+    <div class="sp"></div>
+
+    <div class="muted">SASE Portal</div>
+    {% block scripts %}{% endblock %}
+  </div>
+  {% if student_unseen_announcements %}
+  <div id="student-announcements-modal" class="modal-backdrop" aria-hidden="true">
+    <div class="card modal-panel" role="dialog" aria-modal="true" aria-labelledby="student-announcements-title">
       <div class="row" style="justify-content:space-between; align-items:flex-start;">
         <div>
-          <h3 style="margin:0;">Announcements</h3>
-          <p class="muted" style="margin:6px 0 0 0;">Unread messages for you. Mark them as read once you're done.</p>
+          <h3 id="student-announcements-title" style="margin:0;">Announcements</h3>
+          <p class="muted" style="margin:6px 0 0 0;">
+            You have {{ student_unseen_announcements|length }} unread announcement{{ '' if student_unseen_announcements|length == 1 else 's' }}.
+          </p>
         </div>
-        <form method="post" action="{{ url_for('student_announcements_mark_seen') }}">
-          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-          <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') if request.query_string else request.path }}">
-          {% for delivery in student_unseen_announcements %}
-            <input type="hidden" name="announcement_ids" value="{{ delivery.id }}">
-          {% endfor %}
-          <button class="btn btn-primary" type="submit">Mark as read</button>
-        </form>
+        <button type="button" class="btn" data-announcements-close>Dismiss</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
         {% for delivery in student_unseen_announcements %}
@@ -180,15 +221,20 @@
         </div>
         {% endfor %}
       </div>
+      <div class="row" style="justify-content:flex-end; margin-top:16px;">
+        <button type="button" class="btn" data-announcements-close>Close</button>
+        <form method="post" action="{{ url_for('student_announcements_mark_seen') }}" id="student-announcements-read-form">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') if request.query_string else request.path }}">
+          {% for delivery in student_unseen_announcements %}
+            <input type="hidden" name="announcement_ids" value="{{ delivery.id }}">
+          {% endfor %}
+          <button class="btn btn-primary" type="submit">Mark as read</button>
+        </form>
+      </div>
     </div>
-    <div class="sp"></div>
-    {% endif %}
-    {% block content %}{% endblock %}
-    <div class="sp"></div>
-
-    <div class="muted">SASE Portal</div>
-    {% block scripts %}{% endblock %}
   </div>
+  {% endif %}
   <script>
     window.addEventListener("DOMContentLoaded", () => {
       if (window.MathJax && typeof window.MathJax.typesetPromise === "function") {
@@ -209,6 +255,76 @@
       };
       ping();
       setInterval(ping, 5 * 60 * 1000);
+    })();
+  </script>
+  {% endif %}
+  {% if student_unseen_announcements %}
+  <script>
+    (function () {
+      const modal = document.getElementById("student-announcements-modal");
+      const toggle = document.getElementById("student-announcements-toggle");
+      const readForm = document.getElementById("student-announcements-read-form");
+      if (!modal || !toggle) return;
+
+      const deliveryIds = Array.from(
+        modal.querySelectorAll('input[name="announcement_ids"]')
+      ).map((input) => input.value).filter(Boolean);
+      const unreadKey = "student-announcements-dismissed:" + deliveryIds.join(",");
+
+      const openModal = () => {
+        modal.classList.add("is-open");
+        modal.setAttribute("aria-hidden", "false");
+        document.body.classList.add("modal-open");
+      };
+
+      const closeModal = () => {
+        modal.classList.remove("is-open");
+        modal.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("modal-open");
+        try {
+          window.sessionStorage.setItem(unreadKey, "1");
+        } catch (err) {}
+      };
+
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        try {
+          window.sessionStorage.removeItem(unreadKey);
+        } catch (err) {}
+        openModal();
+      });
+
+      modal.querySelectorAll("[data-announcements-close]").forEach((button) => {
+        button.addEventListener("click", () => closeModal());
+      });
+
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && modal.classList.contains("is-open")) {
+          closeModal();
+        }
+      });
+
+      if (readForm) {
+        readForm.addEventListener("submit", () => {
+          try {
+            window.sessionStorage.removeItem(unreadKey);
+          } catch (err) {}
+        });
+      }
+
+      let shouldAutoOpen = true;
+      try {
+        shouldAutoOpen = !window.sessionStorage.getItem(unreadKey);
+      } catch (err) {}
+      if (shouldAutoOpen) {
+        window.setTimeout(openModal, 150);
+      }
     })();
   </script>
   {% endif %}
