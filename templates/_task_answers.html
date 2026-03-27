@@ -9,6 +9,9 @@
       {% set qid = (q.id|string) if q.id is defined else (q.get("id")|string) %}
       {% set answer = answers.get(qid) if answers else "" %}
       {% set answer_val = "" if answer is none else (answer|string) %}
+      {% set plot_answer = answer if answer is mapping else None %}
+      {% set plot_code = plot_answer.code if plot_answer and plot_answer.code is defined else answer_val %}
+      {% set plot_artifact = plot_answer.artifact if plot_answer and plot_answer.artifact is defined and plot_answer.artifact is mapping else None %}
       {% set qtype = q.type or q.get("type") %}
       {% set qlogs = logs_by_question.get(qid, []) %}
       {% set grading = grading_by_question.get(qid) if grading_by_question else None %}
@@ -42,13 +45,15 @@
         {% if q.code_snippet %}
           <pre style="margin-top:10px; white-space:pre-wrap; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ q.code_snippet }}</pre>
         {% endif %}
-        {% if qtype == "code" %}
+        {% if qtype in ("code", "plot") %}
           {% if q.statement %}
             <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px dashed #334155;">
-              <strong>Problem statement</strong>
+              <strong>{{ "Plot instructions" if qtype == "plot" else "Problem statement" }}</strong>
               <div class="markdown-block muted" style="margin:6px 0 0 0;">{{ q.statement|markdown }}</div>
             </div>
           {% endif %}
+        {% endif %}
+        {% if qtype == "code" %}
           {% if q.mode == "function" and q.function_signature %}
             <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
               <div class="muted">Signature</div>
@@ -102,6 +107,40 @@
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
           {% elif qtype == "code" %}
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "# no submission" }}</pre>
+          {% elif qtype == "plot" %}
+            <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ plot_code or "# no submission" }}</pre>
+            {% if plot_artifact and submission_id %}
+              <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+                <div class="muted" style="font-size:0.9rem;">Submitted plot</div>
+                <img src="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id) }}" alt="Submitted plot" style="display:block; max-width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="gap:8px; flex-wrap:wrap; align-items:center;">
+                  {% if plot_artifact.width and plot_artifact.height %}
+                    <span class="muted" style="font-size:0.9rem;">{{ plot_artifact.width }}×{{ plot_artifact.height }}</span>
+                  {% endif %}
+                  {% if plot_artifact.size %}
+                    <span class="muted" style="font-size:0.9rem;">{{ (plot_artifact.size // 1024) }} KB</span>
+                  {% endif %}
+                  {% if plot_artifact.uploaded_at %}
+                    <span class="muted" style="font-size:0.9rem;">{{ plot_artifact.uploaded_at }}</span>
+                  {% endif %}
+                  <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id, download=1) }}">Download PNG</a>
+                </div>
+              </div>
+            {% else %}
+              <p class="muted" style="margin-top:8px;">No plot artifact submitted.</p>
+            {% endif %}
+            {% if plot_answer and plot_answer.stdout is defined and plot_answer.stdout %}
+              <div style="margin-top:10px;">
+                <div class="muted">Stdout</div>
+                <pre style="white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ plot_answer.stdout }}</pre>
+              </div>
+            {% endif %}
+            {% if plot_answer and plot_answer.error is defined and plot_answer.error %}
+              <div style="margin-top:10px;">
+                <div class="muted">Runner message</div>
+                <pre style="white-space:pre-wrap; background:#1f2937; padding:10px; border-radius:10px; border:1px solid #334155;">{{ plot_answer.error }}</pre>
+              </div>
+            {% endif %}
           {% elif qtype == "file" %}
             {% set file_info = answer if answer is mapping else None %}
             {% if file_info %}
@@ -201,6 +240,8 @@
               {% else %}
                 <p class="muted" style="margin:6px 0 0 0;">No tests configured for this code question.</p>
               {% endif %}
+            {% elif qtype == "plot" %}
+              <p class="muted" style="margin:6px 0 0 0;">Manual review. Check the submitted code and PNG against the plotting instructions.</p>
             {% elif qtype == "file" %}
               <p class="muted" style="margin:6px 0 0 0;">Upload a {{ q.accept or ".zip" }} file (max {{ q.max_mb or 5 }} MB).</p>
             {% else %}

@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">Import tasks for {{ project.title }}</h3>
-      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer now supports script, function, and class-based code questions.</p>
+      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer supports script, function, class-based code questions, manual-review plot questions, and markdown-formatted text fields.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
   </div>
@@ -19,6 +19,11 @@
     <label>Task JSON</label>
     <textarea name="payload" rows="20" style="width:100%; font-family:ui-monospace;" required>{{ payload }}</textarea>
     <p class="muted" style="margin-top:6px;">Top-level shape: <code>{"tasks": [...]}</code>. The importer also accepts a few aliases such as <code>project_tasks</code>, <code>items</code>, <code>choices</code>, <code>tests</code>, <code>function_call</code>, and <code>method_call</code>.</p>
+    <p class="muted" style="margin-top:6px;">Text fields support Markdown. Because this is JSON, write line breaks as <code>\n</code> and blank lines as <code>\n\n</code> inside the string value.</p>
+    <pre class="code-block" style="max-height:180px; overflow:auto;">{
+  "prompt": "Read the instructions carefully.\\n\\n- Use a loop\\n- Print one result per line",
+  "problem_statement": "Starter shape:\\n```python\\ndef solve():\\n    pass\\n```"
+}</pre>
     <div class="sp"></div>
     <button class="btn btn-primary" type="submit">Import tasks</button>
     <a class="btn" href="{{ url_for('projects_tasks_schema') }}" target="_blank" rel="noopener">Download schema</a>
@@ -31,9 +36,11 @@
     <div class="row" style="gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn" data-load-starter="minimal">Load minimal starter</button>
       <button type="button" class="btn" data-load-starter="class_code">Load class code starter</button>
+      <button type="button" class="btn" data-load-starter="plot">Load plot starter</button>
+      <button type="button" class="btn" data-load-starter="formatting">Load formatting starter</button>
     </div>
   </div>
-  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The class starter demonstrates the new <code>code_mode: "class"</code> format.</p>
+  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The formatting starter demonstrates escaped <code>\n</code> line breaks and markdown rendering inside imported JSON.</p>
   <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:12px;">
     <div>
       <strong>Minimal starter</strong>
@@ -43,12 +50,20 @@
       <strong>Class code starter</strong>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.class_code }}</pre>
     </div>
+    <div>
+      <strong>Plot starter</strong>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.plot }}</pre>
+    </div>
+    <div>
+      <strong>Formatting starter</strong>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.formatting }}</pre>
+    </div>
   </div>
 </div>
 <div class="sp"></div>
 <div class="card">
   <h3 style="margin:0;">Import Reference</h3>
-  <p class="muted" style="margin-top:6px;">Verbose schema and examples for humans or LLMs generating task JSON. It includes accepted aliases, per-question guidance, and code-mode examples.</p>
+  <p class="muted" style="margin-top:6px;">Verbose schema and examples for humans or LLMs generating task JSON. It includes accepted aliases, markdown/newline rules, per-question guidance, and code-mode examples.</p>
   <pre class="code-block" style="max-height:320px; overflow:auto;">{{ schema_json }}</pre>
 </div>
 {% endblock %}
@@ -60,6 +75,8 @@
   const starters = {
     minimal: {{ starter_payloads.minimal|tojson }},
     class_code: {{ starter_payloads.class_code|tojson }},
+    plot: {{ starter_payloads.plot|tojson }},
+    formatting: {{ starter_payloads.formatting|tojson }},
   };
   document.querySelectorAll('[data-load-starter]').forEach((btn) => {
     btn.addEventListener('click', () => {

@@ -501,6 +501,31 @@
         });
       });
       updateModeUI();
+    } else if (type === "plot") {
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = "Students write Python that generates a matplotlib plot. The latest PNG preview is uploaded only when they submit.";
+      card.appendChild(info);
+
+      const statementLabel = document.createElement("label");
+      statementLabel.textContent = "Plot instructions";
+      card.appendChild(statementLabel);
+      const statement = document.createElement("textarea");
+      statement.rows = 4;
+      statement.dataset.field = "statement";
+      statement.placeholder = "Describe the required chart, labels, annotations, and style constraints.";
+      statement.value = data.statement || "";
+      card.appendChild(statement);
+
+      const starterLabel = document.createElement("label");
+      starterLabel.textContent = "Starter code";
+      card.appendChild(starterLabel);
+      const starter = document.createElement("textarea");
+      starter.rows = 8;
+      starter.dataset.field = "starter";
+      starter.placeholder = "import matplotlib.pyplot as plt\n";
+      starter.value = data.starter || "";
+      card.appendChild(starter);
     } else if (type === "tokens") {
       const info = document.createElement("p");
       info.className = "muted";
@@ -869,6 +894,9 @@
             hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         }
+      } else if (type === "plot") {
+        payload.statement = getFieldValue(card, "statement");
+        payload.starter = getFieldValue(card, "starter");
       } else if (type === "tokens") {
         payload.template = getFieldValue(card, "tokens-template");
         payload.correct_tokens = getFieldValue(card, "tokens-correct");
@@ -895,9 +923,14 @@
     if (!root) return;
     const buttons = root.querySelectorAll("[data-run-samples]");
     const customButtons = root.querySelectorAll("[data-run-custom]");
-    if (!buttons.length && !customButtons.length) return;
+    const plotButtons = root.querySelectorAll("[data-run-plot]");
+    const form = root.querySelector("[data-exam-form]");
+    const artifactNamespace = root.dataset.artifactNamespace || "";
+    if (!buttons.length && !customButtons.length && !plotButtons.length && !form) return;
     let pyodidePromise = null;
     let packagesPromise = null;
+    let plotDbPromise = null;
+    const plotRuntimeState = new Map();
 
     const ensurePyodide = async () => {
       if (!window.loadPyodide) {
@@ -919,6 +952,7 @@
 
     const logUrl = root.dataset.runLogUrl;
     const csrf = root.dataset.csrf;
+    const autoInput = form ? form.querySelector('input[name="nav_action_auto"]') : null;
 
     const postLog = async (questionId, samples) => {
       if (!logUrl || !csrf) return;
@@ -934,6 +968,207 @@
       } catch (err) {
         console.warn("Unable to log run", err);
       }
+    };
+
+    const openPlotDb = async () => {
+      if (!("indexedDB" in window)) return null;
+      if (!plotDbPromise) {
+        plotDbPromise = new Promise((resolve, reject) => {
+          const request = window.indexedDB.open("chalk_and_choice_plot_artifacts", 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains("artifacts")) {
+              const store = db.createObjectStore("artifacts", { keyPath: "id" });
+              store.createIndex("namespace", "namespace", { unique: false });
+            }
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error || new Error("Unable to open plot cache"));
+        }).catch((err) => {
+          console.warn("Plot cache unavailable", err);
+          return null;
+        });
+      }
+      return plotDbPromise;
+    };
+
+    const plotKey = (namespace, questionId) => `${namespace}:${questionId}`;
+
+    const loadPlotArtifact = async (namespace, questionId) => {
+      const db = await openPlotDb();
+      if (!db) return null;
+      return new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readonly");
+        const req = tx.objectStore("artifacts").get(plotKey(namespace, questionId));
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    };
+
+    const savePlotArtifact = async (namespace, questionId, record) => {
+      const db = await openPlotDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readwrite");
+        tx.objectStore("artifacts").put({
+          ...record,
+          id: plotKey(namespace, questionId),
+          namespace,
+          questionId,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    };
+
+    const deletePlotArtifact = async (namespace, questionId) => {
+      const db = await openPlotDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readwrite");
+        tx.objectStore("artifacts").delete(plotKey(namespace, questionId));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    };
+
+    const getNamespaceArtifacts = async (namespace) => {
+      const db = await openPlotDb();
+      if (!db) return [];
+      return new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readonly");
+        const index = tx.objectStore("artifacts").index("namespace");
+        const items = [];
+        const req = index.openCursor(window.IDBKeyRange.only(namespace));
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) {
+            resolve(items);
+            return;
+          }
+          items.push(cursor.value);
+          cursor.continue();
+        };
+        req.onerror = () => resolve(items);
+      });
+    };
+
+    const clearNamespaceArtifacts = async (namespace) => {
+      const items = await getNamespaceArtifacts(namespace);
+      await Promise.all(items.map((item) => deletePlotArtifact(namespace, item.questionId)));
+    };
+
+    const revokePlotObjectUrl = (questionId) => {
+      const state = plotRuntimeState.get(questionId);
+      if (state && state.objectUrl) {
+        URL.revokeObjectURL(state.objectUrl);
+      }
+    };
+
+    const base64ToBlob = (base64Data, type = "image/png") => {
+      const raw = window.atob(base64Data || "");
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) {
+        bytes[i] = raw.charCodeAt(i);
+      }
+      return new Blob([bytes], { type });
+    };
+
+    const setPlotSummary = (questionId, text, color) => {
+      const summaryEl = root.querySelector(`[data-plot-summary="${questionId}"]`);
+      if (!summaryEl) return;
+      summaryEl.textContent = text;
+      summaryEl.style.color = color || "#94a3b8";
+      summaryEl.style.borderColor = "#334155";
+    };
+
+    const renderPlotPreview = (questionId, record, currentCode = "") => {
+      const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+      if (!preview) return;
+      const isFresh = !!record && typeof record.codeSnapshot === "string" && record.codeSnapshot === currentCode;
+      const imageUrl = record ? (record.url || null) : null;
+
+      if (!record || (!record.blob && !imageUrl)) {
+        revokePlotObjectUrl(questionId);
+        plotRuntimeState.delete(questionId);
+        preview.innerHTML = `<p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>`;
+        setPlotSummary(questionId, "Not run", "#94a3b8");
+        return;
+      }
+
+      revokePlotObjectUrl(questionId);
+      const nextState = { ...record };
+      if (record.blob) {
+        nextState.objectUrl = URL.createObjectURL(record.blob);
+      }
+      plotRuntimeState.set(questionId, nextState);
+      const details = [];
+      if (record.plotCount && record.plotCount > 1) {
+        details.push(`${record.plotCount} figures generated`);
+      }
+      if (record.updatedAt) {
+        details.push(`Last run: ${record.updatedAt}`);
+      }
+      preview.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <img src="${nextState.objectUrl || nextState.url || ""}" alt="Latest plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">
+          <div class="muted" style="font-size:0.85rem;">${details.join(" • ") || "Latest plot preview"}</div>
+          ${record.stdout ? `<div><div class="muted">Stdout</div><pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">${escapeHtml(record.stdout)}</pre></div>` : ""}
+          ${record.error ? `<div><div class="muted">Runner message</div><pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(record.error)}</pre></div>` : ""}
+          ${isFresh ? `<div class="muted" style="font-size:0.85rem;">This preview matches the current code.</div>` : `<div style="font-size:0.85rem; color:#fbbf24;">Code changed since the last successful run. Run the plot again before submitting.</div>`}
+        </div>
+      `;
+      setPlotSummary(questionId, isFresh ? "Ready" : "Stale", isFresh ? "#4ade80" : "#fbbf24");
+    };
+
+    const syncPlotPreviewFromCache = async (questionId) => {
+      const area = root.querySelector(`[data-code-input="${questionId}"]`);
+      const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+      if (!artifactNamespace) {
+        if (preview && preview.dataset.existingUrl) {
+          renderPlotPreview(questionId, {
+            url: preview.dataset.existingUrl,
+            codeSnapshot: area ? (area.value || "") : "",
+            stdout: preview.dataset.existingStdout || "",
+            error: preview.dataset.existingError || "",
+            updatedAt: preview.dataset.existingUpdatedAt || "",
+            plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
+          }, area ? area.value : "");
+        }
+        return;
+      }
+      const cached = await loadPlotArtifact(artifactNamespace, questionId);
+      if (!cached) {
+        if (preview && preview.dataset.existingUrl) {
+          renderPlotPreview(questionId, {
+            url: preview.dataset.existingUrl,
+            codeSnapshot: area ? (area.value || "") : "",
+            stdout: preview.dataset.existingStdout || "",
+            error: preview.dataset.existingError || "",
+            updatedAt: preview.dataset.existingUpdatedAt || "",
+            plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
+          }, area ? area.value : "");
+          return;
+        }
+        renderPlotPreview(questionId, null, area ? area.value : "");
+        return;
+      }
+      plotRuntimeState.set(questionId, cached);
+      renderPlotPreview(questionId, cached, area ? area.value : "");
+    };
+
+    const attachPlotStaleTracker = (questionId) => {
+      const area = root.querySelector(`[data-code-input="${questionId}"]`);
+      if (!area || area.dataset.plotWatchAttached === "1") return;
+      area.dataset.plotWatchAttached = "1";
+      const refresh = () => {
+        const state = plotRuntimeState.get(questionId);
+        if (!state) return;
+        renderPlotPreview(questionId, state, area.value || "");
+      };
+      area.addEventListener("input", refresh);
+      area.addEventListener("change", refresh);
+      window.setTimeout(refresh, 250);
     };
 
     const renderResults = (container, results, summaryEl) => {
@@ -1192,12 +1427,27 @@ def _collect_plots():
     if plt is None:
         return []
     images = []
+    max_width = 10.0
+    max_height = 7.5
+    export_dpi = 120
     try:
         figs = list(plt.get_fignums())
         for num in figs:
             fig = plt.figure(num)
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
+            original_size = None
+            try:
+                width, height = fig.get_size_inches()
+                if width > 0 and height > 0:
+                    scale = min(max_width / width, max_height / height, 1.0)
+                    if scale < 1.0:
+                        original_size = (width, height)
+                        fig.set_size_inches(width * scale, height * scale, forward=False)
+            except Exception:
+                original_size = None
+            fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.1, dpi=export_dpi)
+            if original_size:
+                fig.set_size_inches(*original_size, forward=False)
             images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
         plt.close("all")
     except Exception:
@@ -1387,6 +1637,15 @@ json.dumps(results)
       pyodide.globals.delete("runner_mode");
       return JSON.parse(output);
     };
+    const executePlotPreview = async (triggerBtn, codeValue) => {
+      const results = await executeSamples(
+        triggerBtn,
+        [{ name: "Preview", input: "", expected: "" }],
+        "script",
+        codeValue,
+      );
+      return Array.isArray(results) ? results[0] || {} : {};
+    };
 
     buttons.forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -1476,6 +1735,125 @@ json.dumps(results)
         }
       });
     });
+
+    plotButtons.forEach((btn) => {
+      const questionId = btn.dataset.question;
+      if (!questionId) return;
+      attachPlotStaleTracker(questionId);
+      syncPlotPreviewFromCache(questionId);
+      btn.addEventListener("click", async () => {
+        const area = root.querySelector(`[data-code-input="${questionId}"]`);
+        if (!area) return;
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Running...";
+        setPlotSummary(questionId, "Running...", "#38bdf8");
+        try {
+          const entry = await executePlotPreview(btn, area.value || "");
+          const plotImages = Array.isArray(entry.plot_images) ? entry.plot_images.filter(Boolean) : [];
+          if (!plotImages.length) {
+            revokePlotObjectUrl(questionId);
+            plotRuntimeState.delete(questionId);
+            if (artifactNamespace) {
+              await deletePlotArtifact(artifactNamespace, questionId);
+            }
+            if (entry.error) {
+              const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+              if (preview) {
+                preview.innerHTML = `
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <p class="muted" style="margin:0;">No plot was generated.</p>
+                    <pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(entry.error)}</pre>
+                  </div>
+                `;
+              }
+              setPlotSummary(questionId, "Run failed", "#f87171");
+            } else {
+              renderPlotPreview(questionId, null, area.value || "");
+              setPlotSummary(questionId, "No plot", "#fbbf24");
+            }
+            return;
+          }
+
+          const latest = plotImages[plotImages.length - 1];
+          const record = {
+            blob: base64ToBlob(latest, "image/png"),
+            codeSnapshot: area.value || "",
+            stdout: entry.output || "",
+            error: entry.error || "",
+            status: entry.status || "passed",
+            plotCount: plotImages.length,
+            updatedAt: new Date().toISOString(),
+          };
+          plotRuntimeState.set(questionId, record);
+          if (artifactNamespace) {
+            await savePlotArtifact(artifactNamespace, questionId, record);
+          }
+          renderPlotPreview(questionId, record, area.value || "");
+        } catch (err) {
+          const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+          if (preview) {
+            preview.innerHTML = `<pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(err.message || String(err))}</pre>`;
+          }
+          setPlotSummary(questionId, "Run failed", "#f87171");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
+    });
+
+    if (form && artifactNamespace) {
+      form.addEventListener("submit", async (event) => {
+        const submitter = event.submitter;
+        const action = submitter?.value || autoInput?.value || "";
+        if (action !== "submit") return;
+        const artifacts = await getNamespaceArtifacts(artifactNamespace);
+        if (!artifacts.length) return;
+        event.preventDefault();
+        let formData;
+        try {
+          formData = submitter ? new FormData(form, submitter) : new FormData(form);
+        } catch (err) {
+          formData = new FormData(form);
+          if (submitter?.name) {
+            formData.append(submitter.name, submitter.value || "");
+          }
+        }
+        artifacts.forEach((record) => {
+          if (!record || !record.questionId || !record.blob) return;
+          formData.append(
+            `plot_artifact_${record.questionId}`,
+            new File([record.blob], `plot-${record.questionId}.png`, { type: "image/png" }),
+          );
+          formData.append(`plot_meta_${record.questionId}`, JSON.stringify({
+            status: record.status || "passed",
+            stdout: record.stdout || "",
+            error: record.error || "",
+            code_snapshot: record.codeSnapshot || "",
+            plot_count: record.plotCount || 1,
+          }));
+        });
+        try {
+          const response = await fetch(form.action || window.location.href, {
+            method: "POST",
+            body: formData,
+            credentials: "same-origin",
+          });
+          const html = await response.text();
+          if (response.ok) {
+            await clearNamespaceArtifacts(artifactNamespace);
+            plotRuntimeState.forEach((record, questionId) => revokePlotObjectUrl(questionId));
+            plotRuntimeState.clear();
+          }
+          document.open();
+          document.write(html);
+          document.close();
+        } catch (err) {
+          console.error(err);
+        }
+      });
+    }
   }
 
   function setupCodeEditors() {
@@ -1595,6 +1973,7 @@ json.dumps(results)
           disablePaste(editor, monaco);
           const syncValue = () => {
             area.value = editor.getValue();
+            area.dispatchEvent(new Event("input", { bubbles: true }));
           };
           editor.onDidChangeModelContent(syncValue);
           syncValue();

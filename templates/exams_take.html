@@ -33,7 +33,7 @@
   {% endif %}
 </div>
 <div class="sp"></div>
-<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}">
+<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}" data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}">
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
@@ -62,6 +62,7 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="q_index" value="{{ current_index }}">
     <input type="hidden" name="nav_action_auto" value="">
+    <button type="submit" name="nav_action" value="submit" data-auto-submit style="display:none;" aria-hidden="true" tabindex="-1">Auto submit</button>
     {% if question %}
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
@@ -226,6 +227,83 @@
               </div>
             </div>
           </div>
+        {% elif q.type == "plot" %}
+          {% set prior_plot = previous_answers.get(q.id) %}
+          {% set prior_plot_data = prior_plot if prior_plot is mapping else None %}
+          {% set plot_code = (prior_plot_data.code if prior_plot_data and prior_plot_data.code is defined else prior_plot) or "" %}
+          {% set starter = plot_code if plot_code else (q.starter or "") %}
+          {% set plot_artifact = prior_plot_data.artifact if prior_plot_data and prior_plot_data.artifact is defined and prior_plot_data.artifact is mapping else None %}
+          {% set plot_preview_url = None %}
+          {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
+            {% set plot_preview_url = url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id) %}
+          {% endif %}
+          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
+            <div class="code-question-main" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px;">
+              <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                {% if q.statement %}
+                  <div style="margin-bottom:10px;">
+                    <strong>Plot instructions</strong>
+                    <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-statement="{{ q.id }}">{{ q.statement }}</div>
+                  </div>
+                {% endif %}
+                <div style="padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                  <div class="muted" style="font-size:0.9rem;">Manual review task</div>
+                  <p class="muted" style="margin:6px 0 0 0;">Run the code to refresh the latest PNG preview. The current preview is uploaded only when you submit.</p>
+                </div>
+              </div>
+              <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div class="muted" style="font-size:0.9rem;">Language: Python</div>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                </div>
+                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+              </div>
+            </div>
+
+            <div class="code-custom-run" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+              <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <strong>Plot preview</strong>
+                  <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-plot-summary="{{ q.id }}">
+                    {% if plot_preview_url %}Ready{% else %}Not run{% endif %}
+                  </span>
+                </div>
+                <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
+                  {% if plot_preview_url %}
+                    <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id, download=1) }}">Download PNG</a>
+                  {% endif %}
+                  <button type="button" class="btn btn-primary" data-run-plot data-question="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>Run plot</button>
+                </div>
+              </div>
+              <div
+                data-plot-preview="{{ q.id }}"
+                {% if plot_preview_url %}
+                  data-existing-url="{{ plot_preview_url }}"
+                  data-existing-updated-at="{{ (prior_plot_data.updated_at if prior_plot_data and prior_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
+                  data-existing-plot-count="{{ (prior_plot_data.plot_count if prior_plot_data and prior_plot_data.plot_count is defined else 1)|e }}"
+                  data-existing-stdout="{{ (prior_plot_data.stdout if prior_plot_data and prior_plot_data.stdout is defined else '')|e }}"
+                  data-existing-error="{{ (prior_plot_data.error if prior_plot_data and prior_plot_data.error is defined else '')|e }}"
+                {% endif %}
+                style="margin-top:10px;"
+              >
+                {% if plot_preview_url %}
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <img src="{{ plot_preview_url }}" alt="Submitted plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">
+                    <div class="muted" style="font-size:0.85rem;">
+                      Latest saved preview
+                      {% if plot_artifact and plot_artifact.width and plot_artifact.height %}
+                        • {{ plot_artifact.width }}×{{ plot_artifact.height }}
+                      {% endif %}
+                      {% if prior_plot_data and prior_plot_data.updated_at is defined and prior_plot_data.updated_at %}
+                        • {{ prior_plot_data.updated_at }}
+                      {% endif %}
+                    </div>
+                  </div>
+                {% else %}
+                  <p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>
+                {% endif %}
+              </div>
+            </div>
         {% elif q.type == "tokens" %}
           {% set tpl = q.template or "" %}
           {% set segments = tpl.split('[[blank]]') %}
@@ -335,7 +413,12 @@
     submitted = true;
     if (warningEl) warningEl.style.display = "block";
     if (autoInput) autoInput.value = "submit";
-    form.submit();
+    const submitBtn = form.querySelector("[data-auto-submit]");
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit(submitBtn || undefined);
+    } else if (submitBtn) {
+      submitBtn.click();
+    }
   };
 
   const tick = () => {

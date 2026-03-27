@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct
 from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
@@ -113,6 +113,14 @@ UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
 TASK_RESOURCE_MAX_MB = 10
 TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
+PLOT_ARTIFACT_MAX_MB = 3
+PLOT_ARTIFACT_MAX_BYTES = PLOT_ARTIFACT_MAX_MB * 1024 * 1024
+PLOT_ARTIFACT_MAX_WIDTH = 1600
+PLOT_ARTIFACT_MAX_HEIGHT = 1200
+PLOT_ARTIFACT_MAX_PIXELS = 2_000_000
+PLOT_EXPORT_MAX_WIDTH_IN = 10.0
+PLOT_EXPORT_MAX_HEIGHT_IN = 7.5
+PLOT_EXPORT_DPI = 120
 LOG_SESSION_GAP_SEC = 10 * 60
 LOG_ACTIVITY_UPDATE_SEC = 60
 
@@ -148,6 +156,10 @@ QUESTION_TYPE_ALIASES = {
     "coding": "code",
     "python_code": "code",
     "programming": "code",
+    "plot": "plot",
+    "plotting": "plot",
+    "matplotlib": "plot",
+    "python_plot": "plot",
     "tokens": "tokens",
     "token_fill": "tokens",
     "drag_tokens": "tokens",
@@ -335,10 +347,56 @@ def _build_project_tasks_schema():
             }
         ]
     }
+    plot_payload = {
+        "tasks": [
+            {
+                "title": "Line chart practice",
+                "description": "Generate a labeled matplotlib plot.",
+                "instructions": "Write Python that creates the requested chart. Students can preview the final PNG before submitting.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": True,
+                "questions": [
+                    {
+                        "id": "q_sales_plot",
+                        "type": "plot",
+                        "title": "Monthly sales chart",
+                        "prompt": "Create the line chart described below.",
+                        "points": 10,
+                        "problem_statement": "Use matplotlib to plot months `[1, 2, 3, 4]` against sales `[10, 14, 11, 18]`. Add a title, axis labels, and markers on each point.",
+                        "starter_code": "import matplotlib.pyplot as plt\n\nmonths = [1, 2, 3, 4]\nsales = [10, 14, 11, 18]\n\n# build your chart here\n"
+                    }
+                ]
+            }
+        ]
+    }
+    formatting_payload = {
+        "tasks": [
+            {
+                "title": "Formatting reference",
+                "description": "This task shows how markdown text is rendered from imported JSON.\n\n- Use `\\n` for a new line\n- Use `\\n\\n` for a blank line between paragraphs\n- Use markdown lists and fenced code blocks when structure matters",
+                "instructions": "Read the prompt carefully.\n\n## Rendering rules\n- Bullet items should stay on separate lines.\n- Blank lines should stay blank.\n\n```python\nfor value in [1, 2, 3]:\n    print(value)\n```",
+                "required": True,
+                "auto_grade": False,
+                "requires_review": True,
+                "questions": [
+                    {
+                        "id": "q_formatting_text",
+                        "type": "text",
+                        "title": "Explain the rendering",
+                        "prompt": "Describe what the student should notice.\n\n- The heading above\n- The bullet list\n- The fenced code block",
+                        "points": 3,
+                        "placeholder": "Write 2-3 sentences.\nMention both line breaks and markdown.",
+                        "lines": 5
+                    }
+                ]
+            }
+        ]
+    }
     return {
         "schema_name": "project_task_import",
-        "schema_version": 2,
-        "summary": "Reference document for importing project tasks from JSON. The importer accepts the payload shape below plus the documented aliases. Unknown extra fields are ignored.",
+        "schema_version": 4,
+        "summary": "Reference document for importing project tasks from JSON. The importer accepts the payload shape below plus the documented aliases. Unknown extra fields are ignored. Text fields support markdown and escaped newline sequences such as \\n and \\n\\n.",
         "paste_payload_shape": {
             "type": "object",
             "required": ["tasks"],
@@ -351,9 +409,9 @@ def _build_project_tasks_schema():
                         "type": "object",
                         "required": ["title", "questions"],
                         "properties": {
-                            "title": {"type": "string", "description": "Task title. Alias: `name`."},
-                            "description": {"type": ["string", "null"], "description": "Short summary shown above the task."},
-                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students."},
+                            "title": {"type": "string", "description": "Task title. Alias: `name`. Rendered with inline markdown."},
+                            "description": {"type": ["string", "null"], "description": "Short summary shown above the task. Rendered as a markdown block. Use \\n for line breaks and \\n\\n for paragraph breaks."},
+                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students. Rendered as a markdown block. Supports headings, lists, fenced code blocks, and \\n / \\n\\n escapes."},
                             "required": {"type": "boolean", "default": True},
                             "auto_grade": {"type": "boolean", "default": True},
                             "requires_review": {"type": "boolean", "default": False},
@@ -368,6 +426,47 @@ def _build_project_tasks_schema():
                 }
             },
             "additionalProperties": True
+        },
+        "text_rendering_reference": {
+            "summary": "Most visible text fields are rendered with markdown. Because the payload is JSON, line breaks must be escaped inside strings.",
+            "markdown_block_fields": [
+                "task.description",
+                "task.instructions",
+                "question.prompt",
+                "code.problem_statement",
+                "plot.problem_statement",
+                "mcq/multi option text"
+            ],
+            "inline_markdown_fields": [
+                "task.title",
+                "question.title",
+                "tokens/fill template text segments"
+            ],
+            "plain_text_fields": [
+                "code_snippet",
+                "starter_code",
+                "function_signature",
+                "class_signature",
+                "class_init"
+            ],
+            "newline_rules": [
+                "JSON strings cannot contain raw line breaks. Use escaped sequences like \\n inside the string value.",
+                "Use \\n for a visible new line.",
+                "Use \\n\\n to separate paragraphs or create a blank line between sections.",
+                "For bullet lists, keep one item per line: - first\\n- second",
+                "For code blocks inside markdown, use fenced code with escaped new lines: ```python\\nprint('hi')\\n```"
+            ],
+            "examples": {
+                "single_line_break": {
+                    "prompt": "Line one\\nLine two"
+                },
+                "paragraphs_and_list": {
+                    "instructions": "Read carefully.\\n\\n- First requirement\\n- Second requirement"
+                },
+                "fenced_code_block": {
+                    "problem_statement": "Starter shape:\\n```python\\ndef solve():\\n    pass\\n```"
+                }
+            }
         },
         "accepted_aliases": {
             "root": {
@@ -426,7 +525,9 @@ def _build_project_tasks_schema():
                 "Every question needs a `type` and a visible `prompt`.",
                 "Question `id` is optional. The importer will generate one if missing.",
                 "For booleans, use real JSON booleans: true or false.",
-                "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects."
+                "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects.",
+                "Visible text fields support markdown; in JSON strings use `\\n` for a new line and `\\n\\n` for a blank line.",
+                "Prefer markdown lists, headings, and fenced code blocks over manual spacing."
             ],
             "types": {
                 "mcq": {
@@ -460,10 +561,14 @@ def _build_project_tasks_schema():
                     "required_fields": ["type", "prompt"],
                     "recommended_shape": {
                         "type": "text",
-                        "prompt": "Explain your reasoning.",
+                        "prompt": "Explain your reasoning.\n\n- Mention the main idea\n- Mention one edge case",
                         "placeholder": "Write 3-5 sentences.",
                         "lines": 5
-                    }
+                    },
+                    "notes": [
+                        "Prompt and placeholder text accept escaped new lines like `\\n`.",
+                        "Prompt text is rendered as markdown."
+                    ]
                 },
                 "tokens": {
                     "required_fields": ["type", "prompt", "template", "correct_tokens"],
@@ -494,12 +599,21 @@ def _build_project_tasks_schema():
                         "max_mb": 5
                     }
                 },
+                "plot": {
+                    "required_fields": ["type", "prompt", "problem_statement"],
+                    "recommended_shape": plot_payload["tasks"][0]["questions"][0],
+                    "notes": [
+                        "Plot questions are Python-only and always require manual review.",
+                        "Students preview the latest PNG in the browser, and the final PNG is uploaded only on submit.",
+                        "`problem_statement` is rendered as markdown, so use `\\n`, lists, and fenced code blocks if you need structure."
+                    ]
+                },
                 "code": {
                     "required_fields": ["type", "prompt", "problem_statement", "code_mode", "tests"],
                     "shared_shape": {
                         "type": "code",
                         "prompt": "Short visible question prompt.",
-                        "problem_statement": "Detailed coding instructions.",
+                        "problem_statement": "Detailed coding instructions.\n\n- Requirement one\n- Requirement two",
                         "starter_code": "# optional starter code",
                         "code_mode": "script | function | class"
                     },
@@ -547,7 +661,9 @@ def _build_project_tasks_schema():
         },
         "example_payloads": {
             "minimal_payload": minimal_payload,
-            "class_code_payload": class_payload
+            "class_code_payload": class_payload,
+            "plot_payload": plot_payload,
+            "formatting_payload": formatting_payload
         }
     }
 
@@ -755,6 +871,199 @@ def _save_task_resource(task, file_storage, existing_info=None):
     if existing_info:
         _remove_uploaded_file(existing_info)
     return file_info, None
+
+def _png_dimensions_from_bytes(data):
+    if not data or len(data) < 24:
+        return None
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    if data[12:16] != b"IHDR":
+        return None
+    try:
+        width, height = struct.unpack(">II", data[16:24])
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+def _save_plot_artifact_upload(scope, question_id, file_storage):
+    if not file_storage:
+        return None, "Missing plot PNG."
+    filename = file_storage.filename or ""
+    if not filename:
+        return None, "No plot PNG was submitted."
+    try:
+        payload = file_storage.read(PLOT_ARTIFACT_MAX_BYTES + 1)
+    except Exception:
+        return None, "Unable to read the uploaded plot."
+    if not payload:
+        return None, "The uploaded plot is empty."
+    if len(payload) > PLOT_ARTIFACT_MAX_BYTES:
+        return None, f"Plot PNG must be {PLOT_ARTIFACT_MAX_MB} MB or smaller."
+    dims = _png_dimensions_from_bytes(payload)
+    if not dims:
+        return None, "Uploaded plot must be a valid PNG image."
+    width, height = dims
+    if width > PLOT_ARTIFACT_MAX_WIDTH or height > PLOT_ARTIFACT_MAX_HEIGHT:
+        return None, (
+            f"Plot PNG dimensions must be at most "
+            f"{PLOT_ARTIFACT_MAX_WIDTH}x{PLOT_ARTIFACT_MAX_HEIGHT}."
+        )
+    if width * height > PLOT_ARTIFACT_MAX_PIXELS:
+        return None, "Plot PNG is too large."
+
+    question_slug = secure_filename(str(question_id)) or "plot"
+    stored_name = f"{uuid.uuid4().hex}_{question_slug}.png"
+    kind = (scope or {}).get("kind") or "exam"
+    if kind == "project_task":
+        upload_dir = os.path.join(
+            UPLOAD_ROOT,
+            "plot_artifacts",
+            "project_tasks",
+            str(scope.get("project_id") or 0),
+            str(scope.get("task_id") or 0),
+            str(scope.get("submission_id") or 0),
+            question_slug,
+        )
+    else:
+        upload_dir = os.path.join(
+            UPLOAD_ROOT,
+            "plot_artifacts",
+            "exams",
+            str(scope.get("exam_id") or 0),
+            str(scope.get("submission_id") or 0),
+            question_slug,
+        )
+    os.makedirs(upload_dir, exist_ok=True)
+    full_path = os.path.join(upload_dir, stored_name)
+    try:
+        with open(full_path, "wb") as fh:
+            fh.write(payload)
+    except Exception:
+        return None, "Unable to save the plot PNG."
+    rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
+    return {
+        "original_name": "plot.png",
+        "stored_name": stored_name,
+        "path": rel_path,
+        "size": len(payload),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "content_type": "image/png",
+        "width": width,
+        "height": height,
+    }, None
+
+def _plot_answer_code(answer):
+    if isinstance(answer, dict):
+        return _coerce_string(answer.get("code"))
+    return _coerce_string(answer)
+
+def _plot_answer_artifact(answer):
+    if isinstance(answer, dict):
+        return _extract_file_info(answer.get("artifact"))
+    return None
+
+def _plot_label(question, index):
+    if isinstance(question, dict):
+        title = _coerce_string(question.get("title")).strip()
+        if title:
+            return title
+    return f"Question {index + 1}"
+
+def _parse_plot_submission_meta(raw_value):
+    if not raw_value:
+        return {}
+    try:
+        data = json.loads(raw_value)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    meta = {}
+    status = _coerce_string(data.get("status")).strip().lower()
+    if status:
+        meta["status"] = status[:32]
+    stdout = _coerce_string(data.get("stdout"))
+    if stdout:
+        meta["stdout"] = stdout[:4000]
+    error = _coerce_string(data.get("error"))
+    if error:
+        meta["error"] = error[:8000]
+    code_snapshot = _coerce_string(data.get("code_snapshot"))
+    if code_snapshot:
+        meta["code_snapshot"] = code_snapshot[:200000]
+    try:
+        plot_count = int(data.get("plot_count") or 0)
+    except Exception:
+        plot_count = 0
+    if plot_count > 0:
+        meta["plot_count"] = min(plot_count, 20)
+    return meta
+
+def _preserve_plot_answer_metadata(code_text, existing_answer):
+    artifact = _plot_answer_artifact(existing_answer)
+    if artifact and code_text == _plot_answer_code(existing_answer):
+        payload = dict(existing_answer)
+        payload["code"] = code_text
+        return payload
+    return code_text
+
+def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, request_files, request_form, plot_scope):
+    prepared = dict(answers or {})
+    persisted_answers = persisted_answers if isinstance(persisted_answers, dict) else {}
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    for idx, question in enumerate(questions or []):
+        if not isinstance(question, dict) or question.get("type") != "plot":
+            continue
+        qid = str(question.get("id"))
+        current_answer = prepared.get(qid, "")
+        prior_answer = persisted_answers.get(qid)
+        code_text = _plot_answer_code(current_answer)
+        upload = request_files.get(f"plot_artifact_{qid}")
+        meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
+
+        if upload and getattr(upload, "filename", ""):
+            code_snapshot = meta.get("code_snapshot")
+            if code_snapshot and code_snapshot != code_text:
+                return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
+            artifact_info, error = _save_plot_artifact_upload(plot_scope, qid, upload)
+            if error:
+                return None, f"{_plot_label(question, idx)}: {error}"
+            payload = {
+                "code": code_text,
+                "artifact": artifact_info,
+                "updated_at": now_iso,
+            }
+            if meta.get("status"):
+                payload["status"] = meta["status"]
+            if meta.get("stdout"):
+                payload["stdout"] = meta["stdout"]
+            if meta.get("error"):
+                payload["error"] = meta["error"]
+            if meta.get("plot_count"):
+                payload["plot_count"] = meta["plot_count"]
+            prepared[qid] = payload
+            continue
+
+        artifact_info = _plot_answer_artifact(current_answer)
+        if artifact_info and code_text == _plot_answer_code(current_answer):
+            payload = dict(current_answer)
+            payload["code"] = code_text
+            payload.setdefault("updated_at", now_iso)
+            prepared[qid] = payload
+            continue
+
+        prior_artifact = _plot_answer_artifact(prior_answer)
+        if prior_artifact and code_text == _plot_answer_code(prior_answer):
+            payload = dict(prior_answer)
+            payload["code"] = code_text
+            payload.setdefault("updated_at", now_iso)
+            prepared[qid] = payload
+            continue
+
+        return None, f"{_plot_label(question, idx)}: run the code to generate a plot before submitting."
+    return prepared, None
 
 def _touch_student_log_session(student, now):
     if not student:
@@ -2253,10 +2562,10 @@ def _normalize_exam_questions(payload):
         if not isinstance(raw, dict):
             raise ValueError("Question payload must be objects.")
         q_type = _normalize_question_type_name(_first_present(raw, "type", "question_type", "kind"))
-        if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill", "file"):
+        if q_type not in ("mcq", "multi", "text", "code", "plot", "tokens", "fill", "file"):
             raise ValueError(f"Unsupported question type '{q_type}'.")
         prompt_value = _first_present(raw, "prompt", "question", "question_text")
-        if not prompt_value and q_type == "code":
+        if not prompt_value and q_type in ("code", "plot"):
             prompt_value = _first_present(raw, "statement", "problem_statement", "description")
         prompt = _coerce_string(prompt_value).strip()
         if not prompt:
@@ -2353,6 +2662,13 @@ def _normalize_exam_questions(payload):
                 max_mb = 5
             normalized["accept"] = accept
             normalized["max_mb"] = max(1, min(max_mb, UPLOAD_MAX_MB))
+        elif q_type == "plot":
+            statement = _coerce_string(_first_present(raw, "statement", "problem_statement", "description")).strip()
+            if not statement:
+                raise ValueError("Plot questions need a statement/description.")
+            normalized["statement"] = statement
+            normalized["starter"] = _coerce_string(_first_present(raw, "starter", "starter_code", "starter_template"))
+            normalized["language"] = "python"
         else:  # code
             statement = _coerce_string(_first_present(raw, "statement", "problem_statement", "description")).strip()
             if not statement:
@@ -3088,6 +3404,8 @@ def _grade_exam_submission(exam, answers):
                 res["earned"] = points
         elif qtype == "file":
             res["manual_review"] = True
+        elif qtype == "plot":
+            res["manual_review"] = True
         elif qtype == "code":
             samples = q.get("samples") or []
             mode = q.get("mode") or "script"
@@ -3203,7 +3521,29 @@ def _collect_plot_images():
         for num in plt.get_fignums():
             fig = plt.figure(num)
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
+            original_size = None
+            try:
+                width, height = fig.get_size_inches()
+                if width > 0 and height > 0:
+                    scale = min(
+                        PLOT_EXPORT_MAX_WIDTH_IN / width,
+                        PLOT_EXPORT_MAX_HEIGHT_IN / height,
+                        1.0,
+                    )
+                    if scale < 1.0:
+                        original_size = (width, height)
+                        fig.set_size_inches(width * scale, height * scale, forward=False)
+            except Exception:
+                original_size = None
+            fig.savefig(
+                buf,
+                format="png",
+                bbox_inches="tight",
+                pad_inches=0.1,
+                dpi=PLOT_EXPORT_DPI,
+            )
+            if original_size:
+                fig.set_size_inches(*original_size, forward=False)
             images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
         plt.close("all")
     except Exception:
@@ -3829,6 +4169,7 @@ def exam_take(code):
     draft_answers = _get_exam_draft(exam.id) if student else {}
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
+    upload_error = None
 
     # ------------------------------------------------------------------
     # Timer + automatic submission on timeout
@@ -3893,9 +4234,15 @@ def exam_take(code):
             qid = current_question.get("id")
             if qid:
                 field = f"answer_{qid}"
-                if current_question.get("type") == "multi":
+                qtype = current_question.get("type")
+                if qtype == "multi":
                     vals = request.form.getlist(field)
                     val = "||".join(vals)
+                elif qtype == "plot":
+                    val = _preserve_plot_answer_metadata(
+                        request.form.get(field, ""),
+                        previous_answers.get(qid),
+                    )
                 else:
                     val = request.form.get(field, "")
                 draft_answers[qid] = val
@@ -3929,6 +4276,37 @@ def exam_take(code):
 
             answers = dict(base_answers)
             answers.update(draft_answers)
+            answers, upload_error = _prepare_plot_answers_for_submit(
+                questions,
+                answers,
+                base_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "exam",
+                    "exam_id": exam.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=exam,
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=already_submitted,
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=time_remaining if time_remaining is not None else None,
+                    user=user,
+                    student_name=session.get("student_name"),
+                    submission_id=(submission.id if submission else None),
+                    upload_error=upload_error,
+                ), 400
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.answers_json = answers
             submission.status = "submitted"
@@ -3989,6 +4367,8 @@ def exam_take(code):
         already_submitted=(submission and submission.status == "submitted"),
         previous_answers=previous_answers,
         time_remaining_seconds=time_remaining if time_remaining is not None else None,
+        submission_id=(submission.id if submission else None),
+        upload_error=upload_error,
         user=user,
         student_name=session.get("student_name"),
     )
@@ -5215,6 +5595,8 @@ def projects_task_import(code):
     starter_payloads = {
         "minimal": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["minimal_payload"], indent=2, ensure_ascii=False),
         "class_code": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["class_code_payload"], indent=2, ensure_ascii=False),
+        "plot": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["plot_payload"], indent=2, ensure_ascii=False),
+        "formatting": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["formatting_payload"], indent=2, ensure_ascii=False),
     }
     return render_template(
         "projects_task_import.html",
@@ -5567,6 +5949,11 @@ def project_task_take(code, task_id):
                             val = file_info
                     else:
                         val = existing_info or ""
+                elif qtype == "plot":
+                    val = _preserve_plot_answer_metadata(
+                        request.form.get(field, ""),
+                        previous_answers.get(qid),
+                    )
                 else:
                     val = request.form.get(field, "")
                 if upload_error:
@@ -5629,6 +6016,40 @@ def project_task_take(code, task_id):
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
+            answers, upload_error = _prepare_plot_answers_for_submit(
+                questions,
+                answers,
+                base_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "project_task",
+                    "project_id": project.id,
+                    "task_id": task.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
+                    upload_error=upload_error,
+                ), 400
             grade_score = 0
             grade_total = 0
             grade_details = []
@@ -5654,11 +6075,11 @@ def project_task_take(code, task_id):
             submission.max_score = grade_total
             submission.last_activity_at = now
             submission.submitted_at = now
-            if task.requires_review:
+            has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
+            if task.requires_review or has_manual_review:
                 submission.status = "pending_review"
             else:
-                has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
-                if task.auto_grade and not has_manual_review and grade_total > 0:
+                if task.auto_grade and grade_total > 0:
                     if grade_score >= grade_total:
                         submission.status = "accepted"
                     else:
@@ -5732,6 +6153,7 @@ def project_task_take(code, task_id):
         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
         cooldown_seconds_remaining=cooldown_seconds_remaining,
         submission_id=submission.id,
+        upload_error=None,
     )
 
 @app.route("/student/projects/<code>/tasks/<int:task_id>/submission")
@@ -5836,6 +6258,55 @@ def project_task_file_download(submission_id, question_id):
         abort(404)
     download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "submission.zip") or "submission.zip"
     return send_file(full_path, as_attachment=True, download_name=download_name)
+
+@app.route("/projects/submissions/<int:submission_id>/plots/<question_id>")
+def project_task_plot_download(submission_id, question_id):
+    submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if submission.student_id != student.id:
+            abort(403)
+        if submission.project and not _project_visible_to_student(submission.project, student):
+            abort(403)
+    if user:
+        allowed_student_ids = _restricted_review_student_ids(user)
+        if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+            abort(403)
+    attempt_id = request.args.get("attempt_id")
+    attempt = None
+    if attempt_id:
+        try:
+            attempt_id = int(attempt_id)
+        except Exception:
+            attempt_id = None
+    if attempt_id:
+        attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
+    questions = submission.task.questions_json if submission.task and isinstance(submission.task.questions_json, list) else []
+    question = next((q for q in questions if str(q.get("id")) == str(question_id)), None)
+    if not question or question.get("type") != "plot":
+        abort(404)
+    if attempt and isinstance(attempt.answers_json, dict):
+        answers = attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    answer = answers.get(str(question_id))
+    artifact = _plot_answer_artifact(answer)
+    if not artifact:
+        abort(404)
+    full_path = _safe_upload_path(artifact.get("path"))
+    if not full_path or not os.path.isfile(full_path):
+        abort(404)
+    download = _coerce_bool(request.args.get("download"), False)
+    download_name = secure_filename(artifact.get("original_name") or artifact.get("stored_name") or "plot.png") or "plot.png"
+    return send_file(
+        full_path,
+        mimetype=artifact.get("content_type") or "image/png",
+        as_attachment=download,
+        download_name=download_name,
+    )
 
 @app.post("/projects/<code>/students/<int:student_id>/reset")
 @require_user()
