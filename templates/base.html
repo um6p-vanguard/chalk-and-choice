@@ -131,6 +131,7 @@
           <a href="{{ url_for('exams_list') }}" style="margin-left:10px;">Exams</a>
           <a href="{{ url_for('projects_list') }}" style="margin-left:10px;">Projects</a>
           <a href="{{ url_for('groups_list') }}" style="margin-left:10px;">Groups</a>
+          <a href="{{ url_for('announcements_admin') }}" style="margin-left:10px;">Announcements</a>
           <a href="{{ url_for('attendance_list') }}" style="margin-left:10px;">Attendance</a>
           <a href="{{ url_for('leaderboards_admin') }}" style="margin-left:10px;">Leaderboards</a>
           <a href="{{ url_for('projects_reviews') }}" style="margin-left:10px;">Reviews</a>
@@ -151,6 +152,37 @@
       </div>
     </div>
     <div class="sp"></div>
+    {% if student_unseen_announcements %}
+    <div class="card" style="border-color:var(--brand);">
+      <div class="row" style="justify-content:space-between; align-items:flex-start;">
+        <div>
+          <h3 style="margin:0;">Announcements</h3>
+          <p class="muted" style="margin:6px 0 0 0;">Unread messages for you. Mark them as read once you're done.</p>
+        </div>
+        <form method="post" action="{{ url_for('student_announcements_mark_seen') }}">
+          <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+          <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') if request.query_string else request.path }}">
+          {% for delivery in student_unseen_announcements %}
+            <input type="hidden" name="announcement_ids" value="{{ delivery.id }}">
+          {% endfor %}
+          <button class="btn btn-primary" type="submit">Mark as read</button>
+        </form>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
+        {% for delivery in student_unseen_announcements %}
+        {% set announcement = delivery.announcement %}
+        <div style="padding:14px; border:1px solid var(--border); border-radius:10px; background:#0b1220;">
+          <div class="muted" style="font-size:0.9rem;">{{ announcement.created_at.strftime("%b %d %H:%M UTC") if announcement and announcement.created_at else "New" }}</div>
+          <h4 style="margin:6px 0 0 0;">{{ announcement.title if announcement else "Announcement" }}</h4>
+          {% if announcement and announcement.body %}
+            <div style="margin-top:10px;">{{ announcement.body|markdown }}</div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="sp"></div>
+    {% endif %}
     {% block content %}{% endblock %}
     <div class="sp"></div>
 

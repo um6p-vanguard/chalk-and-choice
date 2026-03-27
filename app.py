@@ -25,6 +25,7 @@ from models import (db, Student, User, Form,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
+                    Announcement, AnnouncementDelivery,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func, inspect, text
@@ -1125,9 +1126,31 @@ def verify_csrf(form_field="csrf"):
     sent = request.form.get(form_field, "")
     return hmac.compare_digest(sent, csrf_token())
 
+def _student_unseen_announcement_deliveries(student):
+    if not student:
+        return []
+    return (
+        AnnouncementDelivery.query
+        .join(Announcement, Announcement.id == AnnouncementDelivery.announcement_id)
+        .options(subqueryload(AnnouncementDelivery.announcement))
+        .filter(
+            AnnouncementDelivery.student_id == student.id,
+            AnnouncementDelivery.seen_at.is_(None),
+        )
+        .order_by(Announcement.created_at.asc(), Announcement.id.asc(), AnnouncementDelivery.id.asc())
+        .all()
+    )
+
 @app.context_processor
 def inject_csrf():
-    return {"csrf_token": csrf_token}
+    student = current_student()
+    unseen_announcements = []
+    if student and not current_user():
+        unseen_announcements = _student_unseen_announcement_deliveries(student)
+    return {
+        "csrf_token": csrf_token,
+        "student_unseen_announcements": unseen_announcements,
+    }
 
 # Markdown rendering helpers.
 _MD_BLOCKED_URL_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.IGNORECASE)
@@ -1520,6 +1543,35 @@ def student_ping():
         db.session.rollback()
     return jsonify({"ok": True})
 
+@app.post("/student/announcements/mark-seen")
+@require_student()
+def student_announcements_mark_seen():
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    student = current_student()
+    next_url = _safe_redirect_target(request.form.get("next"), fallback_endpoint="student_home")
+    if not student:
+        return redirect(next_url)
+    delivery_ids = []
+    for raw_id in request.form.getlist("announcement_ids"):
+        try:
+            delivery_ids.append(int(raw_id))
+        except Exception:
+            continue
+    query = AnnouncementDelivery.query.filter(
+        AnnouncementDelivery.student_id == student.id,
+        AnnouncementDelivery.seen_at.is_(None),
+    )
+    if delivery_ids:
+        query = query.filter(AnnouncementDelivery.id.in_(delivery_ids))
+    deliveries = query.all()
+    if deliveries:
+        now = datetime.utcnow()
+        for delivery in deliveries:
+            delivery.seen_at = now
+        db.session.commit()
+    return redirect(next_url)
+
 # --------------------------------------------------------------------
 # Login / Logout / First-login password set
 # --------------------------------------------------------------------
@@ -1705,6 +1757,19 @@ def _is_staff(user):
         return False
     role = getattr(user, "role", "")
     return role in ("instructor", "admin", "mentor", "staff")
+
+def _safe_redirect_target(raw_path, fallback_endpoint="index"):
+    target = (raw_path or "").strip()
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    return url_for(fallback_endpoint)
+
+def _announcement_target_label(announcement):
+    if announcement.target_group and announcement.target_group.name:
+        return announcement.target_group.name
+    if announcement.target_group_name:
+        return announcement.target_group_name
+    return "All students"
 
 def _paginate_posts(query, page, per_page=10):
     total = query.count()
@@ -4287,6 +4352,104 @@ def attendance_list():
         message=message,
         error=error,
         user=current_user(),
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/announcements", methods=["GET", "POST"])
+@require_user()
+def announcements_admin():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    message = session.pop("announcements_status", None)
+    form_data = {
+        "title": request.form.get("title") or "",
+        "body": request.form.get("body") or "",
+        "group_id": request.form.get("group_id") or "all",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        body = form_data["body"].strip()
+        group_value = (form_data["group_id"] or "all").strip()
+        target_group = None
+        if not title:
+            error = "Announcement title is required."
+        elif not body:
+            error = "Announcement body is required."
+        if not error and group_value != "all":
+            try:
+                group_id = int(group_value)
+            except Exception:
+                group_id = 0
+            target_group = StudentGroup.query.get(group_id) if group_id else None
+            if not target_group:
+                error = "Selected group was not found."
+        student_ids = []
+        if not error:
+            if target_group:
+                memberships = StudentGroupMembership.query.filter_by(group_id=target_group.id).all()
+                student_ids = sorted({membership.student_id for membership in memberships if membership.student_id})
+            else:
+                student_ids = [
+                    row[0]
+                    for row in db.session.query(Student.id)
+                    .order_by(Student.name.asc(), Student.id.asc())
+                    .all()
+                ]
+            if not student_ids:
+                error = "No students matched the selected target."
+        if not error:
+            announcement = Announcement(
+                title=title,
+                body=body,
+                created_by_user_id=user.id if user else None,
+                target_group_id=(target_group.id if target_group else None),
+                target_group_name=(target_group.name if target_group else None),
+            )
+            db.session.add(announcement)
+            db.session.flush()
+            for student_id in student_ids:
+                db.session.add(AnnouncementDelivery(
+                    announcement_id=announcement.id,
+                    student_id=student_id,
+                ))
+            db.session.commit()
+            session["announcements_status"] = f"Announcement sent to {len(student_ids)} student(s)."
+            return redirect(url_for("announcements_admin"))
+    announcements = (
+        Announcement.query
+        .options(
+            subqueryload(Announcement.deliveries),
+            subqueryload(Announcement.creator),
+            subqueryload(Announcement.target_group),
+        )
+        .order_by(Announcement.created_at.desc(), Announcement.id.desc())
+        .all()
+    )
+    announcement_rows = []
+    for announcement in announcements:
+        deliveries = announcement.deliveries or []
+        seen_count = sum(1 for delivery in deliveries if delivery.seen_at)
+        total_count = len(deliveries)
+        announcement_rows.append({
+            "announcement": announcement,
+            "target_label": _announcement_target_label(announcement),
+            "total_count": total_count,
+            "seen_count": seen_count,
+            "unseen_count": max(0, total_count - seen_count),
+        })
+    return render_template(
+        "announcements_admin.html",
+        groups=groups,
+        announcement_rows=announcement_rows,
+        form_data=form_data,
+        message=message,
+        error=error,
+        user=user,
         student_name=session.get("student_name"),
     )
 

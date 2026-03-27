@@ -136,6 +136,37 @@ class AttendanceEntry(db.Model):
         UniqueConstraint('sheet_id', 'student_id', name='uq_attendance_sheet_student'),
     )
 
+class Announcement(db.Model):
+    __tablename__ = "announcements"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True, index=True)
+    target_group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True, index=True)
+    target_group_name = db.Column(db.String(120), nullable=True)
+
+    creator = db.relationship('User')
+    target_group = db.relationship('StudentGroup')
+
+class AnnouncementDelivery(db.Model):
+    __tablename__ = "announcement_deliveries"
+    id = db.Column(db.Integer, primary_key=True)
+    announcement_id = db.Column(db.Integer, db.ForeignKey('announcements.id', ondelete="CASCADE"), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    seen_at = db.Column(db.DateTime, nullable=True)
+
+    announcement = db.relationship(
+        'Announcement',
+        backref=db.backref('deliveries', cascade="all,delete-orphan", order_by="AnnouncementDelivery.created_at.asc()"),
+    )
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        UniqueConstraint('announcement_id', 'student_id', name='uq_announcement_delivery_student'),
+    )
+
 class Leaderboard(db.Model):
     __tablename__ = "leaderboards"
     id = db.Column(db.Integer, primary_key=True)

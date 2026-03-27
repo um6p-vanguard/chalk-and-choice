@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <div>
+      <h3 style="margin:0;">Announcements</h3>
+      <p class="muted" style="margin-top:6px;">Create a message and deliver it once to all students or a single group.</p>
+    </div>
+  </div>
+  {% if message %}
+    <p class="muted" style="margin-top:8px;">{{ message }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="text-danger" style="margin-top:8px;">{{ error }}</p>
+  {% endif %}
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin-top:0;">New announcement</h3>
+  <form method="post" action="{{ url_for('announcements_admin') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+    <label>Title</label>
+    <input type="text" name="title" value="{{ form_data.title }}" maxlength="255" placeholder="Short headline">
+
+    <label>Audience</label>
+    <select name="group_id">
+      <option value="all" {% if form_data.group_id == "all" %}selected{% endif %}>All students</option>
+      {% for group in groups %}
+      <option value="{{ group.id }}" {% if form_data.group_id and form_data.group_id != "all" and form_data.group_id|int == group.id %}selected{% endif %}>{{ group.name }}</option>
+      {% endfor %}
+    </select>
+
+    <label>Body</label>
+    <textarea name="body" rows="7" placeholder="Write the announcement. Markdown is supported.">{{ form_data.body }}</textarea>
+
+    <div class="row" style="justify-content:flex-end; margin-top:12px;">
+      <button class="btn btn-primary" type="submit">Send announcement</button>
+    </div>
+  </form>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <h3 style="margin-top:0;">History</h3>
+  {% if announcement_rows %}
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      {% for row in announcement_rows %}
+      <div style="padding:14px; border:1px solid var(--border); border-radius:10px; background:#0b1220;">
+        <div class="row" style="justify-content:space-between; align-items:flex-start;">
+          <div>
+            <h4 style="margin:0;">{{ row.announcement.title }}</h4>
+            <p class="muted" style="margin:6px 0 0 0;">
+              {{ row.announcement.created_at.strftime("%Y-%m-%d %H:%M UTC") if row.announcement.created_at else "Unknown time" }}
+              · {{ row.target_label }}
+              · by {{ row.announcement.creator.name if row.announcement.creator else "Unknown staff" }}
+            </p>
+          </div>
+          <div class="muted" style="text-align:right;">
+            <div>{{ row.seen_count }} seen</div>
+            <div>{{ row.unseen_count }} unread</div>
+            <div>{{ row.total_count }} total</div>
+          </div>
+        </div>
+        <div style="margin-top:10px;">{{ row.announcement.body|markdown }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted" style="margin:0;">No announcements yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
