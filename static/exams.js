@@ -442,7 +442,7 @@
       const sampleHelper = document.createElement("p");
       sampleHelper.className = "muted";
       sampleHelper.style.marginTop = "-4px";
-      sampleHelper.textContent = "Provide input/output pairs for script mode, or function calls and expected returns for function mode.";
+      sampleHelper.textContent = "Provide sample cases and choose how each one should be compared.";
       card.appendChild(sampleHelper);
 
       const scriptSampleList = document.createElement("div");
@@ -482,10 +482,10 @@
         classSignatureWrap.style.display = mode === "class" ? "block" : "none";
         initWrap.style.display = mode === "class" ? "block" : "none";
         sampleHelper.textContent = mode === "script"
-          ? "Provide input/output pairs for script mode."
+          ? "Provide input/output pairs for script mode and choose a text comparison rule."
           : mode === "class"
-            ? "Set the __init__ call once, then provide method calls or expressions that run against obj."
-            : "Provide function calls and expected returns for function mode.";
+            ? "Set the __init__ call once, then provide method calls or expressions that run against obj and choose how results are compared."
+            : "Provide function calls, expected returns, and the comparison rule for each sample.";
         callableSampleList.querySelectorAll("[data-sample-row]").forEach((row) => {
           setCallableSampleRowMode(row, mode);
         });
@@ -684,6 +684,56 @@
     wrapper.appendChild(correctInput);
   }
 
+  const DEFAULT_SCRIPT_COMPARE_MODE = "rstrip";
+  const DEFAULT_CALLABLE_COMPARE_MODE = "exact";
+  const DEFAULT_NUMERIC_TOLERANCE = "1e-6";
+
+  const SCRIPT_SAMPLE_COMPARE_OPTIONS = [
+    { value: "rstrip", label: "Ignore trailing whitespace" },
+    { value: "exact", label: "Exact text" },
+    { value: "normalize_whitespace", label: "Normalize whitespace" },
+    { value: "contains", label: "Contains text" },
+  ];
+
+  const CALLABLE_SAMPLE_COMPARE_OPTIONS = [
+    { value: "exact", label: "Exact result" },
+    { value: "numeric_tolerance", label: "Numeric tolerance" },
+    { value: "contains", label: "Result text contains" },
+  ];
+
+  function buildSampleCompareSelect(options, value, fallbackValue) {
+    const select = document.createElement("select");
+    select.dataset.field = "sample-compare-mode";
+    const selected = value || fallbackValue;
+    options.forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (option.value === selected) opt.selected = true;
+      select.appendChild(opt);
+    });
+    return select;
+  }
+
+  function describeSampleComparison(sample) {
+    const mode = (sample && sample.mode) || "script";
+    const compareMode = (sample && sample.compare_mode) || (mode === "script" ? DEFAULT_SCRIPT_COMPARE_MODE : DEFAULT_CALLABLE_COMPARE_MODE);
+    if (mode === "script") {
+      if (compareMode === "exact") return "Comparison: exact text";
+      if (compareMode === "normalize_whitespace") return "Comparison: normalized whitespace";
+      if (compareMode === "contains") return "Comparison: contains text";
+      return "Comparison: ignore trailing whitespace";
+    }
+    if (compareMode === "numeric_tolerance") {
+      const tolerance = sample && sample.tolerance !== undefined && sample.tolerance !== null && String(sample.tolerance).trim()
+        ? sample.tolerance
+        : DEFAULT_NUMERIC_TOLERANCE;
+      return `Comparison: numeric tolerance (${tolerance})`;
+    }
+    if (compareMode === "contains") return "Comparison: result text contains";
+    return "Comparison: exact result";
+  }
+
   function buildScriptSampleRow(sample = {}) {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
@@ -720,6 +770,17 @@
     outputField.dataset.field = "sample-output";
     outputField.value = sample.output || "";
     wrapper.appendChild(outputField);
+
+    const compareLabel = document.createElement("label");
+    compareLabel.textContent = "Comparison";
+    wrapper.appendChild(compareLabel);
+
+    const compareSelect = buildSampleCompareSelect(
+      SCRIPT_SAMPLE_COMPARE_OPTIONS,
+      sample.compare_mode || sample.compare || "",
+      DEFAULT_SCRIPT_COMPARE_MODE,
+    );
+    wrapper.appendChild(compareSelect);
 
     const hiddenLabel = document.createElement("label");
     hiddenLabel.style.display = "flex";
@@ -771,6 +832,20 @@
     if (expectedLabel) expectedLabel.textContent = meta.expectedLabel;
   }
 
+  function updateCallableSampleCompareUI(wrapper) {
+    if (!wrapper) return;
+    const compareSelect = wrapper.querySelector('[data-field="sample-compare-mode"]');
+    const toleranceWrap = wrapper.querySelector('[data-role="sample-tolerance-wrap"]');
+    const toleranceInput = wrapper.querySelector('[data-field="sample-tolerance"]');
+    const compareMode = compareSelect ? (compareSelect.value || DEFAULT_CALLABLE_COMPARE_MODE) : DEFAULT_CALLABLE_COMPARE_MODE;
+    if (toleranceWrap) {
+      toleranceWrap.style.display = compareMode === "numeric_tolerance" ? "block" : "none";
+    }
+    if (toleranceInput && compareMode === "numeric_tolerance" && !String(toleranceInput.value || "").trim()) {
+      toleranceInput.value = DEFAULT_NUMERIC_TOLERANCE;
+    }
+  }
+
   function buildCallableSampleRow(sample = {}, mode = "function") {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
@@ -808,6 +883,36 @@
     expectedInput.value = sample.expected || sample.output || "";
     wrapper.appendChild(expectedInput);
 
+    const compareLabel = document.createElement("label");
+    compareLabel.textContent = "Comparison";
+    wrapper.appendChild(compareLabel);
+
+    const compareSelect = buildSampleCompareSelect(
+      CALLABLE_SAMPLE_COMPARE_OPTIONS,
+      sample.compare_mode || sample.compare || "",
+      DEFAULT_CALLABLE_COMPARE_MODE,
+    );
+    wrapper.appendChild(compareSelect);
+
+    const toleranceWrap = document.createElement("div");
+    toleranceWrap.dataset.role = "sample-tolerance-wrap";
+    toleranceWrap.style.marginTop = "8px";
+    const toleranceLabel = document.createElement("label");
+    toleranceLabel.textContent = "Tolerance";
+    toleranceWrap.appendChild(toleranceLabel);
+    const toleranceInput = document.createElement("input");
+    toleranceInput.type = "text";
+    toleranceInput.dataset.field = "sample-tolerance";
+    toleranceInput.placeholder = DEFAULT_NUMERIC_TOLERANCE;
+    toleranceInput.value = sample.tolerance !== undefined && sample.tolerance !== null ? String(sample.tolerance) : "";
+    toleranceWrap.appendChild(toleranceInput);
+    const toleranceHelp = document.createElement("p");
+    toleranceHelp.className = "muted";
+    toleranceHelp.style.marginTop = "6px";
+    toleranceHelp.textContent = "Absolute tolerance for numbers or arrays, for example 1e-6.";
+    toleranceWrap.appendChild(toleranceHelp);
+    wrapper.appendChild(toleranceWrap);
+
     const hiddenLabel = document.createElement("label");
     hiddenLabel.style.display = "flex";
     hiddenLabel.style.alignItems = "center";
@@ -829,6 +934,10 @@
     wrapper.appendChild(removeBtn);
 
     setCallableSampleRowMode(wrapper, mode);
+    compareSelect.addEventListener("change", () => {
+      updateCallableSampleCompareUI(wrapper);
+    });
+    updateCallableSampleCompareUI(wrapper);
     return wrapper;
   }
 
@@ -867,30 +976,47 @@
         if (mode === "function") {
           payload.function_signature = getFieldValue(card, "function-signature");
           const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
-          payload.samples = Array.from(rows).map((row) => ({
-            name: getFieldValue(row, "sample-name"),
-            call: getFieldValue(row, "sample-call"),
-            expected: getFieldValue(row, "sample-expected"),
-            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
-          }));
+          payload.samples = Array.from(rows).map((row) => {
+            const compareMode = getFieldValue(row, "sample-compare-mode") || DEFAULT_CALLABLE_COMPARE_MODE;
+            const sample = {
+              name: getFieldValue(row, "sample-name"),
+              call: getFieldValue(row, "sample-call"),
+              expected: getFieldValue(row, "sample-expected"),
+              compare_mode: compareMode,
+              hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
+            };
+            if (compareMode === "numeric_tolerance") {
+              sample.tolerance = getFieldValue(row, "sample-tolerance");
+            }
+            return sample;
+          });
         } else if (mode === "class") {
           const classInit = getFieldValue(card, "class-init");
           payload.class_signature = getFieldValue(card, "class-signature");
           payload.class_init = classInit;
           const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
-          payload.samples = Array.from(rows).map((row) => ({
-            name: getFieldValue(row, "sample-name"),
-            call: getFieldValue(row, "sample-call"),
-            expected: getFieldValue(row, "sample-expected"),
-            init_call: classInit,
-            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
-          }));
+          payload.samples = Array.from(rows).map((row) => {
+            const compareMode = getFieldValue(row, "sample-compare-mode") || DEFAULT_CALLABLE_COMPARE_MODE;
+            const sample = {
+              name: getFieldValue(row, "sample-name"),
+              call: getFieldValue(row, "sample-call"),
+              expected: getFieldValue(row, "sample-expected"),
+              init_call: classInit,
+              compare_mode: compareMode,
+              hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
+            };
+            if (compareMode === "numeric_tolerance") {
+              sample.tolerance = getFieldValue(row, "sample-tolerance");
+            }
+            return sample;
+          });
         } else {
           const rows = card.querySelectorAll('[data-sample-list="script"] [data-sample-row]');
           payload.samples = Array.from(rows).map((row) => ({
             name: getFieldValue(row, "sample-name"),
             input: getFieldValue(row, "sample-input"),
             output: getFieldValue(row, "sample-output"),
+            compare_mode: getFieldValue(row, "sample-compare-mode") || DEFAULT_SCRIPT_COMPARE_MODE,
             hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         }
@@ -1336,6 +1462,12 @@
         details.appendChild(outputBlock);
         details.appendChild(expectedBlock);
 
+        const compareInfo = document.createElement("div");
+        compareInfo.className = "muted";
+        compareInfo.style.marginTop = "8px";
+        compareInfo.textContent = describeSampleComparison(sample);
+        details.appendChild(compareInfo);
+
         if (sample.expected && (sample.output || sample.output === "")) {
           const diffWrap = buildDiff(sample.expected, sample.output);
           const diffLabel = document.createElement("div");
@@ -1495,6 +1627,103 @@ def _safe_eval(expr, glb, lcl, limit):
     finally:
         sys.settrace(None)
 
+def _values_match(actual, expected):
+    if np is not None:
+        try:
+            if isinstance(actual, np.ndarray) or isinstance(expected, np.ndarray):
+                try:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected), equal_nan=True))
+                except TypeError:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected)))
+                except Exception:
+                    return False
+        except Exception:
+            pass
+    try:
+        comparison = actual == expected
+    except Exception:
+        return False
+    if np is not None:
+        try:
+            if isinstance(comparison, np.ndarray):
+                return bool(comparison.all())
+        except Exception:
+            pass
+    try:
+        return bool(comparison)
+    except Exception:
+        return False
+
+def _normalize_compare_text(value):
+    return " ".join(str(value or "").split())
+
+def _text_matches(actual_text, expected_text, compare_mode):
+    actual = str(actual_text or "")
+    expected = str(expected_text or "")
+    if compare_mode == "exact":
+        return actual == expected
+    if compare_mode == "normalize_whitespace":
+        return _normalize_compare_text(actual) == _normalize_compare_text(expected)
+    if compare_mode == "contains":
+        return expected in actual
+    return actual.rstrip() == expected.rstrip()
+
+def _numeric_values_close(actual, expected, tolerance):
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        if len(actual) != len(expected):
+            return False
+        return all(_numeric_values_close(a, b, tolerance) for a, b in zip(actual, expected))
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return False
+    if isinstance(actual, (str, bytes)) or isinstance(expected, (str, bytes)):
+        return False
+    try:
+        left = float(actual)
+        right = float(expected)
+    except Exception:
+        return False
+    if left != left and right != right:
+        return True
+    return abs(left - right) <= tolerance
+
+def _values_close(actual, expected, tolerance):
+    try:
+        tolerance = max(float(tolerance), 0.0)
+    except Exception:
+        tolerance = 1e-6
+    if np is not None:
+        try:
+            return bool(np.allclose(np.asarray(actual), np.asarray(expected), atol=tolerance, rtol=0.0, equal_nan=True))
+        except Exception:
+            pass
+    return _numeric_values_close(actual, expected, tolerance)
+
+def _sample_compare_mode(sample, sample_kind):
+    raw = (sample.get("compare_mode") or sample.get("compare") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if sample_kind == "script":
+        return raw if raw in ("exact", "rstrip", "normalize_whitespace", "contains") else "rstrip"
+    return raw if raw in ("exact", "numeric_tolerance", "contains") else "exact"
+
+def _sample_tolerance(sample):
+    value = sample.get("tolerance")
+    if value in (None, ""):
+        return 1e-6
+    try:
+        return max(float(value), 0.0)
+    except Exception:
+        return 1e-6
+
+def _callable_result_matches(result_value, output_value, expected_text, compare_mode, expected_literal_defined, expected_literal, tolerance=None):
+    if compare_mode == "contains":
+        return _text_matches(output_value, expected_text, "contains"), ""
+    if compare_mode == "numeric_tolerance":
+        if not expected_literal_defined:
+            return False, "Numeric tolerance comparison requires a literal expected value."
+        return _values_close(result_value, expected_literal, tolerance), ""
+    if expected_literal_defined:
+        return _values_match(result_value, expected_literal), ""
+    return _text_matches(output_value.strip(), expected_text.strip(), "exact"), ""
+
 results = []
 namespace = {"__name__": "__main__"}
 setup_error = None
@@ -1517,6 +1746,8 @@ for sample in samples:
         expected_output_display = (sample.get("expected") or sample.get("output") or "")
         expected_output = expected_output_display.strip()
         init_call = (sample.get("init_call") or "").strip() if mode == "class" else ""
+        compare_mode = _sample_compare_mode(sample, "callable")
+        tolerance = _sample_tolerance(sample) if compare_mode == "numeric_tolerance" else None
         expected_literal = None
         expected_literal_defined = False
         if expected_output:
@@ -1561,12 +1792,20 @@ for sample in samples:
                 sys.stdout = original_stdout
 
         if status == "passed" and expected_output:
-            if expected_literal_defined:
-                if result_value != expected_literal:
-                    status = "mismatch"
-            else:
-                if output_value.strip() != expected_output:
-                    status = "mismatch"
+            matched, compare_error = _callable_result_matches(
+                result_value,
+                output_value,
+                expected_output,
+                compare_mode,
+                expected_literal_defined,
+                expected_literal,
+                tolerance=tolerance,
+            )
+            if compare_error:
+                status = "error"
+                error_text = compare_error
+            elif not matched:
+                status = "mismatch"
         plot_images = _collect_plots()
 
         results.append({
@@ -1578,6 +1817,8 @@ for sample in samples:
             "error": error_text,
             "mode": mode,
             "init_call": init_call,
+            "compare_mode": compare_mode,
+            "tolerance": tolerance,
             "plot_images": plot_images,
         })
 
@@ -1585,6 +1826,7 @@ for sample in samples:
         # script / stdin mode
         sample_input = sample.get("input") or ""
         expected_output = sample.get("expected") or sample.get("output") or ""
+        compare_mode = _sample_compare_mode(sample, "script")
 
         stdin = io.StringIO(sample_input)
         stdout = io.StringIO()
@@ -1615,7 +1857,7 @@ for sample in samples:
 
         output_value = stdout.getvalue()
 
-        if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
+        if status == "passed" and expected_output.strip() and not _text_matches(output_value, expected_output, compare_mode):
             status = "mismatch"
         plot_images = _collect_plots()
 
@@ -1627,6 +1869,8 @@ for sample in samples:
             "expected": expected_output,
             "error": error_text,
             "mode": "script",
+            "compare_mode": compare_mode,
+            "tolerance": None,
             "plot_images": plot_images,
         })
 

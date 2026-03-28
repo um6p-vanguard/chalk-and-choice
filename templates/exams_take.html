@@ -179,6 +179,7 @@
                   <ul style="list-style:none; padding:0; margin:10px 0; display:grid; gap:8px;">
                     {% for sample in public_samples %}
                       <li style="border:1px dashed #334155; border-radius:8px; padding:8px;">
+                        {% set compare_mode = sample.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                           <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
                           {% if q.mode == "function" %}
@@ -192,6 +193,27 @@
                         {% if q.mode == "class" and (sample.init_call or q.class_init) %}
                           <div class="muted" style="margin-top:6px; font-size:0.85rem;">Init: <code>{{ sample.init_call or q.class_init }}</code></div>
                         {% endif %}
+                        <div class="muted" style="margin-top:6px; font-size:0.85rem;">
+                          {% if q.mode in ("function", "class") %}
+                            {% if compare_mode == "numeric_tolerance" %}
+                              Comparison: numeric tolerance ({{ sample.tolerance or "1e-6" }})
+                            {% elif compare_mode == "contains" %}
+                              Comparison: result text contains
+                            {% else %}
+                              Comparison: exact result
+                            {% endif %}
+                          {% else %}
+                            {% if compare_mode == "exact" %}
+                              Comparison: exact text
+                            {% elif compare_mode == "normalize_whitespace" %}
+                              Comparison: normalized whitespace
+                            {% elif compare_mode == "contains" %}
+                              Comparison: contains text
+                            {% else %}
+                              Comparison: ignore trailing whitespace
+                            {% endif %}
+                          {% endif %}
+                        </div>
                         {% if q.mode not in ("function", "class") and sample.input %}
                           <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; white-space:pre-wrap;">{{ sample.input }}</pre>
                         {% endif %}

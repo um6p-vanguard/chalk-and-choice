@@ -309,6 +309,28 @@
                         <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
                       </div>
+                      {% set compare_mode = case.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
+                      <div class="muted" style="margin-top:8px;">
+                        {% if q.mode in ("function", "class") %}
+                          {% if compare_mode == "numeric_tolerance" %}
+                            Comparison: numeric tolerance ({{ case.tolerance or "1e-6" }})
+                          {% elif compare_mode == "contains" %}
+                            Comparison: result text contains
+                          {% else %}
+                            Comparison: exact result
+                          {% endif %}
+                        {% else %}
+                          {% if compare_mode == "exact" %}
+                            Comparison: exact text
+                          {% elif compare_mode == "normalize_whitespace" %}
+                            Comparison: normalized whitespace
+                          {% elif compare_mode == "contains" %}
+                            Comparison: contains text
+                          {% else %}
+                            Comparison: ignore trailing whitespace
+                          {% endif %}
+                        {% endif %}
+                      </div>
                       {% if case.plot_images %}
                         <div style="margin-top:8px;">
                           <div class="muted">Plots</div>
@@ -362,6 +384,28 @@
                       <div style="margin-top:8px;">
                         <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
+                      </div>
+                      {% set compare_mode = case.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
+                      <div class="muted" style="margin-top:8px;">
+                        {% if q.mode in ("function", "class") %}
+                          {% if compare_mode == "numeric_tolerance" %}
+                            Comparison: numeric tolerance ({{ case.tolerance or "1e-6" }})
+                          {% elif compare_mode == "contains" %}
+                            Comparison: result text contains
+                          {% else %}
+                            Comparison: exact result
+                          {% endif %}
+                        {% else %}
+                          {% if compare_mode == "exact" %}
+                            Comparison: exact text
+                          {% elif compare_mode == "normalize_whitespace" %}
+                            Comparison: normalized whitespace
+                          {% elif compare_mode == "contains" %}
+                            Comparison: contains text
+                          {% else %}
+                            Comparison: ignore trailing whitespace
+                          {% endif %}
+                        {% endif %}
                       </div>
                       {% if case.plot_images %}
                         <div style="margin-top:8px;">

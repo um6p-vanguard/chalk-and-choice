@@ -260,6 +260,86 @@ def _coerce_code_expected(value):
             return repr(text)
     return repr(value)
 
+DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE = "rstrip"
+DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE = "exact"
+DEFAULT_NUMERIC_TOLERANCE = 1e-6
+
+SCRIPT_SAMPLE_COMPARE_ALIASES = {
+    "exact": "exact",
+    "exact_text": "exact",
+    "strict": "exact",
+    "rstrip": "rstrip",
+    "ignore_trailing_whitespace": "rstrip",
+    "trim_end": "rstrip",
+    "trimmed": "rstrip",
+    "normalize_whitespace": "normalize_whitespace",
+    "normalized_whitespace": "normalize_whitespace",
+    "ignore_whitespace": "normalize_whitespace",
+    "contains": "contains",
+    "substring": "contains",
+}
+
+CALLABLE_SAMPLE_COMPARE_ALIASES = {
+    "exact": "exact",
+    "equality": "exact",
+    "numeric_tolerance": "numeric_tolerance",
+    "tolerance": "numeric_tolerance",
+    "allclose": "numeric_tolerance",
+    "close": "numeric_tolerance",
+    "contains": "contains",
+    "repr_contains": "contains",
+    "text_contains": "contains",
+    "string_contains": "contains",
+}
+
+def _normalize_sample_compare_mode(value, sample_kind):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if sample_kind == "script":
+        if not token:
+            return DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE
+        mode = SCRIPT_SAMPLE_COMPARE_ALIASES.get(token)
+        if not mode:
+            raise ValueError(f"Unknown script comparison mode '{value}'.")
+        return mode
+    if not token:
+        return DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE
+    mode = CALLABLE_SAMPLE_COMPARE_ALIASES.get(token)
+    if not mode:
+        raise ValueError(f"Unknown callable comparison mode '{value}'.")
+    return mode
+
+def _coerce_sample_tolerance(value, default=DEFAULT_NUMERIC_TOLERANCE):
+    if value in (None, ""):
+        return float(default)
+    try:
+        tolerance = float(_coerce_string(value).strip())
+    except Exception:
+        raise ValueError("Tolerance must be a non-negative number.")
+    if tolerance < 0:
+        raise ValueError("Tolerance must be a non-negative number.")
+    return tolerance
+
+def _sample_compare_settings(sample, sample_kind):
+    compare_mode = _normalize_sample_compare_mode(
+        _first_present(sample, "compare_mode", "compare", "comparison", "match_mode", "matcher"),
+        sample_kind,
+    )
+    tolerance = None
+    if sample_kind != "script" and compare_mode == "numeric_tolerance":
+        tolerance = _coerce_sample_tolerance(
+            _first_present(sample, "tolerance", "abs_tolerance", "atol", "epsilon"),
+        )
+    return compare_mode, tolerance
+
+def _validate_numeric_tolerance_expected(expected_text):
+    text = _coerce_string(expected_text).strip()
+    if not text:
+        raise ValueError("Numeric tolerance comparison requires an expected value.")
+    try:
+        ast.literal_eval(text)
+    except Exception:
+        raise ValueError("Numeric tolerance comparison requires a literal expected value.")
+
 def _extract_choice_options(value):
     options = []
     implied_correct = []
@@ -334,12 +414,14 @@ def _build_project_tasks_schema():
                             {
                                 "name": "initial total",
                                 "method_call": "obj.total()",
-                                "expected_result": 3
+                                "expected_result": 3,
+                                "compare_mode": "exact"
                             },
                             {
                                 "name": "add returns new total",
                                 "method_call": "obj.add(2)",
-                                "expected_result": 5
+                                "expected_result": 5,
+                                "compare_mode": "exact"
                             }
                         ]
                     }
@@ -395,7 +477,7 @@ def _build_project_tasks_schema():
     }
     return {
         "schema_name": "project_task_import",
-        "schema_version": 4,
+        "schema_version": 5,
         "summary": "Reference document for importing project tasks from JSON. The importer accepts the payload shape below plus the documented aliases. Unknown extra fields are ignored. Text fields support markdown and escaped newline sequences such as \\n and \\n\\n.",
         "paste_payload_shape": {
             "type": "object",
@@ -503,7 +585,8 @@ def _build_project_tasks_schema():
             "code_sample_fields": {
                 "common": {
                     "name": ["name", "label"],
-                    "hidden": ["hidden", "is_hidden"]
+                    "hidden": ["hidden", "is_hidden"],
+                    "compare_mode": ["compare_mode", "compare", "comparison", "match_mode", "matcher"]
                 },
                 "script_mode": {
                     "input": ["input", "stdin"],
@@ -511,12 +594,14 @@ def _build_project_tasks_schema():
                 },
                 "function_mode": {
                     "call": ["call", "function_call", "expression"],
-                    "expected": ["expected", "expected_return", "expected_result", "output"]
+                    "expected": ["expected", "expected_return", "expected_result", "output"],
+                    "tolerance": ["tolerance", "abs_tolerance", "atol", "epsilon"]
                 },
                 "class_mode": {
                     "call": ["call", "method_call", "expression"],
                     "expected": ["expected", "expected_return", "expected_result", "output"],
-                    "init_call": ["init_call", "constructor_call", "object_initializer"]
+                    "init_call": ["init_call", "constructor_call", "object_initializer"],
+                    "tolerance": ["tolerance", "abs_tolerance", "atol", "epsilon"]
                 }
             }
         },
@@ -526,6 +611,7 @@ def _build_project_tasks_schema():
                 "Question `id` is optional. The importer will generate one if missing.",
                 "For booleans, use real JSON booleans: true or false.",
                 "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects.",
+                "Code samples can set `compare_mode`. Callable samples may also set `tolerance` for numeric tolerance checks.",
                 "Visible text fields support markdown; in JSON strings use `\\n` for a new line and `\\n\\n` for a blank line.",
                 "Prefer markdown lists, headings, and fenced code blocks over manual spacing."
             ],
@@ -629,10 +715,14 @@ def _build_project_tasks_schema():
                                     {
                                         "name": "two words",
                                         "stdin": "apple\nbanana\n",
-                                        "expected_stdout": "banana\napple\n"
+                                        "expected_stdout": "banana\napple\n",
+                                        "compare_mode": "rstrip"
                                     }
                                 ]
-                            }
+                            },
+                            "notes": [
+                                "Script compare modes: `rstrip` (default), `exact`, `normalize_whitespace`, `contains`."
+                            ]
                         },
                         "function": {
                             "use_when": "Students implement a function and each test calls it directly.",
@@ -646,14 +736,23 @@ def _build_project_tasks_schema():
                                     {
                                         "name": "square of five",
                                         "function_call": "square(5)",
-                                        "expected_return": 25
+                                        "expected_return": 25,
+                                        "compare_mode": "numeric_tolerance",
+                                        "tolerance": 0.000001
                                     }
                                 ]
-                            }
+                            },
+                            "notes": [
+                                "Callable compare modes: `exact` (default), `numeric_tolerance`, `contains`.",
+                                "Use `numeric_tolerance` for floats or arrays and set `tolerance` to an absolute tolerance such as `1e-6`."
+                            ]
                         },
                         "class": {
                             "use_when": "Students implement a class. Each test creates a fresh object named `obj` using `class_init` before evaluating the method call or expression.",
-                            "example": class_payload["tasks"][0]["questions"][0]
+                            "example": class_payload["tasks"][0]["questions"][0],
+                            "notes": [
+                                "Class-mode tests use the same compare modes as function-mode tests."
+                            ]
                         }
                     }
                 }
@@ -2696,13 +2795,23 @@ def _normalize_exam_questions(payload):
                             continue
                         name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
                         expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
-                        samples_clean.append({
+                        compare_mode, tolerance = _sample_compare_settings(sample, "callable")
+                        if compare_mode == "numeric_tolerance":
+                            try:
+                                _validate_numeric_tolerance_expected(expected)
+                            except ValueError as exc:
+                                raise ValueError(f"{name}: {exc}")
+                        sample_clean = {
                             "name": name,
                             "call": call_expr,
                             "expected": expected,
                             "input": call_expr,
+                            "compare_mode": compare_mode,
                             "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
-                        })
+                        }
+                        if tolerance is not None:
+                            sample_clean["tolerance"] = tolerance
+                        samples_clean.append(sample_clean)
                 if not samples_clean:
                     raise ValueError("Function code questions need at least one sample call.")
             elif mode == "class":
@@ -2724,14 +2833,24 @@ def _normalize_exam_questions(payload):
                         name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Method test {s_idx+1}"
                         expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
                         sample_init = _coerce_string(_first_present(sample, "init_call", "constructor_call", "object_initializer")).strip() or class_init
-                        samples_clean.append({
+                        compare_mode, tolerance = _sample_compare_settings(sample, "callable")
+                        if compare_mode == "numeric_tolerance":
+                            try:
+                                _validate_numeric_tolerance_expected(expected)
+                            except ValueError as exc:
+                                raise ValueError(f"{name}: {exc}")
+                        sample_clean = {
                             "name": name,
                             "call": call_expr,
                             "expected": expected,
                             "input": call_expr,
                             "init_call": sample_init,
+                            "compare_mode": compare_mode,
                             "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
-                        })
+                        }
+                        if tolerance is not None:
+                            sample_clean["tolerance"] = tolerance
+                        samples_clean.append(sample_clean)
                 if not samples_clean:
                     raise ValueError("Class code questions need at least one method call.")
             else:
@@ -2740,10 +2859,12 @@ def _normalize_exam_questions(payload):
                         if not isinstance(sample, dict):
                             continue
                         name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
+                        compare_mode, _ = _sample_compare_settings(sample, "script")
                         samples_clean.append({
                             "name": name,
                             "input": _coerce_string(_first_present(sample, "input", "stdin")),
                             "output": _coerce_string(_first_present(sample, "output", "expected_stdout", "expected")),
+                            "compare_mode": compare_mode,
                             "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
                         })
             normalized["samples"] = samples_clean
@@ -3553,6 +3674,113 @@ def _collect_plot_images():
             pass
     return images
 
+def _values_match(actual, expected):
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+    if np is not None:
+        try:
+            if isinstance(actual, np.ndarray) or isinstance(expected, np.ndarray):
+                try:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected), equal_nan=True))
+                except TypeError:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected)))
+                except Exception:
+                    return False
+        except Exception:
+            pass
+    try:
+        comparison = actual == expected
+    except Exception:
+        return False
+    if np is not None:
+        try:
+            if isinstance(comparison, np.ndarray):
+                return bool(comparison.all())
+        except Exception:
+            pass
+    try:
+        return bool(comparison)
+    except Exception:
+        return False
+
+def _normalize_compare_text(value):
+    return " ".join(_coerce_string(value).split())
+
+def _text_matches(actual_text, expected_text, compare_mode):
+    actual = _coerce_string(actual_text)
+    expected = _coerce_string(expected_text)
+    if compare_mode == "exact":
+        return actual == expected
+    if compare_mode == "normalize_whitespace":
+        return _normalize_compare_text(actual) == _normalize_compare_text(expected)
+    if compare_mode == "contains":
+        return expected in actual
+    return actual.rstrip() == expected.rstrip()
+
+def _numeric_values_close(actual, expected, tolerance):
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        if len(actual) != len(expected):
+            return False
+        return all(_numeric_values_close(a, b, tolerance) for a, b in zip(actual, expected))
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return False
+    if isinstance(actual, (str, bytes)) or isinstance(expected, (str, bytes)):
+        return False
+    try:
+        left = float(actual)
+        right = float(expected)
+    except Exception:
+        return False
+    if left != left and right != right:
+        return True
+    return abs(left - right) <= tolerance
+
+def _values_close(actual, expected, tolerance):
+    try:
+        tolerance = max(float(tolerance), 0.0)
+    except Exception:
+        tolerance = DEFAULT_NUMERIC_TOLERANCE
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+    if np is not None:
+        try:
+            return bool(np.allclose(np.asarray(actual), np.asarray(expected), atol=tolerance, rtol=0.0, equal_nan=True))
+        except Exception:
+            pass
+    return _numeric_values_close(actual, expected, tolerance)
+
+def _effective_sample_compare_mode(sample, sample_kind):
+    try:
+        return _normalize_sample_compare_mode(
+            _first_present(sample, "compare_mode", "compare", "comparison", "match_mode", "matcher"),
+            sample_kind,
+        )
+    except Exception:
+        return DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE if sample_kind == "script" else DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE
+
+def _effective_sample_tolerance(sample):
+    try:
+        return _coerce_sample_tolerance(
+            _first_present(sample, "tolerance", "abs_tolerance", "atol", "epsilon"),
+        )
+    except Exception:
+        return DEFAULT_NUMERIC_TOLERANCE
+
+def _callable_result_matches(result_value, output_value, expected_text, compare_mode, expected_literal_defined, expected_literal, tolerance=None):
+    if compare_mode == "contains":
+        return _text_matches(output_value, expected_text, "contains"), ""
+    if compare_mode == "numeric_tolerance":
+        if not expected_literal_defined:
+            return False, "Numeric tolerance comparison requires a literal expected value."
+        return _values_close(result_value, expected_literal, tolerance), ""
+    if expected_literal_defined:
+        return _values_match(result_value, expected_literal), ""
+    return _text_matches(output_value.strip(), expected_text.strip(), "exact"), ""
+
 class CodeExecutionTimedOut(Exception):
     pass
 
@@ -3592,6 +3820,9 @@ def _run_code_tests_worker(code_text, tests, mode):
             hidden = bool(test.get("hidden"))
             name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
             init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
+            sample_kind = "script" if mode == "script" else "callable"
+            compare_mode = _effective_sample_compare_mode(test, sample_kind)
+            tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
             results.append({
                 "name": name,
                 "status": "error",
@@ -3601,6 +3832,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "error": "No code submitted.",
                 "mode": mode,
                 "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
             })
         return results
@@ -3627,6 +3860,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                 hidden = bool(test.get("hidden"))
                 name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
                 init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
+                compare_mode = _effective_sample_compare_mode(test, "callable")
+                tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
                 results.append({
                     "name": name,
                     "status": setup_failure_status,
@@ -3636,6 +3871,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                     "error": setup_failure_message,
                     "mode": mode,
                     "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                     "plot_images": [],
                 })
@@ -3648,6 +3885,8 @@ def _run_code_tests_worker(code_text, tests, mode):
             expected_output = (test.get("expected") or test.get("output") or "")
             expected_display = expected_output
             expected_trimmed = expected_output.strip()
+            compare_mode = _effective_sample_compare_mode(test, "callable")
+            tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
             expected_literal = None
             expected_literal_defined = False
             if expected_trimmed:
@@ -3694,12 +3933,20 @@ def _run_code_tests_worker(code_text, tests, mode):
                     sys.stdout = original_stdout
             plot_images = _collect_plot_images()
             if status == "passed" and expected_trimmed:
-                if expected_literal_defined:
-                    if result_value != expected_literal:
-                        status = "mismatch"
-                else:
-                    if output_value.strip() != expected_trimmed:
-                        status = "mismatch"
+                matched, compare_error = _callable_result_matches(
+                    result_value,
+                    output_value,
+                    expected_trimmed,
+                    compare_mode,
+                    expected_literal_defined,
+                    expected_literal,
+                    tolerance=tolerance,
+                )
+                if compare_error:
+                    status = "error"
+                    error_text = compare_error
+                elif not matched:
+                    status = "mismatch"
             results.append({
                 "name": name,
                 "status": status,
@@ -3709,12 +3956,15 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "error": error_text,
                 "mode": mode,
                 "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
         else:
             sample_input = test.get("input") or ""
             expected_output = (test.get("expected") or test.get("output") or "")
+            compare_mode = _effective_sample_compare_mode(test, "script")
             stdin_buffer = io.StringIO(sample_input)
             stdout_buffer = io.StringIO()
             status = "passed"
@@ -3747,7 +3997,7 @@ def _run_code_tests_worker(code_text, tests, mode):
             output_value = stdout_buffer.getvalue()
             plot_images = _collect_plot_images()
             if status == "passed" and expected_output.strip():
-                if output_value.rstrip() != expected_output.rstrip():
+                if not _text_matches(output_value, expected_output, compare_mode):
                     status = "mismatch"
                     error_text = ""
             results.append({
@@ -3759,6 +4009,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "error": error_text,
                 "mode": "script",
                 "init_call": "",
+                "compare_mode": compare_mode,
+                "tolerance": None,
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
@@ -3790,6 +4042,9 @@ def _run_code_tests_backend(code_text, tests, mode):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
                 init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+                sample_kind = "script" if mode == "script" else "callable"
+                compare_mode = _effective_sample_compare_mode(t, sample_kind)
+                tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
                 res.append({
                     "name": name,
                     "status": "error",
@@ -3799,6 +4054,8 @@ def _run_code_tests_backend(code_text, tests, mode):
                     "error": repr(e),
                     "mode": mode,
                     "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                 })
         result_queue.put(res)
@@ -3820,6 +4077,9 @@ def _run_code_tests_backend(code_text, tests, mode):
             hidden = bool(t.get("hidden"))
             name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
             init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+            sample_kind = "script" if mode == "script" else "callable"
+            compare_mode = _effective_sample_compare_mode(t, sample_kind)
+            tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
             results.append({
                 "name": name,
                 "status": "timeout",
@@ -3829,6 +4089,8 @@ def _run_code_tests_backend(code_text, tests, mode):
                 "error": "Time limit exceeded",
                 "mode": mode,
                 "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
             })
     else:
@@ -3840,6 +4102,9 @@ def _run_code_tests_backend(code_text, tests, mode):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
                 init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+                sample_kind = "script" if mode == "script" else "callable"
+                compare_mode = _effective_sample_compare_mode(t, sample_kind)
+                tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
                 results.append({
                     "name": name,
                     "status": "error",
@@ -3849,6 +4114,8 @@ def _run_code_tests_backend(code_text, tests, mode):
                     "error": "No results from worker process",
                     "mode": mode,
                     "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                 })
 
@@ -3863,6 +4130,8 @@ def _split_visible_hidden_results(results):
             "name": res.get("name") or ("Hidden test" if is_hidden else "Test"),
             "status": res.get("status") or "error",
             "hidden": is_hidden,
+            "compare_mode": res.get("compare_mode") or "",
+            "tolerance": res.get("tolerance"),
         }
         if is_hidden:
             hidden.append(base)
@@ -3874,6 +4143,8 @@ def _split_visible_hidden_results(results):
                 "error": res.get("error") or "",
                 "mode": res.get("mode") or "script",
                 "init_call": res.get("init_call") or "",
+                "compare_mode": res.get("compare_mode") or "",
+                "tolerance": res.get("tolerance"),
             })
             visible.append(base)
     return visible, hidden
