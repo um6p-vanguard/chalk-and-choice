@@ -410,7 +410,7 @@
 {% endblock %}
 {% block scripts %}
 <script defer src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
-<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+<script defer src="{{ url_for('static', filename='exams.js', v='20260329-plot-sync') }}"></script>
 {% if time_remaining_seconds is not none and not preview %}
 <script>
 (function(){

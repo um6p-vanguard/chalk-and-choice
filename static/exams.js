@@ -1270,6 +1270,14 @@
       }
       return new Blob([bytes], { type });
     };
+    const normalizeCodeText = (value) => {
+      const normalized = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const lines = normalized.split("\n").map((line) => line.replace(/[ \t]+$/g, ""));
+      while (lines.length && lines[lines.length - 1] === "") {
+        lines.pop();
+      }
+      return lines.join("\n");
+    };
 
     const setPlotSummary = (questionId, text, color) => {
       const summaryEl = root.querySelector(`[data-plot-summary="${questionId}"]`);
@@ -1282,7 +1290,10 @@
     const renderPlotPreview = (questionId, record, currentCode = "") => {
       const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
       if (!preview) return;
-      const isFresh = !!record && typeof record.codeSnapshot === "string" && record.codeSnapshot === currentCode;
+      const normalizedCurrentCode = normalizeCodeText(currentCode);
+      const isFresh = !!record
+        && typeof record.codeSnapshot === "string"
+        && record.codeSnapshot === normalizedCurrentCode;
       const imageUrl = record ? (record.url || null) : null;
 
       if (!record || (!record.blob && !imageUrl)) {
@@ -1325,7 +1336,7 @@
         if (preview && preview.dataset.existingUrl) {
           renderPlotPreview(questionId, {
             url: preview.dataset.existingUrl,
-            codeSnapshot: area ? (area.value || "") : "",
+            codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
             stdout: preview.dataset.existingStdout || "",
             error: preview.dataset.existingError || "",
             updatedAt: preview.dataset.existingUpdatedAt || "",
@@ -1339,7 +1350,7 @@
         if (preview && preview.dataset.existingUrl) {
           renderPlotPreview(questionId, {
             url: preview.dataset.existingUrl,
-            codeSnapshot: area ? (area.value || "") : "",
+            codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
             stdout: preview.dataset.existingStdout || "",
             error: preview.dataset.existingError || "",
             updatedAt: preview.dataset.existingUpdatedAt || "",
@@ -2115,7 +2126,7 @@ json.dumps(results)
           const latest = plotImages[plotImages.length - 1];
           const record = {
             blob: base64ToBlob(latest, "image/png"),
-            codeSnapshot: area.value || "",
+            codeSnapshot: normalizeCodeText(area.value || ""),
             stdout: entry.output || "",
             error: entry.error || "",
             status: entry.status || "passed",
@@ -2178,7 +2189,8 @@ json.dumps(results)
   function setupCodeEditors() {
     const codeAreas = Array.from(document.querySelectorAll("textarea[data-code-input]"));
     if (!codeAreas.length) return;
-    const MONACO_BASE = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs";
+    const MONACO_ROOT = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min";
+    const MONACO_BASE = `${MONACO_ROOT}/vs`;
     const MONACO_LOADER = `${MONACO_BASE}/loader.min.js`;
 
     const ensureLoader = () => {
@@ -2213,7 +2225,7 @@ json.dumps(results)
           window.MonacoEnvironment = window.MonacoEnvironment || {};
           window.MonacoEnvironment.getWorkerUrl = () => {
             const workerScript = [
-              `self.MonacoEnvironment = { baseUrl: '${MONACO_BASE}/' };`,
+              `self.MonacoEnvironment = { baseUrl: '${MONACO_ROOT}/' };`,
               `importScripts('${workerSrc}');`,
             ].join("\n");
             return `data:text/javascript;charset=utf-8,${encodeURIComponent(workerScript)}`;

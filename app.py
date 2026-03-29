@@ -1317,10 +1317,20 @@ def _save_plot_artifact_upload(scope, question_id, file_storage):
         "height": height,
     }, None
 
+def _normalize_plot_code(value):
+    text = _coerce_string(value)
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in normalized.split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
 def _plot_answer_code(answer):
     if isinstance(answer, dict):
-        return _coerce_string(answer.get("code"))
-    return _coerce_string(answer)
+        return _normalize_plot_code(answer.get("code"))
+    return _normalize_plot_code(answer)
 
 def _plot_answer_artifact(answer):
     if isinstance(answer, dict):
@@ -1355,7 +1365,7 @@ def _parse_plot_submission_meta(raw_value):
         meta["error"] = error[:8000]
     code_snapshot = _coerce_string(data.get("code_snapshot"))
     if code_snapshot:
-        meta["code_snapshot"] = code_snapshot[:200000]
+        meta["code_snapshot"] = _normalize_plot_code(code_snapshot)[:200000]
     try:
         plot_count = int(data.get("plot_count") or 0)
     except Exception:
@@ -1380,7 +1390,7 @@ def _build_plot_answer_payload(code_text, artifact_info, meta, updated_at):
         payload["plot_count"] = meta["plot_count"]
     return payload
 
-def _collect_plot_submission_updates(questions, answers, request_files, request_form, plot_scope):
+def _collect_plot_submission_updates(questions, answers, request_files, request_form, plot_scope, strict_code_match=True):
     answers = answers if isinstance(answers, dict) else {}
     updates = {}
     now_iso = datetime.utcnow().isoformat() + "Z"
@@ -1396,14 +1406,15 @@ def _collect_plot_submission_updates(questions, answers, request_files, request_
         existing_artifact = _plot_answer_artifact(current_answer)
         meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
         code_snapshot = meta.get("code_snapshot")
-        if code_snapshot and code_snapshot != code_text:
+        if strict_code_match and code_snapshot and code_snapshot != code_text:
             return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
         artifact_info, error = _save_plot_artifact_upload(plot_scope, qid, upload)
         if error:
             return None, f"{_plot_label(question, idx)}: {error}"
         if existing_artifact and existing_artifact != artifact_info:
             _remove_uploaded_file(existing_artifact)
-        updates[qid] = _build_plot_answer_payload(code_text, artifact_info, meta, now_iso)
+        payload_code = code_snapshot or code_text
+        updates[qid] = _build_plot_answer_payload(payload_code, artifact_info, meta, now_iso)
     return updates, None
 
 def _preserve_plot_answer_metadata(code_text, existing_answer):
@@ -4830,6 +4841,7 @@ def exam_take(code):
                     "exam_id": exam.id,
                     "submission_id": submission.id if submission else None,
                 },
+                strict_code_match=False,
             )
             if upload_error:
                 return render_template(
@@ -6635,6 +6647,7 @@ def project_task_take(code, task_id):
                     "task_id": task.id,
                     "submission_id": submission.id if submission else None,
                 },
+                strict_code_match=False,
             )
             if upload_error:
                 return render_template(
