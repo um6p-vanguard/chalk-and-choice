@@ -1213,6 +1213,47 @@
       const items = await getNamespaceArtifacts(namespace);
       await Promise.all(items.map((item) => deletePlotArtifact(namespace, item.questionId)));
     };
+    const clearInjectedPlotFields = () => {
+      if (!form) return;
+      form.querySelectorAll("[data-plot-upload-proxy]").forEach((node) => node.remove());
+    };
+    const injectPlotArtifactsIntoForm = (artifacts) => {
+      if (!form || !Array.isArray(artifacts) || !artifacts.length) return false;
+      clearInjectedPlotFields();
+      let injected = false;
+      artifacts.forEach((record) => {
+        if (!record || !record.questionId || !record.blob) return;
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.name = `plot_artifact_${record.questionId}`;
+        fileInput.hidden = true;
+        fileInput.setAttribute("data-plot-upload-proxy", "true");
+        try {
+          const transfer = new DataTransfer();
+          transfer.items.add(
+            new File([record.blob], `plot-${record.questionId}.png`, { type: "image/png" }),
+          );
+          fileInput.files = transfer.files;
+        } catch (err) {
+          return;
+        }
+        const metaInput = document.createElement("input");
+        metaInput.type = "hidden";
+        metaInput.name = `plot_meta_${record.questionId}`;
+        metaInput.value = JSON.stringify({
+          status: record.status || "passed",
+          stdout: record.stdout || "",
+          error: record.error || "",
+          code_snapshot: record.codeSnapshot || "",
+          plot_count: record.plotCount || 1,
+        });
+        metaInput.setAttribute("data-plot-upload-proxy", "true");
+        form.appendChild(fileInput);
+        form.appendChild(metaInput);
+        injected = true;
+      });
+      return injected;
+    };
 
     const revokePlotObjectUrl = (questionId) => {
       const state = plotRuntimeState.get(questionId);
@@ -2100,52 +2141,35 @@ json.dumps(results)
     });
 
     if (form && artifactNamespace) {
+      let replayingNativeSubmit = false;
       form.addEventListener("submit", async (event) => {
-        const submitter = event.submitter;
-        const action = submitter?.value || autoInput?.value || "";
-        const artifacts = await getNamespaceArtifacts(artifactNamespace);
-        if (!artifacts.length) return;
-        event.preventDefault();
-        let formData;
-        try {
-          formData = submitter ? new FormData(form, submitter) : new FormData(form);
-        } catch (err) {
-          formData = new FormData(form);
-          if (submitter?.name) {
-            formData.append(submitter.name, submitter.value || "");
-          }
+        if (replayingNativeSubmit) {
+          replayingNativeSubmit = false;
+          return;
         }
-        artifacts.forEach((record) => {
-          if (!record || !record.questionId || !record.blob) return;
-          formData.append(
-            `plot_artifact_${record.questionId}`,
-            new File([record.blob], `plot-${record.questionId}.png`, { type: "image/png" }),
-          );
-          formData.append(`plot_meta_${record.questionId}`, JSON.stringify({
-            status: record.status || "passed",
-            stdout: record.stdout || "",
-            error: record.error || "",
-            code_snapshot: record.codeSnapshot || "",
-            plot_count: record.plotCount || 1,
-          }));
-        });
-        try {
-          const response = await fetch(form.action || window.location.href, {
-            method: "POST",
-            body: formData,
-            credentials: "same-origin",
-          });
-          const html = await response.text();
-          if (response.ok && action === "submit") {
-            await clearNamespaceArtifacts(artifactNamespace);
-            plotRuntimeState.forEach((record, questionId) => revokePlotObjectUrl(questionId));
-            plotRuntimeState.clear();
+        const submitter = event.submitter;
+        const artifacts = await getNamespaceArtifacts(artifactNamespace);
+        if (!artifacts.length) {
+          clearInjectedPlotFields();
+          return;
+        }
+        event.preventDefault();
+        const injected = injectPlotArtifactsIntoForm(artifacts);
+        if (!injected) {
+          clearInjectedPlotFields();
+          replayingNativeSubmit = true;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit(submitter || undefined);
+          } else {
+            form.submit();
           }
-          document.open();
-          document.write(html);
-          document.close();
-        } catch (err) {
-          console.error(err);
+          return;
+        }
+        replayingNativeSubmit = true;
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit(submitter || undefined);
+        } else {
+          form.submit();
         }
       });
     }
