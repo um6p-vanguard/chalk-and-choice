@@ -27,6 +27,15 @@
 <div class="card">
   <form method="get" class="row" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
     <div>
+      <label>Collection filter</label>
+      <select name="collection">
+        <option value="">All collections</option>
+        {% for collection in collections %}
+          <option value="{{ collection }}" {% if filter_collection == collection %}selected{% endif %}>{{ collection }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
       <label>Project filter</label>
       <select name="project_id">
         <option value="">All projects</option>

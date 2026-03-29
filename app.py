@@ -475,6 +475,64 @@ def _build_project_tasks_schema():
             }
         ]
     }
+    comparison_payload = {
+        "tasks": [
+            {
+                "title": "Comparison modes demo",
+                "description": "Reference payload showing how JSON imports can control sample comparison rules.",
+                "instructions": "Use these samples as a template when you need flexible output matching, substring checks, or numeric tolerance for floats and arrays.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_compare_script",
+                        "type": "code",
+                        "title": "Flexible stdout checks",
+                        "prompt": "Print a greeting for the provided name.",
+                        "points": 5,
+                        "problem_statement": "Read one name from stdin and print `Hello, <name>!`.",
+                        "starter_code": "name = input().strip()\n# print your greeting here\n",
+                        "code_mode": "script",
+                        "tests": [
+                            {
+                                "name": "ignore extra spacing",
+                                "stdin": "Ada\n",
+                                "expected_stdout": "Hello, Ada!",
+                                "compare_mode": "normalize_whitespace"
+                            },
+                            {
+                                "name": "must mention the name",
+                                "stdin": "Grace\n",
+                                "expected_stdout": "Grace",
+                                "compare_mode": "contains"
+                            }
+                        ]
+                    },
+                    {
+                        "id": "q_compare_function",
+                        "type": "code",
+                        "title": "Numeric tolerance",
+                        "prompt": "Implement mean(values).",
+                        "points": 5,
+                        "problem_statement": "Return the arithmetic mean of the numeric values.",
+                        "starter_code": "def mean(values):\n    pass\n",
+                        "code_mode": "function",
+                        "function_signature": "def mean(values):",
+                        "tests": [
+                            {
+                                "name": "simple average",
+                                "function_call": "mean([1, 2, 3])",
+                                "expected_return": 2.0,
+                                "compare_mode": "numeric_tolerance",
+                                "tolerance": 0.000001
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
     return {
         "schema_name": "project_task_import",
         "schema_version": 5,
@@ -762,7 +820,8 @@ def _build_project_tasks_schema():
             "minimal_payload": minimal_payload,
             "class_code_payload": class_payload,
             "plot_payload": plot_payload,
-            "formatting_payload": formatting_payload
+            "formatting_payload": formatting_payload,
+            "comparison_payload": comparison_payload
         }
     }
 
@@ -5868,6 +5927,7 @@ def projects_task_import(code):
         "class_code": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["class_code_payload"], indent=2, ensure_ascii=False),
         "plot": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["plot_payload"], indent=2, ensure_ascii=False),
         "formatting": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["formatting_payload"], indent=2, ensure_ascii=False),
+        "comparison": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["comparison_payload"], indent=2, ensure_ascii=False),
     }
     return render_template(
         "projects_task_import.html",
@@ -6832,6 +6892,7 @@ def projects_reviews():
     allowed_student_ids = _restricted_review_student_ids(user)
     mentor_group_ids = _mentor_group_ids(user)
     sort_mode = request.args.get("sort", "newest")
+    collection_filter = (request.args.get("collection") or "").strip()
     project_filter = request.args.get("project_id")
     warning_filter = request.args.get("warning_filter", "all")  # all, flagged, warned, clean
     
@@ -6845,9 +6906,14 @@ def projects_reviews():
         user,
         allowed_student_ids=allowed_student_ids,
     )
+
+    if collection_filter:
+        query = query.join(Project, ProjectTaskSubmission.project_id == Project.id).filter(
+            Project.collection == collection_filter
+        )
     
     if project_filter_id:
-        query = query.filter_by(project_id=project_filter_id)
+        query = query.filter(ProjectTaskSubmission.project_id == project_filter_id)
     
     # Apply warning filter
     if warning_filter == "flagged":
@@ -6897,16 +6963,28 @@ def projects_reviews():
     warned_students = students_query.filter(Student.warnings_json != None).all()
     warned_count = sum(1 for s in warned_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0)
 
-    projects = _apply_review_scope_to_submission_query(
+    projects_query = _apply_review_scope_to_submission_query(
         Project.query.join(ProjectTaskSubmission, ProjectTaskSubmission.project_id == Project.id).filter(
             ProjectTaskSubmission.status == "pending_review"
         ),
         user,
         allowed_student_ids=allowed_student_ids,
-    ).distinct().order_by(Project.title.asc()).all()
+    )
+    collections = sorted(
+        {
+            (project.collection or "comp101").strip() or "comp101"
+            for project in projects_query.distinct().all()
+        },
+        key=lambda name: name.lower(),
+    )
+    if collection_filter:
+        projects_query = projects_query.filter(Project.collection == collection_filter)
+    projects = projects_query.distinct().order_by(Project.title.asc()).all()
     return render_template(
         "projects_reviews.html",
         submissions=submissions,
+        collections=collections,
+        filter_collection=collection_filter,
         filter_sort=sort_mode,
         filter_project_id=project_filter_id,
         filter_warning=warning_filter,
