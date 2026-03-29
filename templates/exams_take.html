@@ -127,9 +127,9 @@
           {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
           {% set prior_code = previous_answers.get(q.id) %}
           {% set starter = prior_code if prior_code else (q.starter or "") %}
-          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
-            <div class="code-question-main" style="display:flex; flex-wrap:wrap; gap:12px;">
-              <div class="code-question-description" style="flex:1 1 280px; min-width:260px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+          <div class="code-question-shell">
+            <div class="code-question-main">
+              <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 {% if q.statement %}
                   <div style="margin-bottom:10px;">
                     <strong>Problem statement</strong>
@@ -155,7 +155,7 @@
                   </div>
                 {% endif %}
               </div>
-              <div class="code-question-editor" style="flex:1 1 360px; min-width:320px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+              <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
                   <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
@@ -259,8 +259,8 @@
           {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
             {% set plot_preview_url = url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id) %}
           {% endif %}
-          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
-            <div class="code-question-main" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px;">
+          <div class="code-question-shell">
+            <div class="code-question-main">
               <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 {% if q.statement %}
                   <div style="margin-bottom:10px;">
