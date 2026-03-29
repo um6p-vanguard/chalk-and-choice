@@ -97,6 +97,211 @@ def _serialize_grade_export_row(grade):
         "updated_at": (grade.updated_at.isoformat() if grade.updated_at else ""),
     }
 
+def _iso_or_none(value):
+    return value.isoformat() if value else None
+
+def _export_code_expected(value):
+    text = _coerce_string(value).strip()
+    if not text:
+        return ""
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return text
+
+def _serialize_project_task_resource_export(resource_file):
+    info = _extract_file_info(resource_file)
+    if not info:
+        return None
+    payload = {
+        "original_name": info.get("original_name") or info.get("stored_name") or "resource",
+        "included_in_export": False,
+    }
+    if info.get("size") is not None:
+        payload["size"] = info.get("size")
+    content_type = _coerce_string(info.get("content_type")).strip()
+    if content_type:
+        payload["content_type"] = content_type
+    uploaded_at = _coerce_string(info.get("uploaded_at")).strip()
+    if uploaded_at:
+        payload["uploaded_at"] = uploaded_at
+    return payload
+
+def _serialize_project_question_export(question):
+    if not isinstance(question, dict):
+        return {}
+    try:
+        points = max(0, int(question.get("points") or 1))
+    except Exception:
+        points = 1
+    payload = {
+        "id": _coerce_string(question.get("id")).strip(),
+        "type": _normalize_question_type_name(question.get("type")),
+        "prompt": _coerce_string(question.get("prompt")).strip(),
+        "points": points,
+    }
+    title = _coerce_string(question.get("title")).strip()
+    if title:
+        payload["title"] = title
+    code_snippet = _coerce_string(question.get("code_snippet")).strip("\n")
+    if code_snippet:
+        payload["code_snippet"] = code_snippet
+
+    q_type = payload["type"]
+    if q_type in ("mcq", "multi"):
+        correct_indices = {
+            idx for idx in _coerce_int_list(question.get("correct_indices"))
+            if idx >= 0
+        }
+        choices = []
+        for idx, option in enumerate(question.get("options") or []):
+            choice = {"text": _coerce_string(option)}
+            if idx in correct_indices:
+                choice["is_correct"] = True
+            choices.append(choice)
+        payload["choices"] = choices
+        payload["shuffle"] = bool(question.get("shuffle"))
+    elif q_type == "text":
+        payload["placeholder"] = _coerce_string(question.get("placeholder")).strip()
+        try:
+            payload["lines"] = max(1, int(question.get("lines") or 4))
+        except Exception:
+            payload["lines"] = 4
+    elif q_type == "tokens":
+        payload["template"] = _coerce_string(question.get("template"))
+        payload["correct_tokens"] = _coerce_token_list(question.get("correct_tokens"))
+        payload["distractor_tokens"] = _coerce_token_list(question.get("distractor_tokens"))
+    elif q_type == "fill":
+        payload["template"] = _coerce_string(question.get("template"))
+        payload["answers"] = _coerce_token_list(question.get("answers"))
+        payload["case_sensitive"] = bool(question.get("case_sensitive"))
+    elif q_type == "file":
+        payload["accept"] = _coerce_string(question.get("accept")).strip() or UPLOAD_DEFAULT_ACCEPT
+        try:
+            payload["max_mb"] = max(1, int(question.get("max_mb") or UPLOAD_MAX_MB))
+        except Exception:
+            payload["max_mb"] = UPLOAD_MAX_MB
+    elif q_type == "plot":
+        payload["problem_statement"] = _coerce_string(question.get("statement")).strip()
+        starter_code = _coerce_string(question.get("starter"))
+        if starter_code:
+            payload["starter_code"] = starter_code
+    elif q_type == "code":
+        payload["problem_statement"] = _coerce_string(question.get("statement")).strip()
+        starter_code = _coerce_string(question.get("starter"))
+        if starter_code:
+            payload["starter_code"] = starter_code
+        mode = _normalize_code_mode_name(question.get("mode") or "script")
+        payload["code_mode"] = mode
+        if mode == "function":
+            payload["function_signature"] = _coerce_string(question.get("function_signature")).strip()
+        elif mode == "class":
+            payload["class_signature"] = _coerce_string(question.get("class_signature")).strip()
+            payload["class_init"] = _coerce_string(question.get("class_init")).strip()
+        tests = []
+        class_init = _coerce_string(question.get("class_init")).strip()
+        for sample in question.get("samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            name = _coerce_string(sample.get("name")).strip()
+            compare_mode = _coerce_string(sample.get("compare_mode")).strip()
+            hidden = bool(sample.get("hidden"))
+            if mode == "script":
+                item = {
+                    "name": name or "Sample",
+                    "stdin": _coerce_string(sample.get("input")),
+                    "expected_stdout": _coerce_string(sample.get("output")),
+                }
+            elif mode == "function":
+                item = {
+                    "name": name or "Sample",
+                    "function_call": _coerce_string(sample.get("call") or sample.get("input")).strip(),
+                    "expected_return": _export_code_expected(sample.get("expected")),
+                }
+            else:
+                item = {
+                    "name": name or "Method test",
+                    "method_call": _coerce_string(sample.get("call") or sample.get("input")).strip(),
+                    "expected_return": _export_code_expected(sample.get("expected")),
+                }
+                sample_init = _coerce_string(sample.get("init_call")).strip()
+                if sample_init and sample_init != class_init:
+                    item["init_call"] = sample_init
+            if compare_mode:
+                item["compare_mode"] = compare_mode
+            if hidden:
+                item["hidden"] = True
+            if sample.get("tolerance") is not None:
+                try:
+                    item["tolerance"] = float(sample.get("tolerance"))
+                except Exception:
+                    item["tolerance"] = sample.get("tolerance")
+            tests.append(item)
+        payload["tests"] = tests
+    return payload
+
+def _serialize_project_task_export(task):
+    payload = {
+        "title": task.title,
+        "description": task.description,
+        "instructions": task.instructions,
+        "required": bool(task.required),
+        "auto_grade": bool(task.auto_grade),
+        "requires_review": bool(task.requires_review),
+        "questions": [
+            _serialize_project_question_export(question)
+            for question in (task.questions_json or [])
+            if isinstance(question, dict)
+        ],
+    }
+    resource_file = _serialize_project_task_resource_export(task.resource_file)
+    if resource_file:
+        payload["resource_file"] = resource_file
+    return payload
+
+def _serialize_project_export(project, tasks=None, dependencies=None, group_assignments=None):
+    project_payload = {
+        "code": project.code,
+        "title": project.title,
+        "collection": project.collection,
+        "description": project.description,
+        "instructions": project.instructions,
+        "deadline_at": _iso_or_none(project.deadline_at),
+        "required_task_count": project.required_task_count,
+        "is_active": bool(project.is_active),
+        "points": project.points,
+        "retry_cooldown_minutes": project.retry_cooldown_minutes,
+        "created_at": _iso_or_none(project.created_at),
+    }
+    project_payload["dependencies"] = [
+        {
+            "code": dep.prerequisite.code if dep.prerequisite else None,
+            "title": dep.prerequisite.title if dep.prerequisite else None,
+        }
+        for dep in (dependencies or [])
+    ]
+    project_payload["group_assignments"] = [
+        {
+            "scope": "all" if assignment.applies_to_all else "group",
+            "group_id": assignment.group_id,
+            "group_name": assignment.group.name if assignment.group else None,
+            "is_required": bool(assignment.is_required),
+            "created_at": _iso_or_none(assignment.created_at),
+        }
+        for assignment in (group_assignments or [])
+    ]
+    return {
+        "schema_name": "project_export",
+        "schema_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "task_import_schema": {
+            "name": PROJECT_TASKS_SCHEMA.get("schema_name"),
+            "version": PROJECT_TASKS_SCHEMA.get("schema_version"),
+        },
+        "project": project_payload,
+        "tasks": [_serialize_project_task_export(task) for task in (tasks or [])],
+    }
+
 # --------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------
@@ -1159,6 +1364,48 @@ def _parse_plot_submission_meta(raw_value):
         meta["plot_count"] = min(plot_count, 20)
     return meta
 
+def _build_plot_answer_payload(code_text, artifact_info, meta, updated_at):
+    payload = {
+        "code": code_text,
+        "artifact": artifact_info,
+        "updated_at": updated_at,
+    }
+    if meta.get("status"):
+        payload["status"] = meta["status"]
+    if meta.get("stdout"):
+        payload["stdout"] = meta["stdout"]
+    if meta.get("error"):
+        payload["error"] = meta["error"]
+    if meta.get("plot_count"):
+        payload["plot_count"] = meta["plot_count"]
+    return payload
+
+def _collect_plot_submission_updates(questions, answers, request_files, request_form, plot_scope):
+    answers = answers if isinstance(answers, dict) else {}
+    updates = {}
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    for idx, question in enumerate(questions or []):
+        if not isinstance(question, dict) or question.get("type") != "plot":
+            continue
+        qid = str(question.get("id"))
+        upload = request_files.get(f"plot_artifact_{qid}")
+        if not (upload and getattr(upload, "filename", "")):
+            continue
+        current_answer = answers.get(qid, "")
+        code_text = _plot_answer_code(current_answer)
+        existing_artifact = _plot_answer_artifact(current_answer)
+        meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
+        code_snapshot = meta.get("code_snapshot")
+        if code_snapshot and code_snapshot != code_text:
+            return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
+        artifact_info, error = _save_plot_artifact_upload(plot_scope, qid, upload)
+        if error:
+            return None, f"{_plot_label(question, idx)}: {error}"
+        if existing_artifact and existing_artifact != artifact_info:
+            _remove_uploaded_file(existing_artifact)
+        updates[qid] = _build_plot_answer_payload(code_text, artifact_info, meta, now_iso)
+    return updates, None
+
 def _preserve_plot_answer_metadata(code_text, existing_answer):
     artifact = _plot_answer_artifact(existing_answer)
     if artifact and code_text == _plot_answer_code(existing_answer):
@@ -1170,6 +1417,16 @@ def _preserve_plot_answer_metadata(code_text, existing_answer):
 def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, request_files, request_form, plot_scope):
     prepared = dict(answers or {})
     persisted_answers = persisted_answers if isinstance(persisted_answers, dict) else {}
+    plot_updates, error = _collect_plot_submission_updates(
+        questions,
+        prepared,
+        request_files,
+        request_form,
+        plot_scope,
+    )
+    if error:
+        return None, error
+    prepared.update(plot_updates or {})
     now_iso = datetime.utcnow().isoformat() + "Z"
     for idx, question in enumerate(questions or []):
         if not isinstance(question, dict) or question.get("type") != "plot":
@@ -1178,31 +1435,6 @@ def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, requ
         current_answer = prepared.get(qid, "")
         prior_answer = persisted_answers.get(qid)
         code_text = _plot_answer_code(current_answer)
-        upload = request_files.get(f"plot_artifact_{qid}")
-        meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
-
-        if upload and getattr(upload, "filename", ""):
-            code_snapshot = meta.get("code_snapshot")
-            if code_snapshot and code_snapshot != code_text:
-                return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
-            artifact_info, error = _save_plot_artifact_upload(plot_scope, qid, upload)
-            if error:
-                return None, f"{_plot_label(question, idx)}: {error}"
-            payload = {
-                "code": code_text,
-                "artifact": artifact_info,
-                "updated_at": now_iso,
-            }
-            if meta.get("status"):
-                payload["status"] = meta["status"]
-            if meta.get("stdout"):
-                payload["stdout"] = meta["stdout"]
-            if meta.get("error"):
-                payload["error"] = meta["error"]
-            if meta.get("plot_count"):
-                payload["plot_count"] = meta["plot_count"]
-            prepared[qid] = payload
-            continue
 
         artifact_info = _plot_answer_artifact(current_answer)
         if artifact_info and code_text == _plot_answer_code(current_answer):
@@ -4585,6 +4817,43 @@ def exam_take(code):
                 action = "submit"
             else:
                 action = "next"
+        if action != "submit":
+            combined_answers = dict(base_answers)
+            combined_answers.update(draft_answers)
+            plot_updates, upload_error = _collect_plot_submission_updates(
+                questions,
+                combined_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "exam",
+                    "exam_id": exam.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=exam,
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=already_submitted,
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=time_remaining if time_remaining is not None else None,
+                    user=user,
+                    student_name=session.get("student_name"),
+                    submission_id=(submission.id if submission else None),
+                    upload_error=upload_error,
+                ), 400
+            if plot_updates:
+                draft_answers.update(plot_updates)
+                previous_answers.update(plot_updates)
+                _save_exam_draft(exam.id, draft_answers)
 
         if action == "submit":
             if not can_submit:
@@ -5588,6 +5857,41 @@ def projects_show(code):
         student_name=session.get("student_name"),
     )
 
+@app.get("/projects/<code>/export")
+@require_user()
+def projects_export(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    tasks = ProjectTask.query.filter_by(project_id=project.id).order_by(
+        ProjectTask.order_index.asc(),
+        ProjectTask.id.asc(),
+    ).all()
+    dependencies = ProjectDependency.query.filter_by(project_id=project.id).all()
+    dependencies = sorted(
+        dependencies,
+        key=lambda dep: (
+            (dep.prerequisite.title or "").lower() if dep.prerequisite else "",
+            dep.prerequisite.code if dep.prerequisite else "",
+        ),
+    )
+    group_assignments = ProjectGroupAssignment.query.filter_by(project_id=project.id).order_by(
+        ProjectGroupAssignment.applies_to_all.desc(),
+        ProjectGroupAssignment.created_at.asc(),
+        ProjectGroupAssignment.id.asc(),
+    ).all()
+    payload = _serialize_project_export(
+        project,
+        tasks=tasks,
+        dependencies=dependencies,
+        group_assignments=group_assignments,
+    )
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    response = make_response(json.dumps(payload, indent=2, ensure_ascii=False))
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{project.code}_project_export_{timestamp}.json"'
+    )
+    return response
+
 @app.route("/projects/<code>/edit", methods=["GET", "POST"])
 @require_user()
 def projects_edit(code):
@@ -6317,6 +6621,46 @@ def project_task_take(code, task_id):
                 action = "submit"
             else:
                 action = "next"
+        if action != "submit":
+            combined_answers = dict(base_answers)
+            combined_answers.update(draft_answers)
+            plot_updates, upload_error = _collect_plot_submission_updates(
+                questions,
+                combined_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "project_task",
+                    "project_id": project.id,
+                    "task_id": task.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
+                    upload_error=upload_error,
+                ), 400
+            if plot_updates:
+                draft_answers.update(plot_updates)
+                previous_answers.update(plot_updates)
+                _save_task_draft(task.id, draft_answers)
         if action == "save":
             answers = dict(base_answers)
             answers.update(draft_answers)

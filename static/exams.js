@@ -1057,6 +1057,7 @@
     let packagesPromise = null;
     let plotDbPromise = null;
     const plotRuntimeState = new Map();
+    let hiddenMatplotlibTarget = null;
 
     const ensurePyodide = async () => {
       if (!window.loadPyodide) {
@@ -1075,6 +1076,35 @@
       await packagesPromise;
       return pyodide;
     };
+    const ensureHiddenMatplotlibTarget = () => {
+      if (!document.body) return null;
+      if (hiddenMatplotlibTarget && hiddenMatplotlibTarget.isConnected) {
+        return hiddenMatplotlibTarget;
+      }
+      hiddenMatplotlibTarget = document.createElement("div");
+      hiddenMatplotlibTarget.setAttribute("data-hidden-matplotlib-target", "true");
+      hiddenMatplotlibTarget.setAttribute("aria-hidden", "true");
+      Object.assign(hiddenMatplotlibTarget.style, {
+        position: "fixed",
+        left: "-10000px",
+        top: "0",
+        width: "1px",
+        height: "1px",
+        overflow: "hidden",
+        opacity: "0",
+        pointerEvents: "none",
+      });
+      document.body.appendChild(hiddenMatplotlibTarget);
+      return hiddenMatplotlibTarget;
+    };
+    const clearHiddenMatplotlibTarget = () => {
+      if (hiddenMatplotlibTarget) {
+        hiddenMatplotlibTarget.replaceChildren();
+      }
+    };
+    const listVisibleMatplotlibRoots = () => Array.from(document.querySelectorAll('div[id^="matplotlib_"]'))
+      .filter((node) => node.querySelector('canvas[id^="matplotlib_"]'))
+      .filter((node) => !node.closest("[data-hidden-matplotlib-target]"));
 
     const logUrl = root.dataset.runLogUrl;
     const csrf = root.dataset.csrf;
@@ -1533,10 +1563,19 @@
           init_call: sample && sample.init_call ? sample.init_call : classInit,
         }))
         : samples;
+      const hiddenTarget = ensureHiddenMatplotlibTarget();
+      const hadPreviousTarget = Object.prototype.hasOwnProperty.call(document, "pyodideMplTarget");
+      const previousTarget = hadPreviousTarget ? document.pyodideMplTarget : undefined;
+      const existingVisibleRoots = new Set(listVisibleMatplotlibRoots());
+      if (hiddenTarget) {
+        clearHiddenMatplotlibTarget();
+        document.pyodideMplTarget = hiddenTarget;
+      }
       pyodide.globals.set("runner_code", codeValue);
       pyodide.globals.set("runner_samples", runnerSamples);
       pyodide.globals.set("runner_mode", mode);
-      const output = await pyodide.runPythonAsync(`
+      try {
+        const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins, ast, base64
 
 plt = None
@@ -1876,10 +1915,23 @@ for sample in samples:
 
 json.dumps(results)
       `);
-      pyodide.globals.delete("runner_code");
-      pyodide.globals.delete("runner_samples");
-      pyodide.globals.delete("runner_mode");
-      return JSON.parse(output);
+        return JSON.parse(output);
+      } finally {
+        pyodide.globals.delete("runner_code");
+        pyodide.globals.delete("runner_samples");
+        pyodide.globals.delete("runner_mode");
+        clearHiddenMatplotlibTarget();
+        listVisibleMatplotlibRoots().forEach((node) => {
+          if (!existingVisibleRoots.has(node)) {
+            node.remove();
+          }
+        });
+        if (hadPreviousTarget) {
+          document.pyodideMplTarget = previousTarget;
+        } else {
+          delete document.pyodideMplTarget;
+        }
+      }
     };
     const executePlotPreview = async (triggerBtn, codeValue) => {
       const results = await executeSamples(
@@ -2051,7 +2103,6 @@ json.dumps(results)
       form.addEventListener("submit", async (event) => {
         const submitter = event.submitter;
         const action = submitter?.value || autoInput?.value || "";
-        if (action !== "submit") return;
         const artifacts = await getNamespaceArtifacts(artifactNamespace);
         if (!artifacts.length) return;
         event.preventDefault();
@@ -2085,7 +2136,7 @@ json.dumps(results)
             credentials: "same-origin",
           });
           const html = await response.text();
-          if (response.ok) {
+          if (response.ok && action === "submit") {
             await clearNamespaceArtifacts(artifactNamespace);
             plotRuntimeState.forEach((record, questionId) => revokePlotObjectUrl(questionId));
             plotRuntimeState.clear();
