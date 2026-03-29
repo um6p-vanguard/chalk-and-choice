@@ -193,6 +193,7 @@
     }
     const hidden = root.querySelector("#questions_payload");
     const form = root.querySelector("#exam-builder-form");
+    const taskKindField = root.querySelector("[data-task-kind-value]");
     if (!list || !addBtn || !typeSelect || !hidden || !form) return;
 
     const addQuestion = (type, data = {}) => {
@@ -243,6 +244,10 @@
     });
 
     form.addEventListener("submit", () => {
+      if (taskKindField && (taskKindField.value || "assessment") === "tutorial") {
+        hidden.value = "[]";
+        return;
+      }
       syncHidden();
     });
 
@@ -255,7 +260,7 @@
     }
     if (initial.length) {
       initial.forEach((q) => addQuestion(q.type || "mcq", q));
-    } else {
+    } else if (!taskKindField || (taskKindField.value || "assessment") !== "tutorial") {
       addQuestion("mcq");
     }
   }

@@ -5,7 +5,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">Projects</h3>
-      <p class="muted" style="margin-top:6px;">Complete unlocked tasks in any order you like. Skip tasks that seem too easy. Locked projects open after prerequisite projects.</p>
+      <p class="muted" style="margin-top:6px;">Complete unlocked tasks in any order you like. Some tasks are tutorials that finish when you read them. Locked projects open after prerequisite projects.</p>
     </div>
     <div class="row">
       <a class="{{ 'btn btn-primary' if tab == 'active' else 'btn' }}" href="{{ url_for('student_projects', tab='active') }}">Active</a>
@@ -58,11 +58,17 @@
               </thead>
               <tbody>
                 {% for entry in row.tasks %}
+                {% set is_tutorial = entry.task.task_kind == "tutorial" %}
                 <tr>
-                  <td>{{ entry.task.title }}</td>
+                  <td>
+                    <div>{{ entry.task.title }}</div>
+                    {% if is_tutorial %}
+                      <div class="muted" style="font-size:0.85rem;">Tutorial</div>
+                    {% endif %}
+                  </td>
                   <td>
                     {% if entry.status == "accepted" %}
-                      <span style="color:#4ade80;">Accepted</span>
+                      <span style="color:#4ade80;">{{ "Read" if is_tutorial else "Accepted" }}</span>
                     {% elif entry.status == "submitted" %}
                       <span style="color:#38bdf8;">Submitted</span>
                     {% elif entry.status == "pending_review" %}
@@ -72,7 +78,7 @@
                   {% elif entry.status == "rejected" %}
                     <span style="color:#f87171;">Needs rework</span>
                   {% else %}
-                    <span class="muted">Not started</span>
+                    <span class="muted">{{ "Unread" if is_tutorial else "Not started" }}</span>
                   {% endif %}
                   {% if entry.reviewer_name %}
                     <div class="muted" style="margin-top:4px;">Reviewed by {{ entry.reviewer_name }}</div>
@@ -83,7 +89,7 @@
                 </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
-                      <span class="muted">Tasks available on project page.</span>
+                      <span class="muted">{{ "Tutorial available on project page." if is_tutorial else "Tasks available on project page." }}</span>
                     </div>
                   </td>
                 </tr>
@@ -165,11 +171,17 @@
               </thead>
               <tbody>
                 {% for entry in row.tasks %}
+                {% set is_tutorial = entry.task.task_kind == "tutorial" %}
                 <tr>
-                  <td>{{ entry.task.title }}</td>
+                  <td>
+                    <div>{{ entry.task.title }}</div>
+                    {% if is_tutorial %}
+                      <div class="muted" style="font-size:0.85rem;">Tutorial</div>
+                    {% endif %}
+                  </td>
                   <td>
                     {% if entry.status == "accepted" %}
-                      <span style="color:#4ade80;">Accepted</span>
+                      <span style="color:#4ade80;">{{ "Read" if is_tutorial else "Accepted" }}</span>
                     {% elif entry.status == "submitted" %}
                       <span style="color:#38bdf8;">Submitted</span>
                     {% elif entry.status == "pending_review" %}
@@ -179,7 +191,7 @@
                   {% elif entry.status == "rejected" %}
                     <span style="color:#f87171;">Needs rework</span>
                   {% else %}
-                    <span class="muted">Not started</span>
+                    <span class="muted">{{ "Unread" if is_tutorial else "Not started" }}</span>
                   {% endif %}
                   {% if entry.reviewer_name %}
                     <div class="muted" style="margin-top:4px;">Reviewed by {{ entry.reviewer_name }}</div>
@@ -190,7 +202,7 @@
                 </td>
                   <td>
                     <div class="row" style="gap:6px; flex-wrap:wrap;">
-                      <span class="muted">Tasks available on project page.</span>
+                      <span class="muted">{{ "Tutorial available on project page." if is_tutorial else "Tasks available on project page." }}</span>
                     </div>
                   </td>
                 </tr>

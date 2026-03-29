@@ -388,6 +388,7 @@ class ProjectTask(db.Model):
     __tablename__ = "project_tasks"
     id = db.Column(db.Integer, primary_key=True)
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    task_kind = db.Column(db.String(32), nullable=False, default="assessment")
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)

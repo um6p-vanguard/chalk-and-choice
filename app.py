@@ -242,6 +242,7 @@ def _serialize_project_question_export(question):
 
 def _serialize_project_task_export(task):
     payload = {
+        "task_kind": _task_kind_value(task),
         "title": task.title,
         "description": task.description,
         "instructions": task.instructions,
@@ -258,6 +259,39 @@ def _serialize_project_task_export(task):
     if resource_file:
         payload["resource_file"] = resource_file
     return payload
+
+def _project_task_download_basename(project, task):
+    project_code = secure_filename((project.code if project else "") or "project") or "project"
+    task_slug = secure_filename((task.title if task else "") or "") or f"task_{getattr(task, 'id', 'item')}"
+    return f"{project_code}_{task_slug}"
+
+def _project_task_tutorial_markdown(project, task):
+    lines = [f"# {task.title}", ""]
+    if project:
+        lines.extend([
+            f"- Project: {project.title}",
+            f"- Project code: `{project.code}`",
+            "",
+        ])
+    if task.description:
+        lines.extend([task.description.strip(), ""])
+    body = _coerce_string(task.instructions).strip()
+    if body:
+        lines.extend([body, ""])
+    if isinstance(task.resource_file, dict):
+        resource_name = (
+            task.resource_file.get("original_name")
+            or task.resource_file.get("stored_name")
+            or "resource"
+        )
+        lines.extend([
+            "## Attached resource",
+            "",
+            f"- {resource_name}",
+            "",
+        ])
+    text = "\n".join(lines).strip()
+    return text + "\n"
 
 def _serialize_project_export(project, tasks=None, dependencies=None, group_assignments=None):
     project_payload = {
@@ -376,6 +410,20 @@ QUESTION_TYPE_ALIASES = {
     "file_upload": "file",
 }
 
+TASK_KIND_ALIASES = {
+    "assessment": "assessment",
+    "task": "assessment",
+    "exercise": "assessment",
+    "practice": "assessment",
+    "quiz": "assessment",
+    "tutorial": "tutorial",
+    "lesson": "tutorial",
+    "reading": "tutorial",
+    "read_only": "tutorial",
+    "content": "tutorial",
+    "guide": "tutorial",
+}
+
 CODE_MODE_ALIASES = {
     "script": "script",
     "stdin": "script",
@@ -450,6 +498,20 @@ def _normalize_question_type_name(value):
 def _normalize_code_mode_name(value):
     token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
     return CODE_MODE_ALIASES.get(token, token)
+
+def _normalize_task_kind_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if not token:
+        return "assessment"
+    return TASK_KIND_ALIASES.get(token, token)
+
+def _task_kind_value(task):
+    if not task:
+        return "assessment"
+    return _normalize_task_kind_name(getattr(task, "task_kind", "assessment") or "assessment")
+
+def _is_tutorial_task(task):
+    return _task_kind_value(task) == "tutorial"
 
 def _coerce_code_expected(value):
     if value is None:
@@ -738,10 +800,21 @@ def _build_project_tasks_schema():
             }
         ]
     }
+    tutorial_payload = {
+        "tasks": [
+            {
+                "task_kind": "tutorial",
+                "title": "Python list basics",
+                "description": "Short read-only tutorial introducing indexing and slicing.",
+                "tutorial_markdown": "## Goal\nLearn how to read values from a Python list.\n\n## Key ideas\n- `items[0]` returns the first element.\n- Negative indexes count from the end.\n- Slices use `start:stop`.\n\n```python\nitems = ['a', 'b', 'c', 'd']\nprint(items[0])\nprint(items[1:3])\n```\n\n## Try mentally\nWhat does `items[-1]` print?",
+                "required": True
+            }
+        ]
+    }
     return {
         "schema_name": "project_task_import",
-        "schema_version": 5,
-        "summary": "Reference document for importing project tasks from JSON. The importer accepts the payload shape below plus the documented aliases. Unknown extra fields are ignored. Text fields support markdown and escaped newline sequences such as \\n and \\n\\n.",
+        "schema_version": 6,
+        "summary": "Reference document for importing project tasks from JSON. It covers read-only tutorial tasks plus assessment tasks with MCQ, text, token-fill, file upload, code, class-mode code, plot questions, markdown escaping, and per-sample comparison rules such as whitespace normalization and numeric tolerance.",
         "paste_payload_shape": {
             "type": "object",
             "required": ["tasks"],
@@ -752,18 +825,20 @@ def _build_project_tasks_schema():
                     "description": "List of task definitions to create. The importer also accepts the alias keys `project_tasks` and `items`.",
                     "items": {
                         "type": "object",
-                        "required": ["title", "questions"],
+                        "required": ["title"],
                         "properties": {
+                            "task_kind": {"type": "string", "description": "Task kind. Use `assessment` for normal answerable tasks or `tutorial` for read-only markdown lessons. Aliases: `task_type`, `mode`, `kind`."},
                             "title": {"type": "string", "description": "Task title. Alias: `name`. Rendered with inline markdown."},
                             "description": {"type": ["string", "null"], "description": "Short summary shown above the task. Rendered as a markdown block. Use \\n for line breaks and \\n\\n for paragraph breaks."},
-                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students. Rendered as a markdown block. Supports headings, lists, fenced code blocks, and \\n / \\n\\n escapes."},
+                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students. For tutorial tasks this is the main markdown lesson body. Supports headings, lists, fenced code blocks, and \\n / \\n\\n escapes."},
+                            "tutorial_markdown": {"type": ["string", "null"], "description": "Tutorial-only alias for `instructions`. Also accepts `content_markdown`, `content`, and `body`."},
                             "required": {"type": "boolean", "default": True},
                             "auto_grade": {"type": "boolean", "default": True},
                             "requires_review": {"type": "boolean", "default": False},
                             "questions": {
                                 "type": "array",
                                 "minItems": 1,
-                                "description": "Question definitions. Alias: `items`."
+                                "description": "Question definitions for assessment tasks. Alias: `items`. Tutorial tasks must omit this field or provide an empty array."
                             }
                         },
                         "additionalProperties": True
@@ -771,6 +846,23 @@ def _build_project_tasks_schema():
                 }
             },
             "additionalProperties": True
+        },
+        "task_kind_reference": {
+            "default": "assessment",
+            "supported_values": {
+                "assessment": {
+                    "description": "Regular task with one or more questions. Students submit answers and may be auto-graded or reviewed."
+                },
+                "tutorial": {
+                    "description": "Read-only markdown tutorial. No questions or student input. The task is completed when the student opens it.",
+                    "content_fields": ["instructions", "tutorial_markdown", "content_markdown", "content", "body"]
+                }
+            },
+            "rules": [
+                "Assessment tasks must include a non-empty `questions` array.",
+                "Tutorial tasks must not include questions.",
+                "Tutorial tasks are always read-only: auto-grading and mentor review flags are ignored."
+            ]
         },
         "text_rendering_reference": {
             "summary": "Most visible text fields are rendered with markdown. Because the payload is JSON, line breaks must be escaped inside strings.",
@@ -818,9 +910,10 @@ def _build_project_tasks_schema():
                 "tasks": ["tasks", "project_tasks", "items"]
             },
             "task_fields": {
+                "task_kind": ["task_kind", "task_type", "mode", "kind"],
                 "title": ["title", "name"],
                 "description": ["description", "summary"],
-                "instructions": ["instructions", "student_instructions"],
+                "instructions": ["instructions", "student_instructions", "tutorial_markdown", "content_markdown", "content", "body"],
                 "required": ["required", "is_required"],
                 "auto_grade": ["auto_grade", "autograde", "automatic_grading"],
                 "requires_review": ["requires_review", "mentor_review", "manual_review"],
@@ -870,7 +963,8 @@ def _build_project_tasks_schema():
         },
         "question_reference": {
             "common_rules": [
-                "Every question needs a `type` and a visible `prompt`.",
+                "Assessment-task questions each need a `type` and a visible `prompt`.",
+                "Tutorial tasks do not define questions at all; put the lesson in task-level markdown instead.",
                 "Question `id` is optional. The importer will generate one if missing.",
                 "For booleans, use real JSON booleans: true or false.",
                 "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects.",
@@ -1023,6 +1117,7 @@ def _build_project_tasks_schema():
         },
         "example_payloads": {
             "minimal_payload": minimal_payload,
+            "tutorial_payload": tutorial_payload,
             "class_code_payload": class_payload,
             "plot_payload": plot_payload,
             "formatting_payload": formatting_payload,
@@ -1031,6 +1126,14 @@ def _build_project_tasks_schema():
     }
 
 PROJECT_TASKS_SCHEMA = _build_project_tasks_schema()
+PROJECT_TASKS_EXAMPLE_DOWNLOADS = {
+    "minimal": "minimal_payload",
+    "tutorial": "tutorial_payload",
+    "class_code": "class_code_payload",
+    "plot": "plot_payload",
+    "formatting": "formatting_payload",
+    "comparison": "comparison_payload",
+}
 
 LEADERBOARD_METRICS = {
     "total_points": {"label": "Total points", "description": "Sum of all recorded grade scores."},
@@ -1082,6 +1185,32 @@ def _ensure_project_deadline_column():
         # Fail open: don't block app start if migration fails
         pass
 
+def _ensure_project_task_kind_column():
+    try:
+        inspector = inspect(db.engine)
+        if "project_tasks" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("project_tasks")}
+        if "task_kind" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE project_tasks "
+                        "ADD COLUMN task_kind VARCHAR(32) NOT NULL DEFAULT 'assessment'"
+                    )
+                )
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE project_tasks "
+                    "SET task_kind='assessment' "
+                    "WHERE task_kind IS NULL OR task_kind=''"
+                )
+            )
+    except Exception:
+        # Fail open: don't block app start if migration fails
+        pass
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -1095,6 +1224,7 @@ def create_app(db_path=DB_URI):
         db.create_all()
         _ensure_project_collection_column()
         _ensure_project_deadline_column()
+        _ensure_project_task_kind_column()
     return app
 
 app = create_app()
@@ -3335,6 +3465,38 @@ def _project_completed(project, student):
             return True
     return False
 
+def _complete_tutorial_task(project, task, student):
+    if not project or not task or not student:
+        return None
+    now = datetime.utcnow()
+    submission = _project_task_submission(task, student)
+    if not submission:
+        submission = ProjectTaskSubmission(
+            task_id=task.id,
+            project_id=project.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+            status="accepted",
+            score=0.0,
+            max_score=0.0,
+            started_at=now,
+            submitted_at=now,
+            last_activity_at=now,
+        )
+        db.session.add(submission)
+    else:
+        submission.answers_json = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+        submission.run_logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+        submission.status = "accepted"
+        submission.score = 0.0
+        submission.max_score = 0.0
+        if not submission.submitted_at:
+            submission.submitted_at = now
+        submission.last_activity_at = now
+    return submission
+
 def _project_dependencies_met(project, student):
     deps = project.dependencies or []
     for dep in deps:
@@ -3736,29 +3898,53 @@ def _import_project_tasks_from_config(project, config):
     for offset, entry in enumerate(tasks_data, start=1):
         if not isinstance(entry, dict):
             raise ValueError(f"Task #{offset} must be an object.")
+        task_kind = _normalize_task_kind_name(_first_present(entry, "task_kind", "task_type", "mode", "kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            raise ValueError(f"Task #{offset} has unsupported task_kind '{task_kind}'.")
         title = _coerce_string(_first_present(entry, "title", "name")).strip()
         if not title:
             raise ValueError(f"Task #{offset} is missing a title.")
-        questions_payload = _first_present(entry, "questions", "items")
-        if not isinstance(questions_payload, list) or not questions_payload:
-            raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
-        try:
-            questions = _normalize_exam_questions(questions_payload)
-        except ValueError as exc:
-            raise ValueError(f"Task '{title}': {exc}")
-        except Exception:
-            raise ValueError(f"Task '{title}': unable to parse questions.")
         description = _coerce_string(_first_present(entry, "description", "summary")).strip()
-        instructions = _coerce_string(_first_present(entry, "instructions", "student_instructions")).strip()
-        requires_review = _coerce_bool(_first_present(entry, "requires_review", "mentor_review", "manual_review"), False)
+        instructions = _coerce_string(
+            _first_present(
+                entry,
+                "instructions",
+                "student_instructions",
+                "tutorial_markdown",
+                "content_markdown",
+                "content",
+                "body",
+            )
+        ).strip()
+        questions = []
+        questions_payload = _first_present(entry, "questions", "items")
+        requires_review = False
+        auto_grade = False
+        if task_kind == "tutorial":
+            if isinstance(questions_payload, list) and questions_payload:
+                raise ValueError(f"Task '{title}': tutorial tasks cannot define questions.")
+            if not instructions:
+                raise ValueError(f"Task '{title}': tutorial tasks need markdown content in 'instructions' or 'tutorial_markdown'.")
+        else:
+            if not isinstance(questions_payload, list) or not questions_payload:
+                raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
+            try:
+                questions = _normalize_exam_questions(questions_payload)
+            except ValueError as exc:
+                raise ValueError(f"Task '{title}': {exc}")
+            except Exception:
+                raise ValueError(f"Task '{title}': unable to parse questions.")
+            requires_review = _coerce_bool(_first_present(entry, "requires_review", "mentor_review", "manual_review"), False)
+            auto_grade = _coerce_bool(_first_present(entry, "auto_grade", "autograde", "automatic_grading"), True)
         task = ProjectTask(
             project_id=project.id,
+            task_kind=task_kind,
             title=title,
             description=description or None,
             instructions=instructions or None,
             questions_json=questions,
             required=_coerce_bool(_first_present(entry, "required", "is_required"), True),
-            auto_grade=_coerce_bool(_first_present(entry, "auto_grade", "autograde", "automatic_grading"), True),
+            auto_grade=auto_grade,
             requires_review=requires_review,
             order_index=existing + offset,
         )
@@ -6139,7 +6325,30 @@ def projects_remove_group_assignment(code, assignment_id):
 @app.route("/projects/tasks/schema")
 @require_user()
 def projects_tasks_schema():
-    return jsonify(PROJECT_TASKS_SCHEMA)
+    body = json.dumps(PROJECT_TASKS_SCHEMA, indent=2, ensure_ascii=False)
+    if request.args.get("download") == "1":
+        response = make_response(body)
+        response.mimetype = "application/json"
+        response.headers["Content-Disposition"] = 'attachment; filename="project_task_import_reference.json"'
+        return response
+    return Response(body, mimetype="application/json")
+
+@app.route("/projects/tasks/examples/<example_name>")
+@require_user()
+def projects_tasks_example_download(example_name):
+    schema_key = PROJECT_TASKS_EXAMPLE_DOWNLOADS.get(example_name)
+    if not schema_key:
+        abort(404)
+    payload = PROJECT_TASKS_SCHEMA.get("example_payloads", {}).get(schema_key)
+    if payload is None:
+        abort(404)
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
+    response = make_response(body)
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="project_task_{secure_filename(example_name) or "example"}.json"'
+    )
+    return response
 
 @app.route("/projects/<code>/tasks/new", methods=["GET", "POST"])
 @require_user()
@@ -6153,6 +6362,7 @@ def projects_task_new(code):
         "title": request.form.get("title") or "",
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
+        "task_kind": request.form.get("task_kind") or "assessment",
         "questions_payload": request.form.get("questions_payload") or "[]",
         "required": True if request.method != "POST" and req_flag is None else bool(req_flag),
         "auto_grade": True if request.method != "POST" and not auto_flag_vals else ("1" in auto_flag_vals),
@@ -6166,8 +6376,14 @@ def projects_task_new(code):
         title = form_data["title"].strip()
         if not title:
             error = "Task title is required."
+        task_kind = _normalize_task_kind_name(form_data.get("task_kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            error = "Task kind must be assessment or tutorial."
         questions = []
-        if not error:
+        if not error and task_kind == "tutorial":
+            if not form_data["instructions"].strip():
+                error = "Tutorial tasks need markdown content in the task instructions."
+        if not error and task_kind == "assessment":
             try:
                 payload = json.loads(form_data["questions_payload"] or "[]")
                 questions = _normalize_exam_questions(payload)
@@ -6175,19 +6391,20 @@ def projects_task_new(code):
                 error = str(exc)
             except Exception:
                 error = "Unable to parse task questions."
-        if not questions and not error:
+        if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
         if not error:
             order_index = (ProjectTask.query.filter_by(project_id=project.id).count() or 0) + 1
             task = ProjectTask(
                 project_id=project.id,
+                task_kind=task_kind,
                 title=title,
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
                 questions_json=questions,
                 required=form_data["required"],
-                auto_grade=form_data["auto_grade"],
-                requires_review=form_data["requires_review"],
+                auto_grade=(form_data["auto_grade"] if task_kind == "assessment" else False),
+                requires_review=(form_data["requires_review"] if task_kind == "assessment" else False),
                 order_index=order_index,
             )
             db.session.add(task)
@@ -6240,6 +6457,7 @@ def projects_task_import(code):
     schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2, ensure_ascii=False)
     starter_payloads = {
         "minimal": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["minimal_payload"], indent=2, ensure_ascii=False),
+        "tutorial": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["tutorial_payload"], indent=2, ensure_ascii=False),
         "class_code": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["class_code_payload"], indent=2, ensure_ascii=False),
         "plot": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["plot_payload"], indent=2, ensure_ascii=False),
         "formatting": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["formatting_payload"], indent=2, ensure_ascii=False),
@@ -6270,6 +6488,7 @@ def projects_task_edit(code, task_id):
             "title": request.form.get("title") or "",
             "description": request.form.get("description") or "",
             "instructions": request.form.get("instructions") or "",
+            "task_kind": request.form.get("task_kind") or "assessment",
             "questions_payload": request.form.get("questions_payload") or "[]",
             "required": bool(req_flag),
             "auto_grade": ("1" in auto_flag_vals),
@@ -6285,6 +6504,7 @@ def projects_task_edit(code, task_id):
             "title": task.title or "",
             "description": task.description or "",
             "instructions": task.instructions or "",
+            "task_kind": _task_kind_value(task),
             "questions_payload": payload,
             "required": bool(task.required),
             "auto_grade": bool(task.auto_grade),
@@ -6298,8 +6518,14 @@ def projects_task_edit(code, task_id):
         title = form_data["title"].strip()
         if not title:
             error = "Task title is required."
+        task_kind = _normalize_task_kind_name(form_data.get("task_kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            error = "Task kind must be assessment or tutorial."
         questions = []
-        if not error:
+        if not error and task_kind == "tutorial":
+            if not form_data["instructions"].strip():
+                error = "Tutorial tasks need markdown content in the task instructions."
+        if not error and task_kind == "assessment":
             try:
                 payload = json.loads(form_data["questions_payload"] or "[]")
                 questions = _normalize_exam_questions(payload)
@@ -6307,16 +6533,17 @@ def projects_task_edit(code, task_id):
                 error = str(exc)
             except Exception:
                 error = "Unable to parse task questions."
-        if not questions and not error:
+        if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
         if not error:
+            task.task_kind = task_kind
             task.title = title
             task.description = form_data["description"].strip() or None
             task.instructions = form_data["instructions"].strip() or None
             task.questions_json = questions
             task.required = form_data["required"]
-            task.auto_grade = form_data["auto_grade"]
-            task.requires_review = form_data["requires_review"]
+            task.auto_grade = form_data["auto_grade"] if task_kind == "assessment" else False
+            task.requires_review = form_data["requires_review"] if task_kind == "assessment" else False
             if resource_upload and resource_upload.filename:
                 existing_info = _extract_file_info(task.resource_file)
                 file_info, upload_error = _save_task_resource(task, resource_upload, existing_info)
@@ -6503,6 +6730,7 @@ def _task_exam_view(project, task):
         "title": f"{project.title} — {task.title}",
         "description": task.description,
         "instructions": task.instructions,
+        "task_kind": _task_kind_value(task),
         "starts_at": None,
         "ends_at": None,
         "duration_minutes": None,
@@ -6524,6 +6752,20 @@ def project_task_take(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    if _is_tutorial_task(task):
+        submission = _complete_tutorial_task(project, task, student)
+        db.session.flush()
+        if _project_completed(project, student):
+            _award_project_points_if_needed(project, student)
+        db.session.commit()
+        return render_template(
+            "projects_tutorial_take.html",
+            project=project,
+            task=task,
+            submission=submission,
+            user=current_user(),
+            student_name=student.name,
+        )
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(
@@ -6852,6 +7094,8 @@ def project_task_submission_self_view(code, task_id):
     if not _project_visible_to_student(project, student):
         abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    if _is_tutorial_task(task):
+        return redirect(url_for("project_task_take", code=project.code, task_id=task.id))
     submission = ProjectTaskSubmission.query.filter_by(
         project_id=project.id,
         task_id=task.id,
@@ -6882,6 +7126,51 @@ def project_task_submission_self_view(code, task_id):
         user=current_user(),
         student_name=student.name,
     )
+
+@app.route("/projects/<code>/tasks/<int:task_id>/export")
+@require_user()
+def projects_task_export(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    payload = {
+        "schema_name": "project_task_export",
+        "schema_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "project": {
+            "code": project.code,
+            "title": project.title,
+        },
+        "task": _serialize_project_task_export(task),
+    }
+    response = make_response(json.dumps(payload, indent=2, ensure_ascii=False))
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{_project_task_download_basename(project, task)}.json"'
+    )
+    return response
+
+@app.route("/projects/tasks/<int:task_id>/tutorial.md")
+def project_task_tutorial_download(task_id):
+    task = ProjectTask.query.get_or_404(task_id)
+    if not _is_tutorial_task(task):
+        abort(404)
+    project = task.project
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if not _project_visible_to_student(project, student):
+            abort(403)
+        if not _project_dependencies_met(project, student):
+            abort(403)
+    body = _project_task_tutorial_markdown(project, task)
+    response = make_response(body)
+    response.mimetype = "text/markdown"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{_project_task_download_basename(project, task)}.md"'
+    )
+    return response
 
 @app.route("/projects/tasks/<int:task_id>/resource")
 def project_task_resource_download(task_id):

@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">Import tasks for {{ project.title }}</h3>
-      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer supports script, function, class-based code questions, manual-review plot questions, markdown-formatted text fields, and per-sample comparison rules such as whitespace normalization, substring checks, and numeric tolerance.</p>
+      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer supports read-only tutorial tasks, script/function/class code questions, manual-review plot questions, markdown-formatted text fields, and per-sample comparison rules such as whitespace normalization, substring checks, and numeric tolerance.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
   </div>
@@ -19,6 +19,7 @@
     <label>Task JSON</label>
     <textarea name="payload" rows="20" style="width:100%; font-family:ui-monospace;" required>{{ payload }}</textarea>
     <p class="muted" style="margin-top:6px;">Top-level shape: <code>{"tasks": [...]}</code>. The importer also accepts a few aliases such as <code>project_tasks</code>, <code>items</code>, <code>choices</code>, <code>tests</code>, <code>function_call</code>, and <code>method_call</code>.</p>
+    <p class="muted" style="margin-top:6px;">Use <code>"task_kind": "tutorial"</code> for read-only lessons. Tutorial tasks should contain markdown in <code>instructions</code> or <code>tutorial_markdown</code> and should not define any questions.</p>
     <p class="muted" style="margin-top:6px;">Code samples can also set <code>compare_mode</code>. Function/class samples may set <code>tolerance</code> when <code>compare_mode</code> is <code>numeric_tolerance</code>.</p>
     <p class="muted" style="margin-top:6px;">Text fields support Markdown. Because this is JSON, write line breaks as <code>\n</code> and blank lines as <code>\n\n</code> inside the string value.</p>
     <pre class="code-block" style="max-height:180px; overflow:auto;">{
@@ -27,7 +28,8 @@
 }</pre>
     <div class="sp"></div>
     <button class="btn btn-primary" type="submit">Import tasks</button>
-    <a class="btn" href="{{ url_for('projects_tasks_schema') }}" target="_blank" rel="noopener">Download schema</a>
+    <a class="btn" href="{{ url_for('projects_tasks_schema', download=1) }}">Download reference JSON</a>
+    <a class="btn" href="{{ url_for('projects_tasks_schema') }}" target="_blank" rel="noopener">Open JSON</a>
   </form>
 </div>
 <div class="sp"></div>
@@ -36,14 +38,16 @@
   <div style="margin-top:10px; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px;">
     <div>
       <strong>1. Start with one task</strong>
-      <p class="muted" style="margin-top:6px;">Wrap everything in <code>{"tasks": [...]}</code>. Each task needs a <code>title</code> and a non-empty <code>questions</code> array.</p>
+      <p class="muted" style="margin-top:6px;">Wrap everything in <code>{"tasks": [...]}</code>. Each task needs a <code>title</code>. Assessment tasks also need a non-empty <code>questions</code> array.</p>
       <strong>2. Pick the right code mode</strong>
       <p class="muted" style="margin-top:6px;">Use <code>script</code> for stdin/stdout programs, <code>function</code> for direct calls, and <code>class</code> when each test should build a fresh <code>obj</code>.</p>
     </div>
     <div>
-      <strong>3. Add sample comparisons</strong>
+      <strong>3. Use tutorial tasks for lessons</strong>
+      <p class="muted" style="margin-top:6px;">Set <code>task_kind</code> to <code>tutorial</code> and put the lesson in <code>instructions</code> or <code>tutorial_markdown</code>. Students complete it by opening it, so no questions are needed.</p>
+      <strong>4. Add sample comparisons</strong>
       <p class="muted" style="margin-top:6px;"><code>script</code> samples accept <code>rstrip</code>, <code>exact</code>, <code>normalize_whitespace</code>, and <code>contains</code>. Callable samples accept <code>exact</code>, <code>contains</code>, and <code>numeric_tolerance</code>.</p>
-      <strong>4. Use tolerance only for numeric values</strong>
+      <strong>5. Use tolerance only for numeric values</strong>
       <p class="muted" style="margin-top:6px;">When you use <code>numeric_tolerance</code>, provide a literal numeric expected value or array plus a non-negative <code>tolerance</code>, such as <code>1e-6</code>.</p>
     </div>
   </div>
@@ -70,32 +74,55 @@
     <h3 style="margin:0;">Starter Payloads</h3>
     <div class="row" style="gap:8px; flex-wrap:wrap;">
       <button type="button" class="btn" data-load-starter="minimal">Load minimal starter</button>
+      <button type="button" class="btn" data-load-starter="tutorial">Load tutorial starter</button>
       <button type="button" class="btn" data-load-starter="class_code">Load class code starter</button>
       <button type="button" class="btn" data-load-starter="comparison">Load comparison starter</button>
       <button type="button" class="btn" data-load-starter="plot">Load plot starter</button>
       <button type="button" class="btn" data-load-starter="formatting">Load formatting starter</button>
     </div>
   </div>
-  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The comparison starter demonstrates <code>compare_mode</code> and <code>tolerance</code>. The formatting starter demonstrates escaped <code>\n</code> line breaks and markdown rendering inside imported JSON.</p>
+  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The tutorial starter demonstrates read-only markdown content. The comparison starter demonstrates <code>compare_mode</code> and <code>tolerance</code>. The formatting starter demonstrates escaped <code>\n</code> line breaks and markdown rendering inside imported JSON.</p>
   <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:12px;">
     <div>
-      <strong>Minimal starter</strong>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Minimal starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='minimal') }}">Download</a>
+      </div>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.minimal }}</pre>
     </div>
     <div>
-      <strong>Class code starter</strong>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Tutorial starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='tutorial') }}">Download</a>
+      </div>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.tutorial }}</pre>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Class code starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='class_code') }}">Download</a>
+      </div>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.class_code }}</pre>
     </div>
     <div>
-      <strong>Comparison starter</strong>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Comparison starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='comparison') }}">Download</a>
+      </div>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.comparison }}</pre>
     </div>
     <div>
-      <strong>Plot starter</strong>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Plot starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='plot') }}">Download</a>
+      </div>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.plot }}</pre>
     </div>
     <div>
-      <strong>Formatting starter</strong>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Formatting starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='formatting') }}">Download</a>
+      </div>
       <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.formatting }}</pre>
     </div>
   </div>
@@ -114,6 +141,7 @@
   if (!textarea) return;
   const starters = {
     minimal: {{ starter_payloads.minimal|tojson }},
+    tutorial: {{ starter_payloads.tutorial|tojson }},
     class_code: {{ starter_payloads.class_code|tojson }},
     comparison: {{ starter_payloads.comparison|tojson }},
     plot: {{ starter_payloads.plot|tojson }},

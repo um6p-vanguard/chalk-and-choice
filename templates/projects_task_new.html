@@ -5,7 +5,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">{{ "Edit task" if editing else ("Add task to " ~ project.title) }}</h3>
-      <p class="muted" style="margin-top:4px;">Tasks behave like mini exams. Configure prompts, choose between auto-graded and manual-review questions, and optionally add plotting tasks with a live PNG preview.</p>
+      <p class="muted" style="margin-top:4px;">Tasks can be regular assessments or read-only tutorials. Assessment tasks use the question builder; tutorial tasks are completed just by reading the markdown content.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
   </div>
@@ -15,11 +15,31 @@
     <label>Task title</label>
     <input type="text" name="title" required placeholder="e.g., Lists warmup" value="{{ form_data.title }}">
 
+    <label>Task kind</label>
+    <div class="row" style="gap:8px; flex-wrap:wrap;" data-task-kind-picker>
+      <input type="hidden" name="task_kind" value="{{ form_data.task_kind or 'assessment' }}" data-task-kind-value>
+      <button type="button" class="btn {% if (form_data.task_kind or 'assessment') == 'assessment' %}btn-primary{% endif %}" data-task-kind-choice="assessment">Assessment</button>
+      <button type="button" class="btn {% if (form_data.task_kind or 'assessment') == 'tutorial' %}btn-primary{% endif %}" data-task-kind-choice="tutorial">Tutorial</button>
+    </div>
+    <p class="muted" style="margin-top:6px;" data-task-kind-help>
+      {% if (form_data.task_kind or 'assessment') == 'tutorial' %}
+        Tutorial tasks are markdown-only and auto-complete when a student opens them.
+      {% else %}
+        Assessment tasks collect answers and can be auto-graded or reviewed.
+      {% endif %}
+    </p>
+
     <label>Short description (optional)</label>
     <textarea name="description" rows="2" placeholder="Shown above the questions.">{{ form_data.description }}</textarea>
 
-    <label>Task instructions</label>
-    <textarea name="instructions" rows="3" placeholder="Specific guidance for this task.">{{ form_data.instructions }}</textarea>
+    <label data-instructions-label>{{ "Tutorial markdown" if (form_data.task_kind or 'assessment') == 'tutorial' else "Task instructions" }}</label>
+    <textarea name="instructions" rows="8" placeholder="{% if (form_data.task_kind or 'assessment') == 'tutorial' %}Write the lesson in Markdown. Headings, lists, and fenced code blocks are supported.{% else %}Specific guidance for this task.{% endif %}" data-instructions-field>{{ form_data.instructions }}</textarea>
+    {% if task and task.task_kind == "tutorial" %}
+      <div style="margin-top:8px;">
+        <a class="btn" href="{{ url_for('project_task_tutorial_download', task_id=task.id) }}">Download Markdown</a>
+        <a class="btn" href="{{ url_for('projects_task_export', code=project.code, task_id=task.id) }}">Download JSON</a>
+      </div>
+    {% endif %}
 
     <label>Task resource file (optional)</label>
     <input type="file" name="resource_file">
@@ -42,6 +62,8 @@
         <input type="checkbox" name="required" value="1" {% if form_data.required %}checked{% endif %}>
         Required task
       </label>
+    </div>
+    <div class="row" style="gap:12px; flex-wrap:wrap;" data-assessment-only>
       <label style="display:flex; align-items:center; gap:6px; margin-top:12px;">
         <input type="hidden" name="auto_grade" value="0">
         <input type="checkbox" name="auto_grade" value="1" {% if form_data.auto_grade %}checked{% endif %}>
@@ -52,14 +74,18 @@
         Mentor review required
       </label>
     </div>
+    <div data-tutorial-only style="{% if (form_data.task_kind or 'assessment') != 'tutorial' %}display:none;{% endif %} margin-top:12px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+      <strong>Tutorial behavior</strong>
+      <p class="muted" style="margin:6px 0 0 0;">Students do not submit answers for tutorial tasks. Opening the tutorial marks it complete, and it can still count toward project completion if the task is required.</p>
+    </div>
 
-    <div class="sp"></div>
-    <h4>Questions</h4>
-    <p class="muted" style="margin-top:-4px;">Use the builder to add multiple-choice, free text, Python coding, plotting, token-fill, fill-in, or file upload prompts.</p>
+    <div class="sp" data-assessment-only></div>
+    <h4 data-assessment-only>Questions</h4>
+    <p class="muted" style="margin-top:-4px;" data-assessment-only>Use the builder to add multiple-choice, free text, Python coding, plotting, token-fill, fill-in, or file upload prompts.</p>
 
-    <div data-question-list style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
+    <div data-question-list data-assessment-only style="display:flex; flex-direction:column; gap:16px; margin-top:12px;"></div>
 
-    <div class="row" style="gap:12px; margin-top:8px; flex-wrap:wrap; align-items:flex-start;">
+    <div class="row" style="gap:12px; margin-top:8px; flex-wrap:wrap; align-items:flex-start;" data-assessment-only>
       <input type="hidden" name="question_type" data-question-type value="{{ form_data.question_type or 'mcq' }}">
       <div data-question-type-picker style="display:flex; gap:8px; flex-wrap:wrap;">
         <button type="button" class="btn {% if (form_data.question_type or 'mcq') == 'mcq' %}btn-primary{% endif %}" data-type-choice="mcq">Multiple choice</button>
@@ -84,4 +110,61 @@
 {% endblock %}
 {% block scripts %}
 <script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+<script>
+(() => {
+  const form = document.getElementById('exam-builder-form');
+  const taskKindField = document.querySelector('[data-task-kind-value]');
+  const taskKindButtons = document.querySelectorAll('[data-task-kind-choice]');
+  const assessmentOnly = document.querySelectorAll('[data-assessment-only]');
+  const tutorialOnly = document.querySelector('[data-tutorial-only]');
+  const help = document.querySelector('[data-task-kind-help]');
+  const instructionsLabel = document.querySelector('[data-instructions-label]');
+  const instructionsField = document.querySelector('[data-instructions-field]');
+  const hiddenQuestions = document.getElementById('questions_payload');
+  if (!form || !taskKindField) return;
+
+  const updateKindUI = () => {
+    const kind = taskKindField.value || 'assessment';
+    const isTutorial = kind === 'tutorial';
+    taskKindButtons.forEach((btn) => {
+      btn.classList.toggle('btn-primary', btn.dataset.taskKindChoice === kind);
+    });
+    assessmentOnly.forEach((el) => {
+      el.hidden = isTutorial;
+    });
+    if (tutorialOnly) {
+      tutorialOnly.hidden = !isTutorial;
+    }
+    if (help) {
+      help.textContent = isTutorial
+        ? 'Tutorial tasks are markdown-only and auto-complete when a student opens them.'
+        : 'Assessment tasks collect answers and can be auto-graded or reviewed.';
+    }
+    if (instructionsLabel) {
+      instructionsLabel.textContent = isTutorial ? 'Tutorial markdown' : 'Task instructions';
+    }
+    if (instructionsField) {
+      instructionsField.placeholder = isTutorial
+        ? 'Write the lesson in Markdown. Headings, lists, and fenced code blocks are supported.'
+        : 'Specific guidance for this task.';
+      instructionsField.rows = isTutorial ? 12 : 8;
+    }
+  };
+
+  taskKindButtons.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      taskKindField.value = btn.dataset.taskKindChoice || 'assessment';
+      updateKindUI();
+    });
+  });
+
+  form.addEventListener('submit', () => {
+    if ((taskKindField.value || 'assessment') === 'tutorial' && hiddenQuestions) {
+      hiddenQuestions.value = '[]';
+    }
+  });
+
+  updateKindUI();
+})();
+</script>
 {% endblock %}
