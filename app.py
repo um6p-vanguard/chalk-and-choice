@@ -4089,8 +4089,8 @@ def _disallow_input(*args, **kwargs):
 
 SAFE_CODE_BUILTINS["input"] = _disallow_input
 
-# Allow limited imports for numerical methods / plotting
-ALLOWED_CODE_IMPORTS = {"numpy", "matplotlib", "math"}
+# Allow a small safe subset of imports used in coursework and plotting
+ALLOWED_CODE_IMPORTS = {"collections", "numpy", "matplotlib", "math"}
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level and level > 0:
@@ -6864,6 +6864,7 @@ def project_task_take(code, task_id):
                         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
                         cooldown_seconds_remaining=cooldown_seconds_remaining,
                         submission_id=submission.id,
+                        persisted_answers=base_answers,
                         upload_error=upload_error,
                     ), 400
                 draft_answers[qid] = val
@@ -6910,6 +6911,7 @@ def project_task_take(code, task_id):
                     run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
                     cooldown_seconds_remaining=cooldown_seconds_remaining,
                     submission_id=submission.id,
+                    persisted_answers=base_answers,
                     upload_error=upload_error,
                 ), 400
             if plot_updates:
@@ -6943,6 +6945,7 @@ def project_task_take(code, task_id):
                     run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
                     cooldown_seconds_remaining=cooldown_seconds_remaining,
                     submission_id=submission.id,
+                    persisted_answers=base_answers,
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
@@ -6978,6 +6981,7 @@ def project_task_take(code, task_id):
                     run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
                     cooldown_seconds_remaining=cooldown_seconds_remaining,
                     submission_id=submission.id,
+                    persisted_answers=base_answers,
                     upload_error=upload_error,
                 ), 400
             grade_score = 0
@@ -7083,6 +7087,7 @@ def project_task_take(code, task_id):
         run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
         cooldown_seconds_remaining=cooldown_seconds_remaining,
         submission_id=submission.id,
+        persisted_answers=base_answers,
         upload_error=None,
     )
 

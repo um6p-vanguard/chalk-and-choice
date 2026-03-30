@@ -252,9 +252,11 @@
         {% elif q.type == "plot" %}
           {% set prior_plot = previous_answers.get(q.id) %}
           {% set prior_plot_data = prior_plot if prior_plot is mapping else None %}
+          {% set persisted_plot = (persisted_answers.get(q.id) if persisted_answers is defined and persisted_answers else None) %}
+          {% set persisted_plot_data = persisted_plot if persisted_plot is mapping else None %}
           {% set plot_code = (prior_plot_data.code if prior_plot_data and prior_plot_data.code is defined else prior_plot) or "" %}
           {% set starter = plot_code if plot_code else (q.starter or "") %}
-          {% set plot_artifact = prior_plot_data.artifact if prior_plot_data and prior_plot_data.artifact is defined and prior_plot_data.artifact is mapping else None %}
+          {% set plot_artifact = persisted_plot_data.artifact if persisted_plot_data and persisted_plot_data.artifact is defined and persisted_plot_data.artifact is mapping else None %}
           {% set plot_preview_url = None %}
           {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
             {% set plot_preview_url = url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id) %}
@@ -301,10 +303,10 @@
                 data-plot-preview="{{ q.id }}"
                 {% if plot_preview_url %}
                   data-existing-url="{{ plot_preview_url }}"
-                  data-existing-updated-at="{{ (prior_plot_data.updated_at if prior_plot_data and prior_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
-                  data-existing-plot-count="{{ (prior_plot_data.plot_count if prior_plot_data and prior_plot_data.plot_count is defined else 1)|e }}"
-                  data-existing-stdout="{{ (prior_plot_data.stdout if prior_plot_data and prior_plot_data.stdout is defined else '')|e }}"
-                  data-existing-error="{{ (prior_plot_data.error if prior_plot_data and prior_plot_data.error is defined else '')|e }}"
+                  data-existing-updated-at="{{ (persisted_plot_data.updated_at if persisted_plot_data and persisted_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
+                  data-existing-plot-count="{{ (persisted_plot_data.plot_count if persisted_plot_data and persisted_plot_data.plot_count is defined else 1)|e }}"
+                  data-existing-stdout="{{ (persisted_plot_data.stdout if persisted_plot_data and persisted_plot_data.stdout is defined else '')|e }}"
+                  data-existing-error="{{ (persisted_plot_data.error if persisted_plot_data and persisted_plot_data.error is defined else '')|e }}"
                 {% endif %}
                 style="margin-top:10px;"
               >
@@ -316,8 +318,8 @@
                       {% if plot_artifact and plot_artifact.width and plot_artifact.height %}
                         • {{ plot_artifact.width }}×{{ plot_artifact.height }}
                       {% endif %}
-                      {% if prior_plot_data and prior_plot_data.updated_at is defined and prior_plot_data.updated_at %}
-                        • {{ prior_plot_data.updated_at }}
+                      {% if persisted_plot_data and persisted_plot_data.updated_at is defined and persisted_plot_data.updated_at %}
+                        • {{ persisted_plot_data.updated_at }}
                       {% endif %}
                     </div>
                   </div>
