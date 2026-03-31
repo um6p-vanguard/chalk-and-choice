@@ -7,6 +7,9 @@
     <p class="muted" style="margin-top:6px;">You can only see students from groups assigned to you.</p>
   {% endif %}
   <div style="margin-top:10px;">
+    {% if user and user.role == 'admin' %}
+      <a class="btn" href="{{ url_for('admin_review_dashboard') }}">Review dashboard</a>
+    {% endif %}
     <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
   </div>
   

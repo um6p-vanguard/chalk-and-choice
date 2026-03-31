@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start;">
+    <div>
+      <h3 style="margin:0;">Admin review dashboard</h3>
+      <p class="muted" style="margin:6px 0 0 0;">Live queue health, review turnaround time, reviewer activity, and submission trends across projects.</p>
+    </div>
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('projects_reviews') }}">Pending reviews</a>
+      <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
+    </div>
+  </div>
+  <p class="muted" style="margin:12px 0 0 0;">Queue metrics are live. Review performance metrics are based on recorded review attempts.</p>
+</div>
+
+<div class="sp"></div>
+
+<div class="row" style="gap:12px; align-items:stretch;">
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Pending now</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ total_pending_count }}</div>
+    <div class="muted" style="margin-top:6px;">{{ queue_student_count }} student(s) across {{ queue_project_count }} project(s)</div>
+  </div>
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Reviewed attempts</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ total_reviewed_count }}</div>
+    <div class="muted" style="margin-top:6px;">{{ unique_student_count }} student(s), {{ reviewed_project_count }} project(s)</div>
+  </div>
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Average wait</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ avg_wait_display }}</div>
+    <div class="muted" style="margin-top:6px;">Median {{ median_wait_display }}</div>
+  </div>
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Acceptance rate</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ "%.1f"|format(acceptance_rate) }}%</div>
+    <div class="muted" style="margin-top:6px;">{{ accepted_review_count }} accepted • {{ rejected_review_count }} rejected</div>
+  </div>
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Reviewed in 7 days</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ reviews_last_7_days }}</div>
+    <div class="muted" style="margin-top:6px;">{{ reviews_last_30_days }} in 30 days</div>
+  </div>
+  <div class="card" style="flex:1; min-width:160px;">
+    <div class="muted" style="font-size:0.9rem;">Active reviewers</div>
+    <div style="font-size:1.9rem; font-weight:700; margin-top:6px;">{{ unique_reviewer_count }}</div>
+    <div class="muted" style="margin-top:6px;">People who have completed reviews</div>
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="row" style="gap:12px; align-items:stretch;">
+  <div class="card" style="flex:1; min-width:200px;">
+    <div class="muted" style="font-size:0.9rem;">Average queue age</div>
+    <div style="font-size:1.7rem; font-weight:700; margin-top:6px;">{{ avg_pending_display }}</div>
+    <div class="muted" style="margin-top:6px;">Oldest pending {{ oldest_pending_display }}</div>
+  </div>
+  <div class="card" style="flex:1; min-width:200px;">
+    <div class="muted" style="font-size:0.9rem;">Aging queue</div>
+    <div style="font-size:1.7rem; font-weight:700; margin-top:6px;">{{ pending_24h_count }}</div>
+    <div class="muted" style="margin-top:6px;">Older than 24h • {{ pending_72h_count }} older than 72h</div>
+  </div>
+  <div class="card" style="flex:1; min-width:200px;">
+    <div class="muted" style="font-size:0.9rem;">Current review pace</div>
+    <div style="font-size:1.7rem; font-weight:700; margin-top:6px;">{{ "%.1f"|format(reviews_last_7_days / 7 if reviews_last_7_days else 0) }}/day</div>
+    <div class="muted" style="margin-top:6px;">Based on the last 7 days</div>
+  </div>
+  <div class="card" style="flex:1; min-width:200px;">
+    <div class="muted" style="font-size:0.9rem;">Queue backlog</div>
+    <div style="font-size:1.7rem; font-weight:700; margin-top:6px;">
+      {% if backlog_days is not none %}
+        {{ "%.1f"|format(backlog_days) }} day(s)
+      {% else %}
+        —
+      {% endif %}
+    </div>
+    <div class="muted" style="margin-top:6px;">Estimated time to clear at current 7-day pace</div>
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="row" style="gap:16px; align-items:flex-start;">
+  <div class="card" style="flex:1.1; min-width:340px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Top reviewers</h3>
+      <span class="muted">Most completed reviews</span>
+    </div>
+    {% if reviewer_rows %}
+      <table style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Reviewer</th>
+            <th>Reviews</th>
+            <th>Accepted</th>
+            <th>Avg wait</th>
+            <th>Last review</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in reviewer_rows %}
+            <tr>
+              <td>
+                <div><strong>{{ row.reviewer_name }}</strong></div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.role_label }} • {{ row.student_count }} student(s) • {{ row.project_count }} project(s)</div>
+                <div style="margin-top:8px; width:100%; height:8px; border-radius:999px; background:#0b1220; overflow:hidden;">
+                  <div style="width:{{ row.share_pct }}%; height:100%; background:var(--brand);"></div>
+                </div>
+              </td>
+              <td>
+                <strong>{{ row.total_reviews }}</strong>
+                <div class="muted" style="font-size:0.85rem;">{{ row.recent_7d }} in 7d</div>
+              </td>
+              <td>
+                <div>{{ row.accepted_count }}</div>
+                <div class="muted" style="font-size:0.85rem;">{{ "%.1f"|format(row.acceptance_rate) }}%</div>
+              </td>
+              <td>
+                <div>{{ row.avg_wait_display }}</div>
+                <div class="muted" style="font-size:0.85rem;">Median {{ row.median_wait_display }}</div>
+              </td>
+              <td>{{ row.last_reviewed_at.strftime("%b %d %H:%M") if row.last_reviewed_at else "—" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted" style="margin:12px 0 0 0;">No completed reviews recorded yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex:0.9; min-width:320px;">
+    <div class="row" style="justify-content:space-between; align-items:center;">
+      <h3 style="margin:0;">Pending queue snapshot</h3>
+      <a class="btn" href="{{ url_for('projects_reviews') }}">Open queue</a>
+    </div>
+    {% if pending_queue_rows %}
+      <table style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Waiting</th>
+            <th>Student</th>
+            <th>Task</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in pending_queue_rows %}
+            <tr>
+              <td>
+                <strong>{{ row.waiting_display }}</strong>
+                <div class="muted" style="font-size:0.85rem;">{{ row.submitted_at.strftime("%b %d %H:%M") if row.submitted_at else "—" }}</div>
+              </td>
+              <td>
+                <div><strong>{{ row.student_name }}</strong></div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.student_groups }}</div>
+              </td>
+              <td>
+                <div>{{ row.project_title }}</div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.task_title }}</div>
+              </td>
+              <td style="text-align:right;">
+                <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=row.submission_id) }}">Review</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted" style="margin:12px 0 0 0;">No submissions are waiting for review.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="row" style="gap:16px; align-items:flex-start;">
+  <div class="card" style="flex:1; min-width:340px;">
+    <h3 style="margin:0;">Projects with the heaviest review load</h3>
+    {% if project_rows %}
+      <table style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Project</th>
+            <th>Pending</th>
+            <th>Reviewed</th>
+            <th>Avg wait</th>
+            <th>Oldest pending</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in project_rows %}
+            <tr>
+              <td>
+                <div><strong>{{ row.project_title }}</strong></div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.student_count }} student(s) touched • {{ "%.1f"|format(row.acceptance_rate) }}% accepted</div>
+                <div style="margin-top:8px; width:100%; height:8px; border-radius:999px; background:#0b1220; overflow:hidden;">
+                  <div style="width:{{ row.share_pct }}%; height:100%; background:var(--brand-2);"></div>
+                </div>
+              </td>
+              <td>{{ row.pending_count }}</td>
+              <td>{{ row.reviewed_count }}</td>
+              <td>{{ row.avg_wait_display }}</td>
+              <td>{{ row.oldest_pending_display }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted" style="margin:12px 0 0 0;">No project review activity yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex:1; min-width:340px;">
+    <h3 style="margin:0;">Students needing the most attention</h3>
+    {% if student_rows %}
+      <table style="margin-top:12px;">
+        <thead>
+          <tr>
+            <th>Student</th>
+            <th>Pending</th>
+            <th>Reviewed</th>
+            <th>Avg wait</th>
+            <th>Last outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in student_rows %}
+            <tr>
+              <td>
+                <div><strong>{{ row.student_name }}</strong></div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.student_email }}</div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.groups_label }}</div>
+                <div style="margin-top:8px; width:100%; height:8px; border-radius:999px; background:#0b1220; overflow:hidden;">
+                  <div style="width:{{ row.share_pct }}%; height:100%; background:#f59e0b;"></div>
+                </div>
+              </td>
+              <td>{{ row.pending_count }}</td>
+              <td>
+                <div>{{ row.reviewed_count }}</div>
+                <div class="muted" style="font-size:0.85rem;">{{ row.rejected_count }} rejected</div>
+              </td>
+              <td>{{ row.avg_wait_display }}</td>
+              <td>
+                {% if row.last_status == "accepted" %}
+                  <span style="color:#4ade80;">Accepted</span>
+                {% elif row.last_status == "rejected" %}
+                  <span style="color:#f87171;">Rejected</span>
+                {% else %}
+                  <span class="muted">—</span>
+                {% endif %}
+                <div class="muted" style="font-size:0.85rem;">{{ row.last_reviewed_at.strftime("%b %d %H:%M") if row.last_reviewed_at else "—" }}</div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="muted" style="margin:12px 0 0 0;">No student review activity yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="sp"></div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:center;">
+    <h3 style="margin:0;">Recent review activity</h3>
+    <span class="muted">Who reviewed what most recently</span>
+  </div>
+  {% if recent_review_rows %}
+    <table style="margin-top:12px;">
+      <thead>
+        <tr>
+          <th>Reviewed</th>
+          <th>Reviewer</th>
+          <th>Student</th>
+          <th>Project / task</th>
+          <th>Waited</th>
+          <th>Outcome</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in recent_review_rows %}
+          <tr>
+            <td>{{ row.reviewed_at.strftime("%b %d %H:%M") if row.reviewed_at else "—" }}</td>
+            <td>{{ row.reviewer_name }}</td>
+            <td>
+              <div><strong>{{ row.student_name }}</strong></div>
+              <div class="muted" style="font-size:0.85rem;">{{ row.student_groups }}</div>
+            </td>
+            <td>
+              <div>{{ row.project_title }}</div>
+              <div class="muted" style="font-size:0.85rem;">{{ row.task_title }} • Attempt #{{ row.attempt_number }}</div>
+            </td>
+            <td>{{ row.wait_display }}</td>
+            <td>
+              {% if row.status == "accepted" %}
+                <span style="color:#4ade80;">Accepted</span>
+              {% elif row.status == "rejected" %}
+                <span style="color:#f87171;">Rejected</span>
+              {% else %}
+                <span class="muted">{{ row.status }}</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.review_notes %}
+                <span class="muted" style="font-size:0.9rem; white-space:pre-line;">{{ row.review_notes }}</span>
+              {% else %}
+                <span class="muted">—</span>
+              {% endif %}
+            </td>
+            <td style="text-align:right;">
+              {% if row.submission_id %}
+                <a class="btn" href="{{ url_for('projects_review_detail', submission_id=row.submission_id) }}">Open</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted" style="margin:12px 0 0 0;">No recent review activity yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

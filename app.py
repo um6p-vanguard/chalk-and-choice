@@ -2517,6 +2517,8 @@ def index():
     student = current_student()
     if u and getattr(u, "role", "") == "mentor":
         return redirect(url_for("mentor_dashboard"))
+    if u and getattr(u, "role", "") == "admin":
+        return redirect(url_for("admin_review_dashboard"))
     if student and not u:
         return blog_index()
     exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
@@ -3672,6 +3674,38 @@ def _format_duration(seconds):
     if total >= 3600:
         return f"{total / 3600:.2f} hr"
     return f"{total / 60:.1f} min"
+
+def _median(values):
+    cleaned = sorted(
+        float(value)
+        for value in (values or [])
+        if value is not None
+    )
+    if not cleaned:
+        return None
+    mid = len(cleaned) // 2
+    if len(cleaned) % 2 == 1:
+        return cleaned[mid]
+    return (cleaned[mid - 1] + cleaned[mid]) / 2.0
+
+def _review_wait_seconds(attempt):
+    if not attempt or not attempt.reviewed_at:
+        return None
+    submitted_at = getattr(attempt, "submitted_at", None)
+    if not submitted_at and getattr(attempt, "submission", None):
+        submitted_at = attempt.submission.submitted_at
+    if not submitted_at:
+        return None
+    return max(0.0, (attempt.reviewed_at - submitted_at).total_seconds())
+
+def _pending_review_age_seconds(submission, now=None):
+    if not submission:
+        return None
+    now = now or datetime.utcnow()
+    submitted_at = submission.submitted_at or submission.last_activity_at or submission.started_at
+    if not submitted_at:
+        return None
+    return max(0.0, (now - submitted_at).total_seconds())
 
 def _parse_iso_datetime(val):
     if not val:
@@ -7874,6 +7908,372 @@ def mentor_dashboard():
         student_name=session.get("student_name"),
     )
 
+@app.route("/admin/reviews/dashboard")
+@require_user()
+def admin_review_dashboard():
+    user = current_user()
+    if not user or getattr(user, "role", "") == "mentor":
+        abort(403)
+
+    allowed_student_ids = _restricted_review_student_ids(user)
+    now = datetime.utcnow()
+    last_7_days = now - timedelta(days=7)
+    last_30_days = now - timedelta(days=30)
+
+    pending_query = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review").options(
+            subqueryload(ProjectTaskSubmission.project),
+            subqueryload(ProjectTaskSubmission.task),
+            subqueryload(ProjectTaskSubmission.student)
+                .subqueryload(Student.group_memberships)
+                .subqueryload(StudentGroupMembership.group),
+        ),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+    pending_submissions = pending_query.order_by(ProjectTaskSubmission.submitted_at.asc()).all()
+
+    reviewed_attempts = []
+    reviewed_query = ProjectTaskAttempt.query.filter(
+        ProjectTaskAttempt.reviewed_at != None
+    ).join(
+        ProjectTaskSubmission,
+        ProjectTaskAttempt.submission_id == ProjectTaskSubmission.id,
+    )
+    if allowed_student_ids is not None:
+        if allowed_student_ids:
+            reviewed_query = reviewed_query.filter(ProjectTaskSubmission.student_id.in_(allowed_student_ids))
+        else:
+            reviewed_query = None
+    if reviewed_query is not None:
+        reviewed_attempts = reviewed_query.options(
+            subqueryload(ProjectTaskAttempt.reviewer),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.project),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.task),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.student)
+                .subqueryload(Student.group_memberships)
+                .subqueryload(StudentGroupMembership.group),
+        ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
+
+    student_groups_cache = {}
+
+    def student_groups_label(student):
+        if not student or not student.id:
+            return "—"
+        cached = student_groups_cache.get(student.id)
+        if cached is not None:
+            return cached
+        groups = _visible_groups_for_student(user, student)
+        label = ", ".join(group.name for group in groups) if groups else "—"
+        student_groups_cache[student.id] = label
+        return label
+
+    reviewer_stats = {}
+    project_stats = {}
+    student_stats = {}
+    reviewed_waits = []
+    reviewed_student_ids = set()
+    reviewed_project_ids = set()
+    accepted_review_count = 0
+    rejected_review_count = 0
+    reviews_last_7_days = 0
+    reviews_last_30_days = 0
+    recent_review_rows = []
+
+    for attempt in reviewed_attempts:
+        submission = attempt.submission
+        student = submission.student if submission else None
+        project = submission.project if submission else None
+        task = submission.task if submission else None
+        reviewer = attempt.reviewer
+        wait_seconds = _review_wait_seconds(attempt)
+        if wait_seconds is not None:
+            reviewed_waits.append(wait_seconds)
+        if student and student.id:
+            reviewed_student_ids.add(student.id)
+        if project and project.id:
+            reviewed_project_ids.add(project.id)
+        if attempt.status == "accepted":
+            accepted_review_count += 1
+        elif attempt.status == "rejected":
+            rejected_review_count += 1
+        if attempt.reviewed_at and attempt.reviewed_at >= last_7_days:
+            reviews_last_7_days += 1
+        if attempt.reviewed_at and attempt.reviewed_at >= last_30_days:
+            reviews_last_30_days += 1
+
+        reviewer_key = reviewer.id if reviewer and reviewer.id else 0
+        reviewer_row = reviewer_stats.setdefault(reviewer_key, {
+            "reviewer_name": reviewer.name if reviewer else "Unknown reviewer",
+            "role_label": (getattr(reviewer, "role", "") or "staff").replace("_", " ").title() if reviewer else "Unknown",
+            "total_reviews": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "recent_7d": 0,
+            "last_reviewed_at": None,
+            "student_ids": set(),
+            "project_ids": set(),
+        })
+        reviewer_row["total_reviews"] += 1
+        if attempt.status == "accepted":
+            reviewer_row["accepted_count"] += 1
+        elif attempt.status == "rejected":
+            reviewer_row["rejected_count"] += 1
+        if wait_seconds is not None:
+            reviewer_row["wait_values"].append(wait_seconds)
+        if attempt.reviewed_at and attempt.reviewed_at >= last_7_days:
+            reviewer_row["recent_7d"] += 1
+        if attempt.reviewed_at and (
+            reviewer_row["last_reviewed_at"] is None or attempt.reviewed_at > reviewer_row["last_reviewed_at"]
+        ):
+            reviewer_row["last_reviewed_at"] = attempt.reviewed_at
+        if student and student.id:
+            reviewer_row["student_ids"].add(student.id)
+        if project and project.id:
+            reviewer_row["project_ids"].add(project.id)
+
+        project_key = project.id if project and project.id else 0
+        project_row = project_stats.setdefault(project_key, {
+            "project_title": project.title if project else "Unknown project",
+            "pending_count": 0,
+            "reviewed_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "student_ids": set(),
+            "last_reviewed_at": None,
+            "oldest_pending_seconds": None,
+        })
+        project_row["reviewed_count"] += 1
+        if attempt.status == "accepted":
+            project_row["accepted_count"] += 1
+        elif attempt.status == "rejected":
+            project_row["rejected_count"] += 1
+        if wait_seconds is not None:
+            project_row["wait_values"].append(wait_seconds)
+        if student and student.id:
+            project_row["student_ids"].add(student.id)
+        if attempt.reviewed_at and (
+            project_row["last_reviewed_at"] is None or attempt.reviewed_at > project_row["last_reviewed_at"]
+        ):
+            project_row["last_reviewed_at"] = attempt.reviewed_at
+
+        if student and student.id:
+            student_row = student_stats.setdefault(student.id, {
+                "student_name": student.name,
+                "student_email": student.email,
+                "groups_label": student_groups_label(student),
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "wait_values": [],
+                "last_reviewed_at": None,
+                "last_status": None,
+            })
+            student_row["reviewed_count"] += 1
+            if attempt.status == "accepted":
+                student_row["accepted_count"] += 1
+            elif attempt.status == "rejected":
+                student_row["rejected_count"] += 1
+            if wait_seconds is not None:
+                student_row["wait_values"].append(wait_seconds)
+            if attempt.reviewed_at and (
+                student_row["last_reviewed_at"] is None or attempt.reviewed_at > student_row["last_reviewed_at"]
+            ):
+                student_row["last_reviewed_at"] = attempt.reviewed_at
+                student_row["last_status"] = attempt.status
+
+        if len(recent_review_rows) < 24:
+            review_notes = (attempt.review_notes or (submission.review_notes if submission else "") or "").strip()
+            if len(review_notes) > 140:
+                review_notes = review_notes[:137].rstrip() + "..."
+            recent_review_rows.append({
+                "reviewed_at": attempt.reviewed_at,
+                "reviewer_name": reviewer.name if reviewer else "Unknown reviewer",
+                "student_name": submission.student_name if submission and submission.student_name else "Unknown",
+                "student_groups": student_groups_label(student),
+                "project_title": project.title if project else "—",
+                "task_title": task.title if task else "—",
+                "attempt_number": attempt.attempt_number,
+                "status": attempt.status or "reviewed",
+                "wait_display": _format_duration(wait_seconds) if wait_seconds is not None else "—",
+                "review_notes": review_notes,
+                "submission_id": submission.id if submission else None,
+            })
+
+    pending_queue_rows = []
+    queue_waits = []
+    pending_student_ids = set()
+    pending_project_ids = set()
+    pending_24h_count = 0
+    pending_72h_count = 0
+    oldest_pending_seconds = None
+
+    for submission in pending_submissions:
+        student = submission.student
+        project = submission.project
+        task = submission.task
+        wait_seconds = _pending_review_age_seconds(submission, now=now)
+        if wait_seconds is not None:
+            queue_waits.append(wait_seconds)
+            if wait_seconds >= 24 * 3600:
+                pending_24h_count += 1
+            if wait_seconds >= 72 * 3600:
+                pending_72h_count += 1
+            oldest_pending_seconds = max(oldest_pending_seconds or 0, wait_seconds)
+        if student and student.id:
+            pending_student_ids.add(student.id)
+        if project and project.id:
+            pending_project_ids.add(project.id)
+
+        project_key = project.id if project and project.id else 0
+        project_row = project_stats.setdefault(project_key, {
+            "project_title": project.title if project else "Unknown project",
+            "pending_count": 0,
+            "reviewed_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "student_ids": set(),
+            "last_reviewed_at": None,
+            "oldest_pending_seconds": None,
+        })
+        project_row["pending_count"] += 1
+        if student and student.id:
+            project_row["student_ids"].add(student.id)
+        if wait_seconds is not None:
+            project_row["oldest_pending_seconds"] = max(project_row["oldest_pending_seconds"] or 0, wait_seconds)
+
+        if student and student.id:
+            student_row = student_stats.setdefault(student.id, {
+                "student_name": student.name,
+                "student_email": student.email,
+                "groups_label": student_groups_label(student),
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "wait_values": [],
+                "last_reviewed_at": None,
+                "last_status": None,
+            })
+            student_row["pending_count"] += 1
+
+        if len(pending_queue_rows) < 18:
+            pending_queue_rows.append({
+                "submitted_at": submission.submitted_at,
+                "student_name": submission.student_name or "Unknown",
+                "student_groups": student_groups_label(student),
+                "project_title": project.title if project else "—",
+                "task_title": task.title if task else "—",
+                "waiting_display": _format_duration(wait_seconds) if wait_seconds is not None else "—",
+                "submission_id": submission.id,
+            })
+
+    total_reviews = len(reviewed_attempts)
+    avg_wait_seconds = (sum(reviewed_waits) / len(reviewed_waits)) if reviewed_waits else None
+    median_wait_seconds = _median(reviewed_waits)
+    avg_pending_seconds = (sum(queue_waits) / len(queue_waits)) if queue_waits else None
+    daily_review_rate = reviews_last_7_days / 7.0 if reviews_last_7_days else 0.0
+    backlog_days = (len(pending_submissions) / daily_review_rate) if daily_review_rate > 0 else None
+
+    reviewer_rows = []
+    max_reviewer_total = max((row["total_reviews"] for row in reviewer_stats.values()), default=0)
+    for row in reviewer_stats.values():
+        wait_values = row.pop("wait_values")
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["median_wait_display"] = _format_duration(_median(wait_values)) if wait_values else "—"
+        row["student_count"] = len(row.pop("student_ids"))
+        row["project_count"] = len(row.pop("project_ids"))
+        row["acceptance_rate"] = (row["accepted_count"] / row["total_reviews"] * 100.0) if row["total_reviews"] else 0.0
+        row["share_pct"] = (row["total_reviews"] / max_reviewer_total * 100.0) if max_reviewer_total else 0.0
+        reviewer_rows.append(row)
+    reviewer_rows.sort(
+        key=lambda row: (
+            -row["total_reviews"],
+            -row["recent_7d"],
+            (row["reviewer_name"] or "").lower(),
+        )
+    )
+
+    project_rows = []
+    max_project_load = max(
+        (row["pending_count"] + row["reviewed_count"] for row in project_stats.values()),
+        default=0,
+    )
+    for row in project_stats.values():
+        wait_values = row.pop("wait_values")
+        total_project_activity = row["pending_count"] + row["reviewed_count"]
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["student_count"] = len(row.pop("student_ids"))
+        row["acceptance_rate"] = (row["accepted_count"] / row["reviewed_count"] * 100.0) if row["reviewed_count"] else 0.0
+        row["share_pct"] = (total_project_activity / max_project_load * 100.0) if max_project_load else 0.0
+        row["oldest_pending_display"] = _format_duration(row["oldest_pending_seconds"]) if row["oldest_pending_seconds"] is not None else "—"
+        row["activity_total"] = total_project_activity
+        project_rows.append(row)
+    project_rows.sort(
+        key=lambda row: (
+            -row["pending_count"],
+            -row["reviewed_count"],
+            (row["project_title"] or "").lower(),
+        )
+    )
+
+    student_rows = []
+    max_student_load = max(
+        (row["pending_count"] + row["reviewed_count"] for row in student_stats.values()),
+        default=0,
+    )
+    for row in student_stats.values():
+        wait_values = row.pop("wait_values")
+        total_student_activity = row["pending_count"] + row["reviewed_count"]
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["share_pct"] = (total_student_activity / max_student_load * 100.0) if max_student_load else 0.0
+        row["activity_total"] = total_student_activity
+        student_rows.append(row)
+    student_rows.sort(
+        key=lambda row: (
+            -row["pending_count"],
+            -row["reviewed_count"],
+            (row["student_name"] or "").lower(),
+        )
+    )
+
+    return render_template(
+        "admin_review_dashboard.html",
+        total_pending_count=len(pending_submissions),
+        total_reviewed_count=total_reviews,
+        unique_reviewer_count=sum(1 for row in reviewer_rows if row["reviewer_name"] != "Unknown reviewer"),
+        unique_student_count=len(reviewed_student_ids),
+        reviewed_project_count=len(reviewed_project_ids),
+        queue_student_count=len(pending_student_ids),
+        queue_project_count=len(pending_project_ids),
+        accepted_review_count=accepted_review_count,
+        rejected_review_count=rejected_review_count,
+        acceptance_rate=((accepted_review_count / total_reviews) * 100.0) if total_reviews else 0.0,
+        avg_wait_display=_format_duration(avg_wait_seconds) if avg_wait_seconds is not None else "—",
+        median_wait_display=_format_duration(median_wait_seconds) if median_wait_seconds is not None else "—",
+        avg_pending_display=_format_duration(avg_pending_seconds) if avg_pending_seconds is not None else "—",
+        oldest_pending_display=_format_duration(oldest_pending_seconds) if oldest_pending_seconds is not None else "—",
+        pending_24h_count=pending_24h_count,
+        pending_72h_count=pending_72h_count,
+        reviews_last_7_days=reviews_last_7_days,
+        reviews_last_30_days=reviews_last_30_days,
+        backlog_days=backlog_days,
+        reviewer_rows=reviewer_rows[:10],
+        project_rows=project_rows[:10],
+        student_rows=student_rows[:12],
+        pending_queue_rows=pending_queue_rows,
+        recent_review_rows=recent_review_rows,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
 @app.route("/students/<int:student_id>/notes", methods=["GET", "POST"])
 @require_user()
 def student_private_notes(student_id):
@@ -8289,6 +8689,8 @@ def dashboard_for_role():
     user = current_user()
     if user and getattr(user, "role", "") == "mentor":
         return redirect(url_for("mentor_dashboard"))
+    if user and getattr(user, "role", "") == "admin":
+        return redirect(url_for("admin_review_dashboard"))
     return redirect(url_for("index"))
 
 @app.route("/student")
