@@ -1057,6 +1057,8 @@
     const plotButtons = root.querySelectorAll("[data-run-plot]");
     const form = root.querySelector("[data-exam-form]");
     const artifactNamespace = root.dataset.artifactNamespace || "";
+    const plotArtifactMaxBytes = Number.parseInt(root.dataset.plotArtifactMaxBytes || "0", 10) || 0;
+    const plotArtifactMaxMb = Number.parseFloat(root.dataset.plotArtifactMaxMb || "0") || 0;
     if (!buttons.length && !customButtons.length && !plotButtons.length && !form) return;
     let pyodidePromise = null;
     let packagesPromise = null;
@@ -1222,38 +1224,56 @@
       if (!form) return;
       form.querySelectorAll("[data-plot-upload-proxy]").forEach((node) => node.remove());
     };
+    const formatBytes = (value) => {
+      const bytes = Number(value) || 0;
+      if (bytes <= 0) return "";
+      if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+      return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    };
     const injectPlotArtifactsIntoForm = (artifacts) => {
       if (!form || !Array.isArray(artifacts) || !artifacts.length) return false;
       clearInjectedPlotFields();
       let injected = false;
       artifacts.forEach((record) => {
-        if (!record || !record.questionId || !record.blob) return;
-        const fileInput = document.createElement("input");
-        fileInput.type = "file";
-        fileInput.name = `plot_artifact_${record.questionId}`;
-        fileInput.hidden = true;
-        fileInput.setAttribute("data-plot-upload-proxy", "true");
-        try {
-          const transfer = new DataTransfer();
-          transfer.items.add(
-            new File([record.blob], `plot-${record.questionId}.png`, { type: "image/png" }),
-          );
-          fileInput.files = transfer.files;
-        } catch (err) {
-          return;
+        if (!record || !record.questionId) return;
+        const blob = record.blob instanceof Blob ? record.blob : null;
+        const omitArtifact = !!blob && plotArtifactMaxBytes > 0 && blob.size > plotArtifactMaxBytes;
+        if (blob && !omitArtifact) {
+          const fileInput = document.createElement("input");
+          fileInput.type = "file";
+          fileInput.name = `plot_artifact_${record.questionId}`;
+          fileInput.hidden = true;
+          fileInput.setAttribute("data-plot-upload-proxy", "true");
+          try {
+            const transfer = new DataTransfer();
+            transfer.items.add(
+              new File([blob], `plot-${record.questionId}.png`, { type: "image/png" }),
+            );
+            fileInput.files = transfer.files;
+          } catch (err) {
+            return;
+          }
+          form.appendChild(fileInput);
+          injected = true;
         }
         const metaInput = document.createElement("input");
         metaInput.type = "hidden";
         metaInput.name = `plot_meta_${record.questionId}`;
-        metaInput.value = JSON.stringify({
+        const metaPayload = {
           status: record.status || "passed",
           stdout: record.stdout || "",
           error: record.error || "",
           code_snapshot: record.codeSnapshot || "",
           plot_count: record.plotCount || 1,
-        });
+        };
+        if (omitArtifact) {
+          metaPayload.artifact_status = "too_large";
+          metaPayload.artifact_size = blob.size || 0;
+        }
+        metaInput.value = JSON.stringify(metaPayload);
         metaInput.setAttribute("data-plot-upload-proxy", "true");
-        form.appendChild(fileInput);
         form.appendChild(metaInput);
         injected = true;
       });
@@ -1300,8 +1320,14 @@
         && typeof record.codeSnapshot === "string"
         && record.codeSnapshot === normalizedCurrentCode;
       const imageUrl = record ? (record.url || null) : null;
+      const artifactSize = record && record.blob ? (record.blob.size || 0) : (record && record.artifactSize ? record.artifactSize : 0);
+      const artifactTooLarge = !!record
+        && (
+          record.artifactStatus === "too_large"
+          || (plotArtifactMaxBytes > 0 && artifactSize > plotArtifactMaxBytes)
+        );
 
-      if (!record || (!record.blob && !imageUrl)) {
+      if (!record || (!record.blob && !imageUrl && !artifactTooLarge)) {
         revokePlotObjectUrl(questionId);
         plotRuntimeState.delete(questionId);
         preview.innerHTML = `<p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>`;
@@ -1322,45 +1348,49 @@
       if (record.updatedAt) {
         details.push(`Last run: ${record.updatedAt}`);
       }
+      if (artifactTooLarge) {
+        details.push(`PNG ${formatBytes(artifactSize)}; not stored on submit`);
+      }
       preview.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:8px;">
-          <img src="${nextState.objectUrl || nextState.url || ""}" alt="Latest plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">
+          ${nextState.objectUrl || nextState.url ? `<img src="${nextState.objectUrl || nextState.url || ""}" alt="Latest plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">` : ""}
           <div class="muted" style="font-size:0.85rem;">${details.join(" • ") || "Latest plot preview"}</div>
           ${record.stdout ? `<div><div class="muted">Stdout</div><pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">${escapeHtml(record.stdout)}</pre></div>` : ""}
           ${record.error ? `<div><div class="muted">Runner message</div><pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(record.error)}</pre></div>` : ""}
+          ${artifactTooLarge ? `<div style="font-size:0.85rem; color:#fbbf24;">This PNG exceeds ${plotArtifactMaxMb || "the"} MB limit. Submitting will keep the code but skip the image.</div>` : ""}
           ${isFresh ? `<div class="muted" style="font-size:0.85rem;">This preview matches the current code.</div>` : `<div style="font-size:0.85rem; color:#fbbf24;">Code changed since the last successful run. Run the plot again before submitting.</div>`}
         </div>
       `;
-      setPlotSummary(questionId, isFresh ? "Ready" : "Stale", isFresh ? "#4ade80" : "#fbbf24");
+      if (artifactTooLarge) {
+        setPlotSummary(questionId, isFresh ? "Code only" : "Stale", "#fbbf24");
+      } else {
+        setPlotSummary(questionId, isFresh ? "Ready" : "Stale", isFresh ? "#4ade80" : "#fbbf24");
+      }
     };
 
     const syncPlotPreviewFromCache = async (questionId) => {
       const area = root.querySelector(`[data-code-input="${questionId}"]`);
       const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+      const existingRecord = preview ? {
+        url: preview.dataset.existingUrl || "",
+        codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
+        stdout: preview.dataset.existingStdout || "",
+        error: preview.dataset.existingError || "",
+        updatedAt: preview.dataset.existingUpdatedAt || "",
+        plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
+        artifactStatus: preview.dataset.existingArtifactStatus || "",
+        artifactSize: parseInt(preview.dataset.existingArtifactSize || "0", 10) || 0,
+      } : null;
       if (!artifactNamespace) {
-        if (preview && preview.dataset.existingUrl) {
-          renderPlotPreview(questionId, {
-            url: preview.dataset.existingUrl,
-            codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
-            stdout: preview.dataset.existingStdout || "",
-            error: preview.dataset.existingError || "",
-            updatedAt: preview.dataset.existingUpdatedAt || "",
-            plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
-          }, area ? area.value : "");
+        if (existingRecord && (existingRecord.url || existingRecord.artifactStatus === "too_large")) {
+          renderPlotPreview(questionId, existingRecord, area ? area.value : "");
         }
         return;
       }
       const cached = await loadPlotArtifact(artifactNamespace, questionId);
       if (!cached) {
-        if (preview && preview.dataset.existingUrl) {
-          renderPlotPreview(questionId, {
-            url: preview.dataset.existingUrl,
-            codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
-            stdout: preview.dataset.existingStdout || "",
-            error: preview.dataset.existingError || "",
-            updatedAt: preview.dataset.existingUpdatedAt || "",
-            plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
-          }, area ? area.value : "");
+        if (existingRecord && (existingRecord.url || existingRecord.artifactStatus === "too_large")) {
+          renderPlotPreview(questionId, existingRecord, area ? area.value : "");
           return;
         }
         renderPlotPreview(questionId, null, area ? area.value : "");

@@ -12,6 +12,8 @@
       {% set plot_answer = answer if answer is mapping else None %}
       {% set plot_code = plot_answer.code if plot_answer and plot_answer.code is defined else answer_val %}
       {% set plot_artifact = plot_answer.artifact if plot_answer and plot_answer.artifact is defined and plot_answer.artifact is mapping else None %}
+      {% set plot_artifact_status = plot_answer.artifact_status if plot_answer and plot_answer.artifact_status is defined else '' %}
+      {% set plot_artifact_size = plot_answer.artifact_size if plot_answer and plot_answer.artifact_size is defined else 0 %}
       {% set qtype = q.type or q.get("type") %}
       {% set qlogs = logs_by_question.get(qid, []) %}
       {% set grading = grading_by_question.get(qid) if grading_by_question else None %}
@@ -125,6 +127,14 @@
                   {% endif %}
                   <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id, download=1) }}">Download PNG</a>
                 </div>
+              </div>
+            {% elif plot_artifact_status == "too_large" %}
+              <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+                <div class="muted" style="font-size:0.9rem;">No stored PNG</div>
+                <p class="muted" style="margin:0;">The generated PNG exceeded {{ plot_artifact_max_mb }} MB and was not stored. Review this submission from the code only.</p>
+                {% if plot_artifact_size %}
+                  <div class="muted" style="font-size:0.9rem;">Generated PNG size: {{ (plot_artifact_size // 1024) }} KB</div>
+                {% endif %}
               </div>
             {% else %}
               <p class="muted" style="margin-top:8px;">No plot artifact submitted.</p>

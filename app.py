@@ -354,9 +354,6 @@ TASK_RESOURCE_MAX_MB = 10
 TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
 PLOT_ARTIFACT_MAX_MB = 3
 PLOT_ARTIFACT_MAX_BYTES = PLOT_ARTIFACT_MAX_MB * 1024 * 1024
-PLOT_ARTIFACT_MAX_WIDTH = 1600
-PLOT_ARTIFACT_MAX_HEIGHT = 1200
-PLOT_ARTIFACT_MAX_PIXELS = 2_000_000
 PLOT_EXPORT_MAX_WIDTH_IN = 10.0
 PLOT_EXPORT_MAX_HEIGHT_IN = 7.5
 PLOT_EXPORT_DPI = 120
@@ -1382,29 +1379,25 @@ def _png_dimensions_from_bytes(data):
 
 def _save_plot_artifact_upload(scope, question_id, file_storage):
     if not file_storage:
-        return None, "Missing plot PNG."
+        return None, "Missing plot PNG.", None
     filename = file_storage.filename or ""
     if not filename:
-        return None, "No plot PNG was submitted."
+        return None, "No plot PNG was submitted.", None
     try:
         payload = file_storage.read(PLOT_ARTIFACT_MAX_BYTES + 1)
     except Exception:
-        return None, "Unable to read the uploaded plot."
+        return None, "Unable to read the uploaded plot.", None
     if not payload:
-        return None, "The uploaded plot is empty."
+        return None, "The uploaded plot is empty.", None
     if len(payload) > PLOT_ARTIFACT_MAX_BYTES:
-        return None, f"Plot PNG must be {PLOT_ARTIFACT_MAX_MB} MB or smaller."
+        return None, None, {
+            "artifact_status": "too_large",
+            "artifact_size": len(payload),
+        }
     dims = _png_dimensions_from_bytes(payload)
     if not dims:
-        return None, "Uploaded plot must be a valid PNG image."
+        return None, "Uploaded plot must be a valid PNG image.", None
     width, height = dims
-    if width > PLOT_ARTIFACT_MAX_WIDTH or height > PLOT_ARTIFACT_MAX_HEIGHT:
-        return None, (
-            f"Plot PNG dimensions must be at most "
-            f"{PLOT_ARTIFACT_MAX_WIDTH}x{PLOT_ARTIFACT_MAX_HEIGHT}."
-        )
-    if width * height > PLOT_ARTIFACT_MAX_PIXELS:
-        return None, "Plot PNG is too large."
 
     question_slug = secure_filename(str(question_id)) or "plot"
     stored_name = f"{uuid.uuid4().hex}_{question_slug}.png"
@@ -1434,7 +1427,7 @@ def _save_plot_artifact_upload(scope, question_id, file_storage):
         with open(full_path, "wb") as fh:
             fh.write(payload)
     except Exception:
-        return None, "Unable to save the plot PNG."
+        return None, "Unable to save the plot PNG.", None
     rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
     return {
         "original_name": "plot.png",
@@ -1445,7 +1438,7 @@ def _save_plot_artifact_upload(scope, question_id, file_storage):
         "content_type": "image/png",
         "width": width,
         "height": height,
-    }, None
+    }, None, None
 
 def _normalize_plot_code(value):
     text = _coerce_string(value)
@@ -1502,14 +1495,24 @@ def _parse_plot_submission_meta(raw_value):
         plot_count = 0
     if plot_count > 0:
         meta["plot_count"] = min(plot_count, 20)
+    artifact_status = _coerce_string(data.get("artifact_status")).strip().lower()
+    if artifact_status in {"too_large", "attached"}:
+        meta["artifact_status"] = artifact_status
+    try:
+        artifact_size = int(data.get("artifact_size") or 0)
+    except Exception:
+        artifact_size = 0
+    if artifact_size > 0:
+        meta["artifact_size"] = artifact_size
     return meta
 
 def _build_plot_answer_payload(code_text, artifact_info, meta, updated_at):
     payload = {
         "code": code_text,
-        "artifact": artifact_info,
         "updated_at": updated_at,
     }
+    if artifact_info:
+        payload["artifact"] = artifact_info
     if meta.get("status"):
         payload["status"] = meta["status"]
     if meta.get("stdout"):
@@ -1518,6 +1521,10 @@ def _build_plot_answer_payload(code_text, artifact_info, meta, updated_at):
         payload["error"] = meta["error"]
     if meta.get("plot_count"):
         payload["plot_count"] = meta["plot_count"]
+    if meta.get("artifact_status") and meta.get("artifact_status") != "attached":
+        payload["artifact_status"] = meta["artifact_status"]
+    if meta.get("artifact_size"):
+        payload["artifact_size"] = meta["artifact_size"]
     return payload
 
 def _collect_plot_submission_updates(questions, answers, request_files, request_form, plot_scope, strict_code_match=True):
@@ -1529,27 +1536,33 @@ def _collect_plot_submission_updates(questions, answers, request_files, request_
             continue
         qid = str(question.get("id"))
         upload = request_files.get(f"plot_artifact_{qid}")
-        if not (upload and getattr(upload, "filename", "")):
-            continue
         current_answer = answers.get(qid, "")
         code_text = _plot_answer_code(current_answer)
         existing_artifact = _plot_answer_artifact(current_answer)
         meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
+        has_upload = bool(upload and getattr(upload, "filename", ""))
+        if not has_upload and not meta:
+            continue
         code_snapshot = meta.get("code_snapshot")
         if strict_code_match and code_snapshot and code_snapshot != code_text:
             return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
-        artifact_info, error = _save_plot_artifact_upload(plot_scope, qid, upload)
-        if error:
-            return None, f"{_plot_label(question, idx)}: {error}"
-        if existing_artifact and existing_artifact != artifact_info:
+        artifact_info = None
+        if has_upload:
+            artifact_info, error, artifact_meta = _save_plot_artifact_upload(plot_scope, qid, upload)
+            if error:
+                return None, f"{_plot_label(question, idx)}: {error}"
+            if artifact_meta:
+                meta.update(artifact_meta)
+        elif meta.get("artifact_status") != "too_large":
+            continue
+        if existing_artifact and artifact_info and existing_artifact != artifact_info:
             _remove_uploaded_file(existing_artifact)
         payload_code = code_snapshot or code_text
         updates[qid] = _build_plot_answer_payload(payload_code, artifact_info, meta, now_iso)
     return updates, None
 
 def _preserve_plot_answer_metadata(code_text, existing_answer):
-    artifact = _plot_answer_artifact(existing_answer)
-    if artifact and code_text == _plot_answer_code(existing_answer):
+    if isinstance(existing_answer, dict) and code_text == _plot_answer_code(existing_answer):
         payload = dict(existing_answer)
         payload["code"] = code_text
         return payload
@@ -1577,16 +1590,14 @@ def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, requ
         prior_answer = persisted_answers.get(qid)
         code_text = _plot_answer_code(current_answer)
 
-        artifact_info = _plot_answer_artifact(current_answer)
-        if artifact_info and code_text == _plot_answer_code(current_answer):
+        if isinstance(current_answer, dict) and code_text == _plot_answer_code(current_answer):
             payload = dict(current_answer)
             payload["code"] = code_text
             payload.setdefault("updated_at", now_iso)
             prepared[qid] = payload
             continue
 
-        prior_artifact = _plot_answer_artifact(prior_answer)
-        if prior_artifact and code_text == _plot_answer_code(prior_answer):
+        if isinstance(prior_answer, dict) and code_text == _plot_answer_code(prior_answer):
             payload = dict(prior_answer)
             payload["code"] = code_text
             payload.setdefault("updated_at", now_iso)
@@ -1990,6 +2001,8 @@ def inject_csrf():
     return {
         "csrf_token": csrf_token,
         "student_unseen_announcements": unseen_announcements,
+        "plot_artifact_max_mb": PLOT_ARTIFACT_MAX_MB,
+        "plot_artifact_max_bytes": PLOT_ARTIFACT_MAX_BYTES,
     }
 
 # Markdown rendering helpers.

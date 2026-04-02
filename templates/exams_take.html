@@ -33,7 +33,7 @@
   {% endif %}
 </div>
 <div class="sp"></div>
-<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}" data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}">
+<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}" data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}" data-plot-artifact-max-bytes="{{ plot_artifact_max_bytes }}" data-plot-artifact-max-mb="{{ plot_artifact_max_mb }}">
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
@@ -266,6 +266,8 @@
           {% set editor_code = plot_code if has_saved_plot_code else current_starter %}
           {% set saved_plot_differs = has_saved_plot_code and editor_code != current_starter %}
           {% set plot_artifact = persisted_plot_data.artifact if persisted_plot_data and persisted_plot_data.artifact is defined and persisted_plot_data.artifact is mapping else None %}
+          {% set plot_artifact_status = persisted_plot_data.artifact_status if persisted_plot_data and persisted_plot_data.artifact_status is defined else '' %}
+          {% set plot_artifact_size = persisted_plot_data.artifact_size if persisted_plot_data and persisted_plot_data.artifact_size is defined else 0 %}
           {% set plot_preview_url = None %}
           {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
             {% set plot_preview_url = url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id) %}
@@ -281,7 +283,7 @@
                 {% endif %}
                 <div style="padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
                   <div class="muted" style="font-size:0.9rem;">Manual review task</div>
-                  <p class="muted" style="margin:6px 0 0 0;">Run the code to refresh the latest PNG preview. The current preview is uploaded only when you submit.</p>
+                  <p class="muted" style="margin:6px 0 0 0;">Run the code to refresh the latest PNG preview. The current preview is uploaded only when you submit. If the PNG exceeds {{ plot_artifact_max_mb }} MB, only the code is saved.</p>
                 </div>
               </div>
               <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
@@ -301,7 +303,7 @@
                 <div style="display:flex; align-items:center; gap:8px;">
                   <strong>Plot preview</strong>
                   <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-plot-summary="{{ q.id }}">
-                    {% if plot_preview_url %}Ready{% else %}Not run{% endif %}
+                    {% if plot_preview_url %}Ready{% elif plot_artifact_status == "too_large" %}Code only{% else %}Not run{% endif %}
                   </span>
                 </div>
                 <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
@@ -315,11 +317,13 @@
                 data-plot-preview="{{ q.id }}"
                 {% if plot_preview_url %}
                   data-existing-url="{{ plot_preview_url }}"
-                  data-existing-updated-at="{{ (persisted_plot_data.updated_at if persisted_plot_data and persisted_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
-                  data-existing-plot-count="{{ (persisted_plot_data.plot_count if persisted_plot_data and persisted_plot_data.plot_count is defined else 1)|e }}"
-                  data-existing-stdout="{{ (persisted_plot_data.stdout if persisted_plot_data and persisted_plot_data.stdout is defined else '')|e }}"
-                  data-existing-error="{{ (persisted_plot_data.error if persisted_plot_data and persisted_plot_data.error is defined else '')|e }}"
                 {% endif %}
+                data-existing-updated-at="{{ (persisted_plot_data.updated_at if persisted_plot_data and persisted_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
+                data-existing-plot-count="{{ (persisted_plot_data.plot_count if persisted_plot_data and persisted_plot_data.plot_count is defined else 1)|e }}"
+                data-existing-stdout="{{ (persisted_plot_data.stdout if persisted_plot_data and persisted_plot_data.stdout is defined else '')|e }}"
+                data-existing-error="{{ (persisted_plot_data.error if persisted_plot_data and persisted_plot_data.error is defined else '')|e }}"
+                data-existing-artifact-status="{{ plot_artifact_status|e }}"
+                data-existing-artifact-size="{{ plot_artifact_size|e }}"
                 style="margin-top:10px;"
               >
                 {% if plot_preview_url %}
@@ -334,6 +338,13 @@
                         • {{ persisted_plot_data.updated_at }}
                       {% endif %}
                     </div>
+                  </div>
+                {% elif plot_artifact_status == "too_large" %}
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <p class="muted" style="margin:0;">Latest run PNG exceeded {{ plot_artifact_max_mb }} MB and was not stored. The code was saved without an image.</p>
+                    {% if plot_artifact_size %}
+                      <div class="muted" style="font-size:0.85rem;">Generated PNG size: {{ (plot_artifact_size // 1024) }} KB</div>
+                    {% endif %}
                   </div>
                 {% else %}
                   <p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>
