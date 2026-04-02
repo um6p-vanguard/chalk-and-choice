@@ -1939,7 +1939,10 @@ for sample in samples:
 
         try:
             try:
-                _safe_exec(code, {"__name__": "__main__"}, {}, MAX_RUN_OPS)
+                # Use one shared namespace so top-level assignments/imports remain
+                # visible inside comprehensions and function bodies.
+                script_ns = {"__name__": "__main__"}
+                _safe_exec(code, script_ns, script_ns, MAX_RUN_OPS)
             except TimeLimitExceeded:
                 status = "timeout"
                 error_text = "Execution time limit exceeded."
