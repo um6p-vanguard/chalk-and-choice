@@ -125,8 +125,11 @@
         {% elif q.type == "code" %}
           {% set raw_samples = q.samples or [] %}
           {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
+          {% set current_starter = q.starter or "" %}
           {% set prior_code = previous_answers.get(q.id) %}
-          {% set starter = prior_code if prior_code else (q.starter or "") %}
+          {% set has_saved_code = prior_code not in (None, "") %}
+          {% set editor_code = prior_code if has_saved_code else current_starter %}
+          {% set saved_code_differs = has_saved_code and editor_code != current_starter %}
           <div class="code-question-shell">
             <div class="code-question-main">
               <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
@@ -158,9 +161,12 @@
               <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
-                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
                 </div>
-                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+                {% if saved_code_differs %}
+                  <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
+                {% endif %}
+                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
               </div>
             </div>
 
@@ -254,8 +260,11 @@
           {% set prior_plot_data = prior_plot if prior_plot is mapping else None %}
           {% set persisted_plot = (persisted_answers.get(q.id) if persisted_answers is defined and persisted_answers else None) %}
           {% set persisted_plot_data = persisted_plot if persisted_plot is mapping else None %}
+          {% set current_starter = q.starter or "" %}
           {% set plot_code = (prior_plot_data.code if prior_plot_data and prior_plot_data.code is defined else prior_plot) or "" %}
-          {% set starter = plot_code if plot_code else (q.starter or "") %}
+          {% set has_saved_plot_code = plot_code not in (None, "") %}
+          {% set editor_code = plot_code if has_saved_plot_code else current_starter %}
+          {% set saved_plot_differs = has_saved_plot_code and editor_code != current_starter %}
           {% set plot_artifact = persisted_plot_data.artifact if persisted_plot_data and persisted_plot_data.artifact is defined and persisted_plot_data.artifact is mapping else None %}
           {% set plot_preview_url = None %}
           {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
@@ -278,9 +287,12 @@
               <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: Python</div>
-                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
                 </div>
-                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+                {% if saved_plot_differs %}
+                  <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
+                {% endif %}
+                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
               </div>
             </div>
 
