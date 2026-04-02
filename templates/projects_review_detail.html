@@ -1,6 +1,10 @@
 {% extends "base.html" %}
+{% import "_judge_status.html" as judge_status %}
 {% import "_task_answers.html" as task_answers %}
 {% block content %}
+{% set judge_state = (active_attempt.judge_state if active_attempt and active_attempt.judge_state else submission.judge_state) %}
+{% set judge_verdict = (active_attempt.judge_verdict if active_attempt and active_attempt.judge_verdict else submission.judge_verdict) %}
+{% set judge_feedback = (active_attempt.judge_feedback if active_attempt and active_attempt.judge_feedback else submission.judge_feedback) %}
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
@@ -30,6 +34,15 @@
         <div style="margin-top:8px;">
           <span class="muted">Task resource:</span>
           <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+        </div>
+      {% endif %}
+      {% if task and task.task_kind != "tutorial" and (judge_state or judge_verdict or judge_feedback or judge_summary) %}
+        <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+          <strong>Hidden judge</strong>
+          <div style="margin-top:6px;">{{ judge_status.badge(submission.status, judge_state, judge_verdict, False) }}</div>
+          {% if judge_feedback %}
+            <div class="muted" style="margin-top:6px;">{{ judge_feedback }}</div>
+          {% endif %}
         </div>
       {% endif %}
     </div>

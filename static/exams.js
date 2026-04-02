@@ -440,14 +440,14 @@
       sampleHeader.style.justifyContent = "space-between";
       sampleHeader.style.alignItems = "center";
       sampleHeader.style.marginTop = "10px";
-      sampleHeader.innerHTML = `<strong>Samples</strong>
+      sampleHeader.innerHTML = `<strong>Public samples</strong>
         <button type="button" class="btn" data-action="add-sample">Add sample</button>`;
       card.appendChild(sampleHeader);
 
       const sampleHelper = document.createElement("p");
       sampleHelper.className = "muted";
       sampleHelper.style.marginTop = "-4px";
-      sampleHelper.textContent = "Provide sample cases and choose how each one should be compared.";
+      sampleHelper.textContent = "Provide public sample cases for the student-facing runner. Use hidden tests below for final judging.";
       card.appendChild(sampleHelper);
 
       const scriptSampleList = document.createElement("div");
@@ -479,6 +479,29 @@
         callableSampleList.appendChild(buildCallableSampleRow({}, data.mode || "function"));
       }
 
+      const hiddenTestsLabel = document.createElement("label");
+      hiddenTestsLabel.textContent = "Hidden tests JSON (optional)";
+      card.appendChild(hiddenTestsLabel);
+
+      const hiddenTestsField = document.createElement("textarea");
+      hiddenTestsField.rows = 10;
+      hiddenTestsField.dataset.field = "hidden-tests-json";
+      hiddenTestsField.placeholder = '[\n  {\n    "name": "large case",\n    "stdin_file": "cases/large.in",\n    "expected_file": "cases/large.out",\n    "timeout_ms": 1200\n  }\n]';
+      if (typeof data.hidden_tests_json === "string" && data.hidden_tests_json.trim()) {
+        hiddenTestsField.value = data.hidden_tests_json.trim();
+      } else if (Array.isArray(data.hidden_tests) && data.hidden_tests.length) {
+        hiddenTestsField.value = JSON.stringify(data.hidden_tests, null, 2);
+      } else {
+        hiddenTestsField.value = "";
+      }
+      card.appendChild(hiddenTestsField);
+
+      const hiddenTestsHelp = document.createElement("p");
+      hiddenTestsHelp.className = "muted";
+      hiddenTestsHelp.style.marginTop = "6px";
+      hiddenTestsHelp.textContent = "Private tests run only on final submit. Use stdin_file, expected_file, or mounted files when the task has a judge bundle ZIP.";
+      card.appendChild(hiddenTestsHelp);
+
       const updateModeUI = () => {
         const mode = modeField.value || "script";
         scriptSampleList.style.display = mode === "script" ? "flex" : "none";
@@ -487,10 +510,10 @@
         classSignatureWrap.style.display = mode === "class" ? "block" : "none";
         initWrap.style.display = mode === "class" ? "block" : "none";
         sampleHelper.textContent = mode === "script"
-          ? "Provide input/output pairs for script mode and choose a text comparison rule."
+          ? "Provide public input/output sample pairs for script mode and choose a text comparison rule."
           : mode === "class"
-            ? "Set the __init__ call once, then provide method calls or expressions that run against obj and choose how results are compared."
-            : "Provide function calls, expected returns, and the comparison rule for each sample.";
+            ? "Set the __init__ call once, then provide public method-call samples that run against obj and choose how results are compared."
+            : "Provide public function-call samples, expected returns, and the comparison rule for each sample.";
         callableSampleList.querySelectorAll("[data-sample-row]").forEach((row) => {
           setCallableSampleRowMode(row, mode);
         });
@@ -978,6 +1001,10 @@
         payload.mode = mode;
         payload.statement = getFieldValue(card, "statement");
         payload.starter = getFieldValue(card, "starter");
+        const hiddenTestsJson = getFieldValue(card, "hidden-tests-json");
+        if (String(hiddenTestsJson || "").trim()) {
+          payload.hidden_tests_json = hiddenTestsJson;
+        }
         if (mode === "function") {
           payload.function_signature = getFieldValue(card, "function-signature");
           const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');

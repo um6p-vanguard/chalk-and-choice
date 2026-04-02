@@ -1,5 +1,5 @@
 import argparse, json, secrets, string
-from app import create_app
+from app import create_app, run_judge_worker
 from models import db, User, Student
 
 def rand_password(n=10):
@@ -64,12 +64,20 @@ def seed_users(app, json_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("cmd", choices=["seed-students","seed-users"])
-    parser.add_argument("json_path")
+    parser.add_argument("cmd", choices=["seed-students", "seed-users", "judge-worker", "judge-once"])
+    parser.add_argument("json_path", nargs="?")
+    parser.add_argument("--poll-seconds", type=float, default=2.0)
     args = parser.parse_args()
 
     app = create_app()
     if args.cmd == "seed-students":
+        if not args.json_path:
+            parser.error("seed-students requires json_path")
         seed_students(app, args.json_path)
-    else:
+    elif args.cmd == "seed-users":
+        if not args.json_path:
+            parser.error("seed-users requires json_path")
         seed_users(app, args.json_path)
+    else:
+        with app.app_context():
+            run_judge_worker(poll_seconds=args.poll_seconds, once=(args.cmd == "judge-once"))

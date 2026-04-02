@@ -1,25 +1,18 @@
 {% extends "base.html" %}
+{% import "_judge_status.html" as judge_status %}
 {% import "_task_answers.html" as task_answers %}
 {% block content %}
+{% set is_tutorial = task and task.task_kind == "tutorial" %}
+{% set judge_state = (latest_attempt.judge_state if latest_attempt and latest_attempt.judge_state else submission.judge_state) %}
+{% set judge_verdict = (latest_attempt.judge_verdict if latest_attempt and latest_attempt.judge_verdict else submission.judge_verdict) %}
+{% set judge_feedback = (latest_attempt.judge_feedback if latest_attempt and latest_attempt.judge_feedback else submission.judge_feedback) %}
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
       <h3 style="margin:0;">{{ task.title }}</h3>
       <p class="muted" style="margin:4px 0;">Project: {{ project.title }} ({{ project.code }})</p>
       <p class="muted" style="margin:4px 0;">Student: {{ student.name or "Unknown" }} — {{ student.email or "No email" }}</p>
-      <p class="muted" style="margin:4px 0;">Status:
-        {% if submission.status == "accepted" %}
-          <span style="color:#4ade80;">{{ "Read" if task and task.task_kind == "tutorial" else "Accepted" }}</span>
-        {% elif submission.status == "pending_review" %}
-          <span style="color:#fde047;">Pending review</span>
-        {% elif submission.status == "rejected" %}
-          <span style="color:#f87171;">Needs rework</span>
-        {% elif submission.status == "submitted" %}
-          <span style="color:#38bdf8;">Submitted</span>
-        {% else %}
-          <span class="muted">In progress</span>
-        {% endif %}
-      </p>
+      <p class="muted" style="margin:4px 0;">Status: {{ judge_status.badge(submission.status, judge_state, judge_verdict, is_tutorial) }}</p>
       <p class="muted" style="margin:4px 0;">
         Submitted: {{ submission.submitted_at.strftime("%b %d %H:%M") if submission.submitted_at else "—" }} •
         Last activity: {{ submission.last_activity_at.strftime("%b %d %H:%M") if submission.last_activity_at else "—" }}
@@ -34,6 +27,25 @@
         <div style="margin-top:8px;">
           <span class="muted">Tutorial markdown:</span>
           <a class="btn" href="{{ url_for('project_task_tutorial_download', task_id=task.id) }}">Download</a>
+        </div>
+      {% endif %}
+      {% if not is_tutorial and (judge_state or judge_verdict or judge_feedback or judge_summary) %}
+        <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+          <strong>Hidden judge</strong>
+          <div style="margin-top:6px;">{{ judge_status.badge(submission.status, judge_state, judge_verdict, False) }}</div>
+          {% if judge_feedback %}
+            <div class="muted" style="margin-top:6px;">{{ judge_feedback }}</div>
+          {% endif %}
+          {% if judge_summary and judge_summary.question_summaries and judge_summary.question_summaries|length > 1 %}
+            <div class="muted" style="margin-top:8px;">Per-question results</div>
+            <ul style="margin:6px 0 0 18px;">
+              {% for item in judge_summary.question_summaries %}
+                {% if item.feedback %}
+                  <li>{{ item.feedback }}</li>
+                {% endif %}
+              {% endfor %}
+            </ul>
+          {% endif %}
         </div>
       {% endif %}
       {% set review_notes = "" %}
@@ -101,12 +113,18 @@
           <span class="muted" style="margin-left:8px;">
             {{ attempt.submitted_at.strftime("%b %d %H:%M") if attempt.submitted_at else "—" }}
           </span>
-          <span class="muted" style="margin-left:8px;">Status: {{ attempt.status }}</span>
+          <span class="muted" style="margin-left:8px;">Status: {{ judge_status.badge(attempt.status, attempt.judge_state, attempt.judge_verdict, is_tutorial) }}</span>
           <span class="muted" style="margin-left:8px;">Score: {{ "%.1f"|format(attempt.score or 0) }} / {{ "%.1f"|format(attempt.max_score or 0) }}</span>
           {% if attempt.reviewer %}
             <span class="muted" style="margin-left:8px;">Reviewed by {{ attempt.reviewer.name }}</span>
           {% endif %}
         </summary>
+        {% if row.judge_summary and row.judge_summary.feedback %}
+          <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+            <strong>Judge summary</strong>
+            <p class="muted" style="margin:6px 0 0 0;">{{ row.judge_summary.feedback }}</p>
+          </div>
+        {% endif %}
         {% if attempt.review_notes %}
           <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
             <strong>Reviewer notes</strong>

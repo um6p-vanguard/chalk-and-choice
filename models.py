@@ -394,6 +394,7 @@ class ProjectTask(db.Model):
     instructions = db.Column(db.Text, nullable=True)
     questions_json = db.Column(JSONText, nullable=False)
     resource_file = db.Column(JSONText, nullable=True)
+    judge_bundle_file = db.Column(JSONText, nullable=True)
     required = db.Column(db.Boolean, nullable=False, default=True)
     auto_grade = db.Column(db.Boolean, nullable=False, default=True)
     requires_review = db.Column(db.Boolean, nullable=False, default=False)
@@ -419,6 +420,10 @@ class ProjectTaskSubmission(db.Model):
     score = db.Column(db.Float, default=0.0, nullable=False)
     max_score = db.Column(db.Float, default=0.0, nullable=False)
     review_notes = db.Column(db.Text, nullable=True)
+    judge_state = db.Column(db.String(32), nullable=True)
+    judge_verdict = db.Column(db.String(64), nullable=True)
+    judge_feedback = db.Column(db.Text, nullable=True)
+    judge_summary_json = db.Column(JSONText, nullable=True)
 
     task = db.relationship('ProjectTask', backref=db.backref('submissions', cascade="all,delete-orphan"))
     project = db.relationship('Project')
@@ -443,6 +448,10 @@ class ProjectTaskAttempt(db.Model):
     reviewed_at = db.Column(db.DateTime, nullable=True)
     reviewed_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
     review_notes = db.Column(db.Text, nullable=True)
+    judge_state = db.Column(db.String(32), nullable=True)
+    judge_verdict = db.Column(db.String(64), nullable=True)
+    judge_feedback = db.Column(db.Text, nullable=True)
+    judge_summary_json = db.Column(JSONText, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
     submission = db.relationship(
@@ -454,3 +463,29 @@ class ProjectTaskAttempt(db.Model):
     __table_args__ = (
         UniqueConstraint('submission_id', 'attempt_number', name='uq_project_task_attempt_number'),
     )
+
+
+class JudgeJob(db.Model):
+    __tablename__ = "judge_jobs"
+    id = db.Column(db.Integer, primary_key=True)
+    submission_id = db.Column(db.Integer, db.ForeignKey('project_task_submissions.id', ondelete="CASCADE"), index=True, nullable=False)
+    attempt_id = db.Column(db.Integer, db.ForeignKey('project_task_attempts.id', ondelete="CASCADE"), index=True, nullable=False)
+    task_id = db.Column(db.Integer, db.ForeignKey('project_tasks.id', ondelete="CASCADE"), index=True, nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="SET NULL"), index=True, nullable=True)
+    status = db.Column(db.String(32), nullable=False, default="queued")  # queued|running|done|failed
+    payload_json = db.Column(JSONText, nullable=True)
+    error_text = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+    submission = db.relationship(
+        'ProjectTaskSubmission',
+        backref=db.backref('judge_jobs', cascade="all,delete-orphan", order_by="JudgeJob.created_at.desc()"),
+    )
+    attempt = db.relationship(
+        'ProjectTaskAttempt',
+        backref=db.backref('judge_jobs', cascade="all,delete-orphan", order_by="JudgeJob.created_at.desc()"),
+    )
+    task = db.relationship('ProjectTask')
+    student = db.relationship('Student')

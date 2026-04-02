@@ -57,6 +57,22 @@
       </div>
     {% endif %}
 
+    <label>Judge bundle ZIP (optional)</label>
+    <input type="file" name="judge_bundle_file" accept=".zip,application/zip">
+    <p class="muted" style="margin-top:-4px;">Private ZIP used only for hidden code tests. Upload it when a hidden test references <code>stdin_file</code>, <code>expected_file</code>, or mounted <code>files</code>. Uploading a new ZIP replaces the existing one.</p>
+    {% if task and task.judge_bundle_file %}
+      <div style="margin-top:8px; padding:10px; border:1px dashed #334155; border-radius:10px;">
+        <strong>Current judge bundle</strong>
+        <div class="row" style="gap:8px; align-items:center; margin-top:6px;">
+          <span>{{ task.judge_bundle_file.original_name or task.judge_bundle_file.stored_name or "judge_bundle.zip" }}</span>
+          {% if task.judge_bundle_file.size %}
+            <span class="muted">({{ (task.judge_bundle_file.size // 1024) }} KB)</span>
+          {% endif %}
+          <a class="btn" href="{{ url_for('project_task_judge_bundle_download', task_id=task.id) }}">Download</a>
+        </div>
+      </div>
+    {% endif %}
+
     <div class="row" style="gap:12px; flex-wrap:wrap;">
       <label style="display:flex; align-items:center; gap:6px; margin-top:12px;">
         <input type="checkbox" name="required" value="1" {% if form_data.required %}checked{% endif %}>

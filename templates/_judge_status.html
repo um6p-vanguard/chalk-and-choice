@@ -1,0 +1,61 @@
+{% macro badge(status, judge_state=None, judge_verdict=None, is_tutorial=False) %}
+  {% set label = "Unread" if is_tutorial else "Not started" %}
+  {% set color = None %}
+  {% set muted = True %}
+  {% if judge_state == "queued" %}
+    {% set label = "Queued for hidden tests" %}
+    {% set color = "#38bdf8" %}
+    {% set muted = False %}
+  {% elif judge_state == "running" %}
+    {% set label = "Judging hidden tests" %}
+    {% set color = "#38bdf8" %}
+    {% set muted = False %}
+  {% elif judge_state == "failed" or judge_verdict == "judge_error" %}
+    {% set label = "Judge error" %}
+    {% set color = "#f59e0b" %}
+    {% set muted = False %}
+  {% elif status == "accepted" %}
+    {% set label = "Read" if is_tutorial else "Accepted" %}
+    {% set color = "#4ade80" %}
+    {% set muted = False %}
+  {% elif status == "pending_review" %}
+    {% set label = "Pending mentor review" %}
+    {% set color = "#fde047" %}
+    {% set muted = False %}
+  {% elif status == "submitted" %}
+    {% set label = "Submitted" %}
+    {% set color = "#38bdf8" %}
+    {% set muted = False %}
+  {% elif status == "rejected" %}
+    {% if judge_verdict == "wrong_answer" %}
+      {% set label = "Wrong answer" %}
+    {% elif judge_verdict == "time_limit_exceeded" %}
+      {% set label = "Time limit exceeded" %}
+    {% elif judge_verdict == "runtime_error" %}
+      {% set label = "Runtime error" %}
+    {% else %}
+      {% set label = "Needs rework" %}
+    {% endif %}
+    {% set color = "#f87171" %}
+    {% set muted = False %}
+  {% elif status == "in_progress" %}
+    {% set label = "In progress" %}
+  {% endif %}
+  {% if muted %}
+    <span class="muted">{{ label }}</span>
+  {% else %}
+    <span style="color:{{ color }};">{{ label }}</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro notes(judge_feedback=None, reviewer_name=None, review_notes=None) %}
+  {% if judge_feedback %}
+    <div class="muted" style="margin-top:4px;">{{ judge_feedback }}</div>
+  {% endif %}
+  {% if reviewer_name %}
+    <div class="muted" style="margin-top:4px;">Reviewed by {{ reviewer_name }}</div>
+  {% endif %}
+  {% if review_notes and review_notes != judge_feedback %}
+    <div class="muted" style="margin-top:4px; white-space:pre-line;">{{ review_notes }}</div>
+  {% endif %}
+{% endmacro %}

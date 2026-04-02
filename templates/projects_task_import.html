@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:center;">
     <div>
       <h3 style="margin:0;">Import tasks for {{ project.title }}</h3>
-      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer supports read-only tutorial tasks, script/function/class code questions, manual-review plot questions, markdown-formatted text fields, and per-sample comparison rules such as whitespace normalization, substring checks, and numeric tolerance.</p>
+      <p class="muted" style="margin-top:6px;">Paste a JSON document that defines one or more tasks. Existing tasks remain unchanged. The importer supports tutorial tasks, script/function/class code questions, public samples, hidden submit-time tests, per-case time limits, file-backed judge bundles, plot/manual-review questions, and markdown-formatted text fields.</p>
     </div>
     <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back</a>
   </div>
@@ -14,14 +14,18 @@
   {% if error %}
     <p class="text-danger">{{ error }}</p>
   {% endif %}
-  <form method="post">
+  <form method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <label>Task JSON</label>
     <textarea name="payload" rows="20" style="width:100%; font-family:ui-monospace;" required>{{ payload }}</textarea>
     <p class="muted" style="margin-top:6px;">Top-level shape: <code>{"tasks": [...]}</code>. The importer also accepts a few aliases such as <code>project_tasks</code>, <code>items</code>, <code>choices</code>, <code>tests</code>, <code>function_call</code>, and <code>method_call</code>.</p>
     <p class="muted" style="margin-top:6px;">Use <code>"task_kind": "tutorial"</code> for read-only lessons. Tutorial tasks should contain markdown in <code>instructions</code> or <code>tutorial_markdown</code> and should not define any questions.</p>
-    <p class="muted" style="margin-top:6px;">Code samples can also set <code>compare_mode</code>. Function/class samples may set <code>tolerance</code> when <code>compare_mode</code> is <code>numeric_tolerance</code>.</p>
+    <p class="muted" style="margin-top:6px;">Public code samples belong in <code>tests</code> or <code>samples</code>. Private submit-time judge cases belong in <code>hidden_tests</code>. Hidden tests can use inline <code>stdin</code>/<code>expected_stdout</code> or file-backed <code>stdin_file</code>, <code>expected_file</code>, and mounted <code>files</code>.</p>
+    <p class="muted" style="margin-top:6px;">Code samples can also set <code>compare_mode</code>. Function/class samples may set <code>tolerance</code> when <code>compare_mode</code> is <code>numeric_tolerance</code>. Hidden tests may also set <code>timeout_ms</code>.</p>
     <p class="muted" style="margin-top:6px;">Text fields support Markdown. Because this is JSON, write line breaks as <code>\n</code> and blank lines as <code>\n\n</code> inside the string value.</p>
+    <label style="margin-top:12px;">Judge bundle ZIP (optional)</label>
+    <input type="file" name="judge_bundle_file" accept=".zip,application/zip">
+    <p class="muted" style="margin-top:6px;">Upload a private ZIP when imported hidden tests reference <code>stdin_file</code>, <code>expected_file</code>, or mounted <code>files</code>. During import, that ZIP is copied to each imported task that needs it.</p>
     <pre class="code-block" style="max-height:180px; overflow:auto;">{
   "prompt": "Read the instructions carefully.\\n\\n- Use a loop\\n- Print one result per line",
   "problem_statement": "Starter shape:\\n```python\\ndef solve():\\n    pass\\n```"
@@ -47,7 +51,9 @@
       <p class="muted" style="margin-top:6px;">Set <code>task_kind</code> to <code>tutorial</code> and put the lesson in <code>instructions</code> or <code>tutorial_markdown</code>. Students complete it by opening it, so no questions are needed.</p>
       <strong>4. Add sample comparisons</strong>
       <p class="muted" style="margin-top:6px;"><code>script</code> samples accept <code>rstrip</code>, <code>exact</code>, <code>normalize_whitespace</code>, and <code>contains</code>. Callable samples accept <code>exact</code>, <code>contains</code>, and <code>numeric_tolerance</code>.</p>
-      <strong>5. Use tolerance only for numeric values</strong>
+      <strong>5. Use hidden tests for final judging</strong>
+      <p class="muted" style="margin-top:6px;">Put Codeforces-style final checks in <code>hidden_tests</code>. Use inline inputs for small private cases and upload a judge ZIP for large file-backed cases. Hidden tests run only on submit, not in the public sample runner.</p>
+      <strong>6. Use tolerance only for numeric values</strong>
       <p class="muted" style="margin-top:6px;">When you use <code>numeric_tolerance</code>, provide a literal numeric expected value or array plus a non-negative <code>tolerance</code>, such as <code>1e-6</code>.</p>
     </div>
   </div>
@@ -77,11 +83,12 @@
       <button type="button" class="btn" data-load-starter="tutorial">Load tutorial starter</button>
       <button type="button" class="btn" data-load-starter="class_code">Load class code starter</button>
       <button type="button" class="btn" data-load-starter="comparison">Load comparison starter</button>
+      <button type="button" class="btn" data-load-starter="hidden_judge">Load hidden judge starter</button>
       <button type="button" class="btn" data-load-starter="plot">Load plot starter</button>
       <button type="button" class="btn" data-load-starter="formatting">Load formatting starter</button>
     </div>
   </div>
-  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The tutorial starter demonstrates read-only markdown content. The comparison starter demonstrates <code>compare_mode</code> and <code>tolerance</code>. The formatting starter demonstrates escaped <code>\n</code> line breaks and markdown rendering inside imported JSON.</p>
+  <p class="muted" style="margin-top:6px;">These are pasteable payloads that already match the importer. The tutorial starter demonstrates read-only markdown content. The comparison starter demonstrates <code>compare_mode</code> and <code>tolerance</code>. The hidden judge starter demonstrates <code>hidden_tests</code>, <code>timeout_ms</code>, and file-backed judge cases. The formatting starter demonstrates escaped <code>\n</code> line breaks and markdown rendering inside imported JSON.</p>
   <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:12px;">
     <div>
       <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
@@ -113,6 +120,13 @@
     </div>
     <div>
       <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
+        <strong>Hidden judge starter</strong>
+        <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='hidden_judge') }}">Download</a>
+      </div>
+      <pre class="code-block" style="max-height:260px; overflow:auto;">{{ starter_payloads.hidden_judge }}</pre>
+    </div>
+    <div>
+      <div class="row" style="justify-content:space-between; align-items:center; gap:8px;">
         <strong>Plot starter</strong>
         <a class="btn" href="{{ url_for('projects_tasks_example_download', example_name='plot') }}">Download</a>
       </div>
@@ -130,7 +144,7 @@
 <div class="sp"></div>
 <div class="card">
   <h3 style="margin:0;">Import Reference</h3>
-  <p class="muted" style="margin-top:6px;">Verbose schema and examples for humans or LLMs generating task JSON. It includes accepted aliases, markdown/newline rules, per-question guidance, code-mode examples, and the supported comparison options for imported code samples.</p>
+  <p class="muted" style="margin-top:6px;">Verbose schema and examples for humans or LLMs generating task JSON. It includes accepted aliases, markdown/newline rules, per-question guidance, code-mode examples, public sample comparison rules, and the hidden-test fields supported by the private judge.</p>
   <pre class="code-block" style="max-height:320px; overflow:auto;">{{ schema_json }}</pre>
 </div>
 {% endblock %}
@@ -144,6 +158,7 @@
     tutorial: {{ starter_payloads.tutorial|tojson }},
     class_code: {{ starter_payloads.class_code|tojson }},
     comparison: {{ starter_payloads.comparison|tojson }},
+    hidden_judge: {{ starter_payloads.hidden_judge|tojson }},
     plot: {{ starter_payloads.plot|tojson }},
     formatting: {{ starter_payloads.formatting|tojson }},
   };

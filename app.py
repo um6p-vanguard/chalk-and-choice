@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct, tempfile, shutil, zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
@@ -22,7 +22,7 @@ except Exception:
 from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
-                    Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
+                    Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency, JudgeJob,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession,
                     Announcement, AnnouncementDelivery,
@@ -115,6 +115,24 @@ def _serialize_project_task_resource_export(resource_file):
         return None
     payload = {
         "original_name": info.get("original_name") or info.get("stored_name") or "resource",
+        "included_in_export": False,
+    }
+    if info.get("size") is not None:
+        payload["size"] = info.get("size")
+    content_type = _coerce_string(info.get("content_type")).strip()
+    if content_type:
+        payload["content_type"] = content_type
+    uploaded_at = _coerce_string(info.get("uploaded_at")).strip()
+    if uploaded_at:
+        payload["uploaded_at"] = uploaded_at
+    return payload
+
+def _serialize_project_task_judge_bundle_export(judge_bundle_file):
+    info = _extract_file_info(judge_bundle_file)
+    if not info:
+        return None
+    payload = {
+        "original_name": info.get("original_name") or info.get("stored_name") or "judge_bundle.zip",
         "included_in_export": False,
     }
     if info.get("size") is not None:
@@ -238,6 +256,45 @@ def _serialize_project_question_export(question):
                     item["tolerance"] = sample.get("tolerance")
             tests.append(item)
         payload["tests"] = tests
+        hidden_tests = []
+        for sample in question.get("hidden_tests") or []:
+            if not isinstance(sample, dict):
+                continue
+            item = {
+                "name": _coerce_string(sample.get("name")).strip() or "Hidden test",
+            }
+            compare_mode = _coerce_string(sample.get("compare_mode")).strip()
+            if compare_mode:
+                item["compare_mode"] = compare_mode
+            if sample.get("timeout_ms") is not None:
+                item["timeout_ms"] = sample.get("timeout_ms")
+            if sample.get("tolerance") is not None:
+                item["tolerance"] = sample.get("tolerance")
+            if sample.get("files"):
+                item["files"] = sample.get("files")
+            if sample.get("stdin_file"):
+                item["stdin_file"] = sample.get("stdin_file")
+            if sample.get("expected_file"):
+                item["expected_file"] = sample.get("expected_file")
+            if mode == "script":
+                if sample.get("input"):
+                    item["stdin"] = sample.get("input")
+                if sample.get("output"):
+                    item["expected_stdout"] = sample.get("output")
+            elif mode == "function":
+                item["function_call"] = _coerce_string(sample.get("call") or sample.get("input")).strip()
+                if sample.get("expected") not in (None, ""):
+                    item["expected_return"] = _export_code_expected(sample.get("expected"))
+            else:
+                item["method_call"] = _coerce_string(sample.get("call") or sample.get("input")).strip()
+                if sample.get("expected") not in (None, ""):
+                    item["expected_return"] = _export_code_expected(sample.get("expected"))
+                sample_init = _coerce_string(sample.get("init_call")).strip()
+                if sample_init and sample_init != class_init:
+                    item["init_call"] = sample_init
+            hidden_tests.append(item)
+        if hidden_tests:
+            payload["hidden_tests"] = hidden_tests
     return payload
 
 def _serialize_project_task_export(task):
@@ -258,6 +315,9 @@ def _serialize_project_task_export(task):
     resource_file = _serialize_project_task_resource_export(task.resource_file)
     if resource_file:
         payload["resource_file"] = resource_file
+    judge_bundle_file = _serialize_project_task_judge_bundle_export(task.judge_bundle_file)
+    if judge_bundle_file:
+        payload["judge_bundle_file"] = judge_bundle_file
     return payload
 
 def _project_task_download_basename(project, task):
@@ -352,6 +412,10 @@ UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
 TASK_RESOURCE_MAX_MB = 10
 TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
+JUDGE_BUNDLE_MAX_MB = 25
+JUDGE_BUNDLE_MAX_BYTES = JUDGE_BUNDLE_MAX_MB * 1024 * 1024
+JUDGE_BUNDLE_MAX_EXTRACT_MB = 100
+JUDGE_BUNDLE_MAX_EXTRACT_BYTES = JUDGE_BUNDLE_MAX_EXTRACT_MB * 1024 * 1024
 PLOT_ARTIFACT_MAX_MB = 3
 PLOT_ARTIFACT_MAX_BYTES = PLOT_ARTIFACT_MAX_MB * 1024 * 1024
 PLOT_ARTIFACT_MAX_WIDTH = 1600
@@ -362,6 +426,7 @@ PLOT_EXPORT_MAX_HEIGHT_IN = 7.5
 PLOT_EXPORT_DPI = 120
 LOG_SESSION_GAP_SEC = 10 * 60
 LOG_ACTIVITY_UPDATE_SEC = 60
+JUDGE_WORKER_POLL_SEC = 2.0
 
 # Warning system configuration
 WARNING_SPEED_THRESHOLD_SEC = 60  # Completing task in less than this triggers warning
@@ -607,6 +672,174 @@ def _validate_numeric_tolerance_expected(expected_text):
     except Exception:
         raise ValueError("Numeric tolerance comparison requires a literal expected value.")
 
+def _coerce_timeout_ms(value):
+    if value in (None, ""):
+        return None
+    try:
+        timeout_ms = int(float(value))
+    except Exception:
+        raise ValueError("timeout_ms must be a positive integer.")
+    if timeout_ms <= 0:
+        raise ValueError("timeout_ms must be a positive integer.")
+    return timeout_ms
+
+def _parse_json_list(value, field_name):
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be valid JSON: {exc}")
+        if parsed in (None, ""):
+            return []
+        if not isinstance(parsed, list):
+            raise ValueError(f"{field_name} must be a JSON array.")
+        return parsed
+    raise ValueError(f"{field_name} must be a JSON array.")
+
+def _normalize_hidden_test_files(value):
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        raw_items = _parse_json_list(value, "Hidden test files")
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raise ValueError("Hidden test files must be a list.")
+    files = []
+    for idx, item in enumerate(raw_items, start=1):
+        if isinstance(item, str):
+            source = _coerce_string(item).strip()
+            target = os.path.basename(source)
+        elif isinstance(item, dict):
+            source = _coerce_string(_first_present(item, "source", "src", "path", "bundle_path")).strip()
+            target = _coerce_string(_first_present(item, "target", "dest", "mount_as", "name")).strip() or os.path.basename(source)
+        else:
+            raise ValueError(f"Hidden test file #{idx} must be an object or string path.")
+        if not source:
+            raise ValueError(f"Hidden test file #{idx} is missing a source path.")
+        if not target:
+            raise ValueError(f"Hidden test file #{idx} is missing a target path.")
+        files.append({"source": source, "target": target})
+    return files
+
+def _normalize_hidden_code_tests(raw_tests, mode, class_init=None):
+    tests_raw = _parse_json_list(raw_tests, "hidden_tests")
+    normalized = []
+    sample_kind = "script" if mode == "script" else "callable"
+    for idx, test in enumerate(tests_raw, start=1):
+        if not isinstance(test, dict):
+            raise ValueError(f"Hidden test #{idx} must be an object.")
+        name = _coerce_string(_first_present(test, "name", "label")).strip() or f"Hidden test {idx}"
+        compare_mode, tolerance = _sample_compare_settings(test, sample_kind)
+        normalized_test = {
+            "name": name,
+            "hidden": True,
+            "compare_mode": compare_mode,
+            "files": _normalize_hidden_test_files(_first_present(test, "files", "support_files", "mounted_files")),
+        }
+        timeout_ms = _coerce_timeout_ms(_first_present(test, "timeout_ms", "timeout", "time_limit_ms"))
+        if timeout_ms is not None:
+            normalized_test["timeout_ms"] = timeout_ms
+        if tolerance is not None:
+            normalized_test["tolerance"] = tolerance
+
+        stdin_file = _coerce_string(_first_present(test, "stdin_file", "input_file")).strip()
+        expected_file = _coerce_string(_first_present(test, "expected_file", "output_file", "expected_file_path")).strip()
+        if stdin_file:
+            normalized_test["stdin_file"] = stdin_file
+        if expected_file:
+            normalized_test["expected_file"] = expected_file
+
+        if mode == "script":
+            input_text = _coerce_string(_first_present(test, "input", "stdin"))
+            output_text = _coerce_string(_first_present(test, "output", "expected_stdout", "expected"))
+            if input_text:
+                normalized_test["input"] = input_text
+            if output_text:
+                normalized_test["output"] = output_text
+            if not input_text and not stdin_file and not normalized_test["files"]:
+                normalized_test["input"] = ""
+        elif mode == "function":
+            call_expr = _coerce_string(_first_present(test, "call", "function_call", "expression", "input")).strip()
+            expected = _coerce_code_expected(_first_present(test, "expected", "expected_return", "expected_result", "output"))
+            if not call_expr:
+                raise ValueError(f"{name}: function hidden tests need a call expression.")
+            normalized_test["call"] = call_expr
+            normalized_test["input"] = call_expr
+            if expected:
+                normalized_test["expected"] = expected
+            if compare_mode == "numeric_tolerance" and not expected and not expected_file:
+                raise ValueError(f"{name}: numeric tolerance hidden tests need an expected value.")
+            if compare_mode == "numeric_tolerance" and expected:
+                _validate_numeric_tolerance_expected(expected)
+        else:
+            call_expr = _coerce_string(_first_present(test, "call", "method_call", "expression", "input")).strip()
+            expected = _coerce_code_expected(_first_present(test, "expected", "expected_return", "expected_result", "output"))
+            init_call = _coerce_string(_first_present(test, "init_call", "constructor_call", "object_initializer")).strip() or _coerce_string(class_init).strip()
+            if not call_expr:
+                raise ValueError(f"{name}: class hidden tests need a method call or expression.")
+            if not init_call:
+                raise ValueError(f"{name}: class hidden tests need an init_call or task-level class_init.")
+            normalized_test["call"] = call_expr
+            normalized_test["input"] = call_expr
+            normalized_test["init_call"] = init_call
+            if expected:
+                normalized_test["expected"] = expected
+            if compare_mode == "numeric_tolerance" and not expected and not expected_file:
+                raise ValueError(f"{name}: numeric tolerance hidden tests need an expected value.")
+            if compare_mode == "numeric_tolerance" and expected:
+                _validate_numeric_tolerance_expected(expected)
+        normalized.append(normalized_test)
+    return normalized
+
+def _code_question_hidden_tests(question):
+    if not isinstance(question, dict) or question.get("type") != "code":
+        return []
+    hidden_tests = []
+    for test in question.get("hidden_tests") or []:
+        if isinstance(test, dict):
+            item = dict(test)
+            item["hidden"] = True
+            hidden_tests.append(item)
+    for sample in question.get("samples") or []:
+        if isinstance(sample, dict) and sample.get("hidden"):
+            item = dict(sample)
+            item["hidden"] = True
+            hidden_tests.append(item)
+    return hidden_tests
+
+def _code_question_has_hidden_tests(question):
+    return bool(_code_question_hidden_tests(question))
+
+def _hidden_test_requires_bundle(test):
+    if not isinstance(test, dict):
+        return False
+    if _coerce_string(test.get("stdin_file")).strip():
+        return True
+    if _coerce_string(test.get("expected_file")).strip():
+        return True
+    return bool(test.get("files"))
+
+def _questions_require_judge_bundle(questions):
+    if not isinstance(questions, list):
+        return False
+    for question in questions:
+        for test in _code_question_hidden_tests(question):
+            if _hidden_test_requires_bundle(test):
+                return True
+    return False
+
+def _task_has_async_hidden_judge(task_or_questions):
+    if isinstance(task_or_questions, list):
+        questions = task_or_questions
+    else:
+        questions = task_or_questions.questions_json if task_or_questions and isinstance(task_or_questions.questions_json, list) else []
+    return any(_code_question_has_hidden_tests(question) for question in questions)
+
 def _extract_choice_options(value):
     options = []
     implied_correct = []
@@ -800,6 +1033,58 @@ def _build_project_tasks_schema():
             }
         ]
     }
+    hidden_judge_payload = {
+        "tasks": [
+            {
+                "title": "Large input sum",
+                "description": "Script-mode problem with public samples plus hidden tests judged from a private ZIP bundle.",
+                "instructions": "Use the public sample to debug locally. Final acceptance comes from the hidden tests in the judge bundle.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_sum_large",
+                        "type": "code",
+                        "title": "Sum many integers",
+                        "prompt": "Read integers from stdin and print their sum.",
+                        "points": 20,
+                        "problem_statement": "The first line contains `n`. The second line contains `n` space-separated integers. Print their sum.",
+                        "starter_code": "n = int(input().strip())\nvalues = list(map(int, input().split()))\n# print(sum(values))\n",
+                        "code_mode": "script",
+                        "tests": [
+                            {
+                                "name": "small public sample",
+                                "stdin": "5\n1 2 3 4 5\n",
+                                "expected_stdout": "15\n",
+                                "compare_mode": "exact"
+                            }
+                        ],
+                        "hidden_tests": [
+                            {
+                                "name": "large generated input",
+                                "stdin_file": "cases/large_01.in",
+                                "expected_file": "cases/large_01.out",
+                                "timeout_ms": 1200
+                            },
+                            {
+                                "name": "uses a mounted helper file",
+                                "stdin": "weights.txt\n",
+                                "expected_stdout": "42\n",
+                                "files": [
+                                    {
+                                        "source": "datasets/weights.txt",
+                                        "target": "weights.txt"
+                                    }
+                                ],
+                                "timeout_ms": 1200
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
     tutorial_payload = {
         "tasks": [
             {
@@ -813,8 +1098,8 @@ def _build_project_tasks_schema():
     }
     return {
         "schema_name": "project_task_import",
-        "schema_version": 6,
-        "summary": "Reference document for importing project tasks from JSON. It covers read-only tutorial tasks plus assessment tasks with MCQ, text, token-fill, file upload, code, class-mode code, plot questions, markdown escaping, and per-sample comparison rules such as whitespace normalization and numeric tolerance.",
+        "schema_version": 7,
+        "summary": "Reference document for importing project tasks from JSON. It covers read-only tutorial tasks plus assessment tasks with MCQ, text, token-fill, file upload, code, class-mode code, plot questions, markdown escaping, public sample comparison rules, and hidden tests judged from a private bundle.",
         "paste_payload_shape": {
             "type": "object",
             "required": ["tasks"],
@@ -835,6 +1120,7 @@ def _build_project_tasks_schema():
                             "required": {"type": "boolean", "default": True},
                             "auto_grade": {"type": "boolean", "default": True},
                             "requires_review": {"type": "boolean", "default": False},
+                            "judge_bundle_file": {"type": ["object", "null"], "description": "Optional metadata placeholder used only in exports. Upload the actual judge bundle ZIP separately in the form UI."},
                             "questions": {
                                 "type": "array",
                                 "minItems": 1,
@@ -917,6 +1203,7 @@ def _build_project_tasks_schema():
                 "required": ["required", "is_required"],
                 "auto_grade": ["auto_grade", "autograde", "automatic_grading"],
                 "requires_review": ["requires_review", "mentor_review", "manual_review"],
+                "judge_bundle_file": ["judge_bundle_file", "hidden_bundle", "private_bundle"],
                 "questions": ["questions", "items"]
             },
             "question_common_fields": {
@@ -934,6 +1221,7 @@ def _build_project_tasks_schema():
                 "starter": ["starter", "starter_code", "starter_template"],
                 "mode": ["mode", "code_mode"],
                 "samples": ["samples", "tests", "test_cases"],
+                "hidden_tests": ["hidden_tests", "private_tests", "hidden_tests_json"],
                 "function_signature": ["function_signature", "signature", "callable_signature"],
                 "class_signature": ["class_signature", "signature"],
                 "class_init": ["class_init", "init_call", "constructor_call", "object_initializer"]
@@ -959,6 +1247,20 @@ def _build_project_tasks_schema():
                     "init_call": ["init_call", "constructor_call", "object_initializer"],
                     "tolerance": ["tolerance", "abs_tolerance", "atol", "epsilon"]
                 }
+            },
+            "hidden_test_fields": {
+                "common": {
+                    "name": ["name", "label"],
+                    "compare_mode": ["compare_mode", "compare", "comparison", "match_mode", "matcher"],
+                    "timeout_ms": ["timeout_ms", "timeout", "time_limit_ms"],
+                    "files": ["files", "support_files", "mounted_files"],
+                    "stdin_file": ["stdin_file", "input_file"],
+                    "expected_file": ["expected_file", "output_file", "expected_file_path"]
+                },
+                "file_mapping_fields": {
+                    "source": ["source", "src", "path", "bundle_path"],
+                    "target": ["target", "dest", "mount_as", "name"]
+                }
             }
         },
         "question_reference": {
@@ -968,7 +1270,9 @@ def _build_project_tasks_schema():
                 "Question `id` is optional. The importer will generate one if missing.",
                 "For booleans, use real JSON booleans: true or false.",
                 "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects.",
-                "Code samples can set `compare_mode`. Callable samples may also set `tolerance` for numeric tolerance checks.",
+                "Public code samples can set `compare_mode`. Callable samples may also set `tolerance` for numeric tolerance checks.",
+                "Hidden tests belong in `hidden_tests`, not in the public `tests` array.",
+                "If a hidden test uses `stdin_file`, `expected_file`, or mounted `files`, upload a judge bundle ZIP alongside the JSON.",
                 "Visible text fields support markdown; in JSON strings use `\\n` for a new line and `\\n\\n` for a blank line.",
                 "Prefer markdown lists, headings, and fenced code blocks over manual spacing."
             ],
@@ -1052,13 +1356,15 @@ def _build_project_tasks_schema():
                     ]
                 },
                 "code": {
-                    "required_fields": ["type", "prompt", "problem_statement", "code_mode", "tests"],
+                    "required_fields": ["type", "prompt", "problem_statement", "code_mode"],
                     "shared_shape": {
                         "type": "code",
                         "prompt": "Short visible question prompt.",
                         "problem_statement": "Detailed coding instructions.\n\n- Requirement one\n- Requirement two",
                         "starter_code": "# optional starter code",
-                        "code_mode": "script | function | class"
+                        "code_mode": "script | function | class",
+                        "tests": "optional public sample tests shown to students",
+                        "hidden_tests": "optional private judge tests run only on submit"
                     },
                     "modes": {
                         "script": {
@@ -1075,10 +1381,19 @@ def _build_project_tasks_schema():
                                         "expected_stdout": "banana\napple\n",
                                         "compare_mode": "rstrip"
                                     }
+                                ],
+                                "hidden_tests": [
+                                    {
+                                        "name": "large input",
+                                        "stdin_file": "cases/large.in",
+                                        "expected_file": "cases/large.out",
+                                        "timeout_ms": 1200
+                                    }
                                 ]
                             },
                             "notes": [
-                                "Script compare modes: `rstrip` (default), `exact`, `normalize_whitespace`, `contains`."
+                                "Script compare modes: `rstrip` (default), `exact`, `normalize_whitespace`, `contains`.",
+                                "Use `hidden_tests` for final judging. A hidden script test may use inline `stdin`/`expected_stdout` or file-backed `stdin_file`/`expected_file` entries from the private judge bundle."
                             ]
                         },
                         "function": {
@@ -1101,15 +1416,29 @@ def _build_project_tasks_schema():
                             },
                             "notes": [
                                 "Callable compare modes: `exact` (default), `numeric_tolerance`, `contains`.",
-                                "Use `numeric_tolerance` for floats or arrays and set `tolerance` to an absolute tolerance such as `1e-6`."
+                                "Use `numeric_tolerance` for floats or arrays and set `tolerance` to an absolute tolerance such as `1e-6`.",
+                                "Hidden function tests may also mount files from the judge bundle if the implementation is expected to read helper files."
                             ]
                         },
                         "class": {
                             "use_when": "Students implement a class. Each test creates a fresh object named `obj` using `class_init` before evaluating the method call or expression.",
                             "example": class_payload["tasks"][0]["questions"][0],
                             "notes": [
-                                "Class-mode tests use the same compare modes as function-mode tests."
+                                "Class-mode tests use the same compare modes as function-mode tests.",
+                                "Class hidden tests may override `init_call` per test or inherit the task-level `class_init`."
                             ]
+                        }
+                    },
+                    "hidden_test_bundle_reference": {
+                        "summary": "Hidden tests can reference files stored in a private ZIP bundle uploaded with the task form.",
+                        "bundle_examples": [
+                            "cases/large_01.in",
+                            "cases/large_01.out",
+                            "datasets/weights.txt"
+                        ],
+                        "file_mapping_shape": {
+                            "source": "datasets/weights.txt",
+                            "target": "weights.txt"
                         }
                     }
                 }
@@ -1121,7 +1450,8 @@ def _build_project_tasks_schema():
             "class_code_payload": class_payload,
             "plot_payload": plot_payload,
             "formatting_payload": formatting_payload,
-            "comparison_payload": comparison_payload
+            "comparison_payload": comparison_payload,
+            "hidden_judge_payload": hidden_judge_payload
         }
     }
 
@@ -1133,6 +1463,7 @@ PROJECT_TASKS_EXAMPLE_DOWNLOADS = {
     "plot": "plot_payload",
     "formatting": "formatting_payload",
     "comparison": "comparison_payload",
+    "hidden_judge": "hidden_judge_payload",
 }
 
 LEADERBOARD_METRICS = {
@@ -1211,6 +1542,61 @@ def _ensure_project_task_kind_column():
         # Fail open: don't block app start if migration fails
         pass
 
+def _ensure_project_task_judge_bundle_column():
+    try:
+        inspector = inspect(db.engine)
+        if "project_tasks" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("project_tasks")}
+        if "judge_bundle_file" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE project_tasks "
+                        "ADD COLUMN judge_bundle_file TEXT NULL"
+                    )
+                )
+    except Exception:
+        pass
+
+def _ensure_project_task_submission_judge_columns():
+    try:
+        inspector = inspect(db.engine)
+        if "project_task_submissions" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("project_task_submissions")}
+        missing = {
+            "judge_state": "ALTER TABLE project_task_submissions ADD COLUMN judge_state VARCHAR(32) NULL",
+            "judge_verdict": "ALTER TABLE project_task_submissions ADD COLUMN judge_verdict VARCHAR(64) NULL",
+            "judge_feedback": "ALTER TABLE project_task_submissions ADD COLUMN judge_feedback TEXT NULL",
+            "judge_summary_json": "ALTER TABLE project_task_submissions ADD COLUMN judge_summary_json TEXT NULL",
+        }
+        for column_name, ddl in missing.items():
+            if column_name not in columns:
+                with db.engine.begin() as conn:
+                    conn.execute(text(ddl))
+    except Exception:
+        pass
+
+def _ensure_project_task_attempt_judge_columns():
+    try:
+        inspector = inspect(db.engine)
+        if "project_task_attempts" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("project_task_attempts")}
+        missing = {
+            "judge_state": "ALTER TABLE project_task_attempts ADD COLUMN judge_state VARCHAR(32) NULL",
+            "judge_verdict": "ALTER TABLE project_task_attempts ADD COLUMN judge_verdict VARCHAR(64) NULL",
+            "judge_feedback": "ALTER TABLE project_task_attempts ADD COLUMN judge_feedback TEXT NULL",
+            "judge_summary_json": "ALTER TABLE project_task_attempts ADD COLUMN judge_summary_json TEXT NULL",
+        }
+        for column_name, ddl in missing.items():
+            if column_name not in columns:
+                with db.engine.begin() as conn:
+                    conn.execute(text(ddl))
+    except Exception:
+        pass
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -1225,6 +1611,9 @@ def create_app(db_path=DB_URI):
         _ensure_project_collection_column()
         _ensure_project_deadline_column()
         _ensure_project_task_kind_column()
+        _ensure_project_task_judge_bundle_column()
+        _ensure_project_task_submission_judge_columns()
+        _ensure_project_task_attempt_judge_columns()
     return app
 
 app = create_app()
@@ -1259,6 +1648,18 @@ def _safe_upload_path(rel_path):
         return None
     return target
 
+def _safe_path_within(base_path, relative_or_absolute_path):
+    if not base_path or relative_or_absolute_path in (None, ""):
+        return None
+    base = os.path.abspath(base_path)
+    target = relative_or_absolute_path
+    if not os.path.isabs(target):
+        target = os.path.join(base, relative_or_absolute_path)
+    target = os.path.abspath(target)
+    if target == base or target.startswith(base + os.sep):
+        return target
+    return None
+
 def _extract_file_info(answer):
     if isinstance(answer, dict) and answer.get("path"):
         return answer
@@ -1274,6 +1675,69 @@ def _remove_uploaded_file(file_info):
             os.remove(full_path)
         except Exception:
             pass
+
+def _save_project_task_bundle_from_bytes(task, original_name, payload, content_type="", existing_info=None):
+    if not task:
+        return None, "Missing task."
+    filename = os.path.basename(original_name or "")
+    if not filename:
+        return None, "No judge bundle selected."
+    extension = os.path.splitext(filename)[1].lower()
+    if extension != ".zip":
+        return None, "Judge bundle must be a .zip file."
+    if payload is None:
+        return None, "Unable to read the judge bundle."
+    if len(payload) > JUDGE_BUNDLE_MAX_BYTES:
+        return None, f"Judge bundle must be {JUDGE_BUNDLE_MAX_MB} MB or smaller."
+    safe_name = secure_filename(filename) or "judge_bundle.zip"
+    stored_name = f"{uuid.uuid4().hex}_{safe_name}"
+    upload_dir = os.path.join(
+        UPLOAD_ROOT,
+        "judge_bundles",
+        str(task.project_id),
+        str(task.id),
+    )
+    os.makedirs(upload_dir, exist_ok=True)
+    full_path = os.path.join(upload_dir, stored_name)
+    try:
+        with open(full_path, "wb") as fh:
+            fh.write(payload)
+    except Exception:
+        return None, "Unable to save the judge bundle."
+    rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
+    file_info = {
+        "original_name": filename or safe_name,
+        "stored_name": stored_name,
+        "path": rel_path,
+        "size": len(payload),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "content_type": content_type or "application/zip",
+    }
+    if existing_info:
+        _remove_uploaded_file(existing_info)
+    return file_info, None
+
+def _save_task_judge_bundle(task, file_storage, existing_info=None):
+    if not task or not file_storage:
+        return None, "Missing task or file."
+    filename = file_storage.filename or ""
+    if not filename:
+        return None, "No judge bundle selected."
+    try:
+        payload = file_storage.read(JUDGE_BUNDLE_MAX_BYTES + 1)
+    except Exception:
+        return None, "Unable to read the judge bundle."
+    if payload is None:
+        return None, "Unable to read the judge bundle."
+    if len(payload) > JUDGE_BUNDLE_MAX_BYTES:
+        return None, f"Judge bundle must be {JUDGE_BUNDLE_MAX_MB} MB or smaller."
+    return _save_project_task_bundle_from_bytes(
+        task,
+        filename,
+        payload,
+        content_type=(file_storage.mimetype or ""),
+        existing_info=existing_info,
+    )
 
 def _save_task_upload(submission, question, qid, file_storage, existing_info=None):
     if not submission or not file_storage:
@@ -3214,7 +3678,9 @@ def _normalize_exam_questions(payload):
                 mode = "script"
             normalized["mode"] = mode
             samples_clean = []
+            hidden_tests_clean = []
             samples_raw = _first_present(raw, "samples", "tests", "test_cases") or []
+            hidden_tests_raw = _first_present(raw, "hidden_tests", "private_tests", "hidden_tests_json")
             if mode == "function":
                 signature = _coerce_string(_first_present(raw, "function_signature", "signature", "callable_signature")).strip()
                 if not signature.startswith("def"):
@@ -3246,7 +3712,8 @@ def _normalize_exam_questions(payload):
                         if tolerance is not None:
                             sample_clean["tolerance"] = tolerance
                         samples_clean.append(sample_clean)
-                if not samples_clean:
+                hidden_tests_clean = _normalize_hidden_code_tests(hidden_tests_raw, mode)
+                if not samples_clean and not hidden_tests_clean:
                     raise ValueError("Function code questions need at least one sample call.")
             elif mode == "class":
                 class_signature = _coerce_string(_first_present(raw, "class_signature", "signature")).strip()
@@ -3285,7 +3752,8 @@ def _normalize_exam_questions(payload):
                         if tolerance is not None:
                             sample_clean["tolerance"] = tolerance
                         samples_clean.append(sample_clean)
-                if not samples_clean:
+                hidden_tests_clean = _normalize_hidden_code_tests(hidden_tests_raw, mode, class_init=class_init)
+                if not samples_clean and not hidden_tests_clean:
                     raise ValueError("Class code questions need at least one method call.")
             else:
                 if isinstance(samples_raw, list):
@@ -3301,7 +3769,10 @@ def _normalize_exam_questions(payload):
                             "compare_mode": compare_mode,
                             "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
                         })
+                hidden_tests_clean = _normalize_hidden_code_tests(hidden_tests_raw, mode)
             normalized["samples"] = samples_clean
+            if hidden_tests_clean:
+                normalized["hidden_tests"] = hidden_tests_clean
 
         cleaned.append(normalized)
     return cleaned
@@ -3429,6 +3900,381 @@ def _grading_by_question(details):
         for item in details
         if item.get("question_id") is not None
     }
+
+def _submission_judge_snapshot(submission, latest_attempt=None):
+    if not submission:
+        return {
+            "judge_state": None,
+            "judge_verdict": None,
+            "judge_feedback": None,
+            "judge_summary": None,
+        }
+    attempt = latest_attempt if latest_attempt is not None else _latest_task_attempt(submission)
+    judge_state = getattr(attempt, "judge_state", None) or getattr(submission, "judge_state", None)
+    judge_verdict = getattr(attempt, "judge_verdict", None) or getattr(submission, "judge_verdict", None)
+    judge_feedback = getattr(attempt, "judge_feedback", None) or getattr(submission, "judge_feedback", None)
+    judge_summary = getattr(attempt, "judge_summary_json", None) or getattr(submission, "judge_summary_json", None)
+    return {
+        "judge_state": judge_state,
+        "judge_verdict": judge_verdict,
+        "judge_feedback": judge_feedback,
+        "judge_summary": judge_summary,
+    }
+
+def _result_is_judge_configuration_error(result):
+    text = _coerce_string((result or {}).get("error")).lower()
+    markers = (
+        "judge bundle",
+        "stdin_file",
+        "expected_file",
+        "hidden test file",
+        "hidden tests that use",
+        "hidden tests that mount",
+        "invalid hidden test target path",
+    )
+    return any(marker in text for marker in markers)
+
+def _hidden_test_feedback_from_result(result, test_index):
+    status = (result or {}).get("status") or "error"
+    if _result_is_judge_configuration_error(result):
+        return "judge_error", "Judge failed. Try again later."
+    if status == "timeout":
+        return "time_limit_exceeded", f"Time limit exceeded on hidden test {test_index}."
+    if status == "mismatch":
+        return "wrong_answer", f"Wrong answer on hidden test {test_index}."
+    if status == "error":
+        return "runtime_error", f"Runtime error on hidden test {test_index}."
+    return "judge_error", "Judge failed. Try again later."
+
+def _run_hidden_code_tests_for_question(code_text, question, bundle_root=None):
+    tests = _code_question_hidden_tests(question)
+    mode = _normalize_code_mode_name(question.get("mode") or "script")
+    if not tests:
+        return {
+            "verdict": "accepted",
+            "feedback": "Accepted.",
+            "hidden_passed": 0,
+            "hidden_total": 0,
+            "timed_out": False,
+        }
+    hidden_passed = 0
+    hidden_total = len(tests)
+    timed_out = False
+    for idx, test in enumerate(tests, start=1):
+        case_results, case_timed_out = _run_code_tests_backend(code_text, [test], mode, bundle_root=bundle_root)
+        timed_out = timed_out or case_timed_out
+        if case_results:
+            result = case_results[0]
+        else:
+            result = {
+                "name": test.get("name") or f"Hidden test {idx}",
+                "status": "error",
+                "error": "No results from worker process",
+            }
+        if result.get("status") == "passed":
+            hidden_passed += 1
+            continue
+        verdict, feedback = _hidden_test_feedback_from_result(result, idx)
+        summary = {
+            "verdict": verdict,
+            "feedback": feedback,
+            "hidden_passed": hidden_passed,
+            "hidden_total": hidden_total,
+            "failed_test_index": idx,
+            "failed_test_name": result.get("name") or f"Hidden test {idx}",
+            "timed_out": timed_out or verdict == "time_limit_exceeded",
+        }
+        return summary
+    return {
+        "verdict": "accepted",
+        "feedback": f"Accepted. Passed {hidden_total} hidden test{'s' if hidden_total != 1 else ''}.",
+        "hidden_passed": hidden_passed,
+        "hidden_total": hidden_total,
+        "timed_out": False,
+    }
+
+def _grade_project_task_submission_with_hidden_tests(task, answers, bundle_root=None):
+    questions = task.questions_json if isinstance(task.questions_json, list) else []
+    answer_map = answers if isinstance(answers, dict) else {}
+    earned = 0.0
+    total = 0.0
+    details = []
+    question_summaries = []
+    for q in questions:
+        qid = q.get("id")
+        qtype = q.get("type")
+        points = max(0, int(q.get("points") or 1))
+        total += points
+        res = {"question_id": qid, "type": qtype, "points": points, "earned": 0.0}
+        raw_answer = answer_map.get(qid, "") or ""
+        if qtype == "mcq":
+            correct = q.get("correct_indices") or []
+            if correct:
+                try:
+                    idx = int(raw_answer)
+                except Exception:
+                    idx = None
+                if idx is not None and idx == correct[0]:
+                    res["earned"] = points
+        elif qtype == "multi":
+            correct = sorted(set(int(val) for val in (q.get("correct_indices") or [])))
+            submitted = []
+            for token in raw_answer.split("||"):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    submitted.append(int(token))
+                except Exception:
+                    continue
+            submitted = sorted(set(submitted))
+            if correct and submitted == correct:
+                res["earned"] = points
+        elif qtype == "tokens":
+            expected_tokens = q.get("correct_tokens") or []
+            submitted = [tok.strip() for tok in (raw_answer.split("||") if raw_answer else []) if tok.strip()]
+            if submitted == expected_tokens and expected_tokens:
+                res["earned"] = points
+        elif qtype == "fill":
+            answers_expected = q.get("answers") or []
+            submitted = [tok for tok in (raw_answer.split("||") if raw_answer else []) if tok]
+            case_sensitive = bool(q.get("case_sensitive"))
+            matches = len(submitted) >= len(answers_expected) and bool(answers_expected)
+            if matches:
+                for exp, got in zip(answers_expected, submitted):
+                    left = exp or ""
+                    right = got or ""
+                    if not case_sensitive:
+                        left = left.strip().lower()
+                        right = right.strip().lower()
+                    if left != right:
+                        matches = False
+                        break
+            if matches and answers_expected:
+                res["earned"] = points
+        elif qtype == "file":
+            res["manual_review"] = True
+        elif qtype == "plot":
+            res["manual_review"] = True
+        elif qtype == "code":
+            if _code_question_has_hidden_tests(q):
+                summary = _run_hidden_code_tests_for_question(raw_answer, q, bundle_root=bundle_root)
+                if summary.get("verdict") == "accepted":
+                    res["earned"] = points
+                res["judge_verdict"] = summary.get("verdict")
+                res["judge_feedback"] = summary.get("feedback")
+                res["hidden_passed"] = summary.get("hidden_passed", 0)
+                res["hidden_total"] = summary.get("hidden_total", 0)
+                res["timed_out"] = bool(summary.get("timed_out"))
+                question_summaries.append({
+                    "question_id": qid,
+                    "verdict": summary.get("verdict"),
+                    "feedback": summary.get("feedback"),
+                    "hidden_passed": summary.get("hidden_passed", 0),
+                    "hidden_total": summary.get("hidden_total", 0),
+                    "failed_test_index": summary.get("failed_test_index"),
+                })
+            else:
+                samples = q.get("samples") or []
+                mode = q.get("mode") or "script"
+                res["cases"] = []
+                res["timed_out"] = False
+                if samples:
+                    run_results, timed_out = _run_code_tests_backend(raw_answer, samples, mode)
+                    res["cases"] = run_results
+                    res["timed_out"] = timed_out
+                    if not timed_out and all((r.get("status") == "passed") for r in run_results):
+                        res["earned"] = points
+                    res["manual_review"] = False
+                else:
+                    res["manual_review"] = True
+        details.append(res)
+        earned += res["earned"]
+
+    first_failure = next((item for item in question_summaries if item.get("verdict") != "accepted"), None)
+    if first_failure:
+        overall_verdict = first_failure.get("verdict")
+        overall_feedback = first_failure.get("feedback")
+    else:
+        total_hidden = sum(int(item.get("hidden_total") or 0) for item in question_summaries)
+        overall_verdict = "accepted"
+        if total_hidden > 0:
+            overall_feedback = f"Accepted. Passed {total_hidden} hidden test{'s' if total_hidden != 1 else ''}."
+        else:
+            overall_feedback = "Accepted."
+    judge_summary = {
+        "verdict": overall_verdict,
+        "feedback": overall_feedback,
+        "question_summaries": question_summaries,
+        "judged_at": datetime.utcnow().isoformat() + "Z",
+    }
+    return earned, total, details, judge_summary
+
+def _enqueue_project_task_judge(submission, attempt):
+    if not submission or not attempt:
+        return None
+    now = datetime.utcnow()
+    submission.judge_state = "queued"
+    submission.judge_verdict = None
+    submission.judge_feedback = "Queued for hidden tests."
+    submission.judge_summary_json = {
+        "verdict": None,
+        "feedback": "Queued for hidden tests.",
+        "queued_at": now.isoformat() + "Z",
+    }
+    attempt.judge_state = "queued"
+    attempt.judge_verdict = None
+    attempt.judge_feedback = "Queued for hidden tests."
+    attempt.judge_summary_json = {
+        "verdict": None,
+        "feedback": "Queued for hidden tests.",
+        "queued_at": now.isoformat() + "Z",
+    }
+    job = JudgeJob(
+        submission_id=submission.id,
+        attempt_id=attempt.id,
+        task_id=submission.task_id,
+        student_id=submission.student_id,
+        status="queued",
+        payload_json={
+            "attempt_number": attempt.attempt_number,
+            "project_id": submission.project_id,
+        },
+    )
+    db.session.add(job)
+    return job
+
+def _apply_project_task_judge_result(submission, attempt, task, grade_score, grade_total, grade_details, judge_summary):
+    now = datetime.utcnow()
+    if not submission or not attempt or not task:
+        return
+    has_manual_review = any(detail.get("manual_review") for detail in (grade_details or []))
+    verdict = _coerce_string((judge_summary or {}).get("verdict")).strip() or None
+    feedback = _coerce_string((judge_summary or {}).get("feedback")).strip() or None
+    if verdict == "accepted":
+        if task.requires_review or has_manual_review:
+            final_status = "pending_review"
+            if task.requires_review or has_manual_review:
+                feedback = "Passed hidden tests. Waiting for review."
+        else:
+            final_status = "accepted"
+    elif verdict == "judge_error":
+        final_status = "rejected"
+    else:
+        final_status = "rejected"
+
+    submission.score = grade_score
+    submission.max_score = grade_total
+    submission.status = final_status
+    submission.last_activity_at = now
+    submission.judge_state = "done"
+    submission.judge_verdict = verdict
+    submission.judge_feedback = feedback
+    submission.judge_summary_json = judge_summary or None
+
+    attempt.score = grade_score
+    attempt.max_score = grade_total
+    attempt.status = final_status
+    attempt.grading_json = grade_details or None
+    attempt.judge_state = "done"
+    attempt.judge_verdict = verdict
+    attempt.judge_feedback = feedback
+    attempt.judge_summary_json = judge_summary or None
+
+def _run_project_task_judge_job(job_id):
+    job = JudgeJob.query.get(job_id)
+    if not job:
+        return False
+    submission = ProjectTaskSubmission.query.get(job.submission_id)
+    attempt = ProjectTaskAttempt.query.get(job.attempt_id)
+    task = ProjectTask.query.get(job.task_id)
+    if not submission or not attempt or not task:
+        raise RuntimeError("Judge job is missing submission, attempt, or task data.")
+
+    answers = attempt.answers_json if isinstance(attempt.answers_json, dict) else submission.answers_json
+    bundle_temp = None
+    bundle_root = None
+    try:
+        bundle_temp, bundle_root = _extract_judge_bundle_to_tempdir(task)
+        grade_score, grade_total, grade_details, judge_summary = _grade_project_task_submission_with_hidden_tests(
+            task,
+            answers,
+            bundle_root=bundle_root,
+        )
+    finally:
+        if bundle_temp:
+            bundle_temp.cleanup()
+
+    _apply_project_task_judge_result(submission, attempt, task, grade_score, grade_total, grade_details, judge_summary)
+    if submission.status == "accepted" and submission.student and submission.project:
+        if _project_completed(submission.project, submission.student):
+            _award_project_points_if_needed(submission.project, submission.student)
+    return True
+
+def run_next_judge_job():
+    job = JudgeJob.query.filter_by(status="queued").order_by(JudgeJob.created_at.asc(), JudgeJob.id.asc()).first()
+    if not job:
+        return False
+    job.status = "running"
+    job.started_at = datetime.utcnow()
+    submission = ProjectTaskSubmission.query.get(job.submission_id)
+    attempt = ProjectTaskAttempt.query.get(job.attempt_id)
+    if submission:
+        submission.judge_state = "running"
+        submission.judge_feedback = "Running hidden tests."
+        submission.judge_summary_json = {
+            "verdict": None,
+            "feedback": "Running hidden tests.",
+            "started_at": job.started_at.isoformat() + "Z",
+        }
+    if attempt:
+        attempt.judge_state = "running"
+        attempt.judge_feedback = "Running hidden tests."
+        attempt.judge_summary_json = {
+            "verdict": None,
+            "feedback": "Running hidden tests.",
+            "started_at": job.started_at.isoformat() + "Z",
+        }
+    db.session.commit()
+
+    try:
+        _run_project_task_judge_job(job.id)
+        job.status = "done"
+        job.finished_at = datetime.utcnow()
+        job.error_text = None
+    except Exception:
+        job.status = "failed"
+        job.finished_at = datetime.utcnow()
+        job.error_text = traceback.format_exc()
+        submission = ProjectTaskSubmission.query.get(job.submission_id)
+        attempt = ProjectTaskAttempt.query.get(job.attempt_id)
+        judge_summary = {
+            "verdict": "judge_error",
+            "feedback": "Judge failed. Try again later.",
+            "judged_at": job.finished_at.isoformat() + "Z",
+        }
+        if submission:
+            submission.status = "rejected"
+            submission.judge_state = "failed"
+            submission.judge_verdict = "judge_error"
+            submission.judge_feedback = "Judge failed. Try again later."
+            submission.judge_summary_json = judge_summary
+        if attempt:
+            attempt.status = "rejected"
+            attempt.judge_state = "failed"
+            attempt.judge_verdict = "judge_error"
+            attempt.judge_feedback = "Judge failed. Try again later."
+            attempt.judge_summary_json = judge_summary
+    db.session.commit()
+    return True
+
+def run_judge_worker(poll_seconds=JUDGE_WORKER_POLL_SEC, once=False):
+    while True:
+        processed = run_next_judge_job()
+        if once:
+            return processed
+        if not processed:
+            time.sleep(max(float(poll_seconds or JUDGE_WORKER_POLL_SEC), 0.25))
 
 def _record_task_attempt_review(submission, status=None, notes=None, reviewer=None):
     if not submission:
@@ -3985,7 +4831,7 @@ def _import_project_tasks_from_config(project, config):
         new_tasks.append(task)
     for task in new_tasks:
         db.session.add(task)
-    return len(new_tasks)
+    return new_tasks
 
 def _grade_exam_submission(exam, answers):
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
@@ -4140,11 +4986,33 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
 
 SAFE_CODE_BUILTINS["__import__"] = _safe_import
 
-def safe_env():
+def _build_guarded_open(allowed_root):
+    root = os.path.abspath(allowed_root or "")
+    if not root:
+        raise RuntimeError("open() is not available for this problem.")
+
+    def _guarded_open(file, mode="r", *args, **kwargs):
+        mode = _coerce_string(mode or "r")
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            raise PermissionError("open() is read-only in this problem.")
+        path_value = _coerce_string(file).strip()
+        if not path_value:
+            raise FileNotFoundError("Empty file path.")
+        safe_target = _safe_path_within(root, path_value)
+        if not safe_target:
+            raise PermissionError("File access outside the testcase workspace is not allowed.")
+        return builtins.open(safe_target, mode, *args, **kwargs)
+
+    return _guarded_open
+
+def safe_env(allowed_open_root=None):
     """
     Return a fresh environment dict with safe builtins.
     """
-    return {"__builtins__": dict(SAFE_CODE_BUILTINS)}
+    env_builtins = dict(SAFE_CODE_BUILTINS)
+    if allowed_open_root:
+        env_builtins["open"] = _build_guarded_open(allowed_open_root)
+    return {"__builtins__": env_builtins}
 
 def _init_plot_backend():
     try:
@@ -4195,6 +5063,111 @@ def _collect_plot_images():
         except Exception:
             pass
     return images
+
+def _run_in_workspace(workdir, callback):
+    if not workdir:
+        return callback()
+    previous_cwd = os.getcwd()
+    os.chdir(workdir)
+    try:
+        return callback()
+    finally:
+        os.chdir(previous_cwd)
+
+def _test_timeout_seconds(test):
+    timeout_ms = _coerce_timeout_ms(_first_present(test, "timeout_ms", "timeout", "time_limit_ms"))
+    if timeout_ms is None:
+        return float(CODE_RUN_TIME_LIMIT_SEC)
+    return max(float(timeout_ms) / 1000.0, 0.05)
+
+def _test_needs_workspace(test):
+    if not isinstance(test, dict):
+        return False
+    if _coerce_string(test.get("stdin_file")).strip():
+        return True
+    if _coerce_string(test.get("expected_file")).strip():
+        return True
+    return bool(test.get("files"))
+
+def _read_workspace_text_file(base_root, relative_path, label):
+    safe_path = _safe_path_within(base_root, relative_path)
+    if not safe_path or not os.path.isfile(safe_path):
+        raise FileNotFoundError(f"{label} '{relative_path}' was not found in the judge bundle.")
+    try:
+        with open(safe_path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except UnicodeDecodeError:
+        with open(safe_path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+
+def _prepare_code_test_workspace(test, bundle_root=None):
+    workspace = tempfile.TemporaryDirectory()
+    workdir = workspace.name
+    for idx, file_spec in enumerate(test.get("files") or [], start=1):
+        source_rel = _coerce_string(file_spec.get("source")).strip()
+        target_rel = _coerce_string(file_spec.get("target")).strip() or os.path.basename(source_rel)
+        if not source_rel:
+            workspace.cleanup()
+            raise ValueError(f"Hidden test file #{idx} is missing a source path.")
+        if not bundle_root:
+            workspace.cleanup()
+            raise ValueError("A judge bundle is required for hidden tests that mount files.")
+        source_path = _safe_path_within(bundle_root, source_rel)
+        if not source_path or not os.path.isfile(source_path):
+            workspace.cleanup()
+            raise FileNotFoundError(f"Judge bundle file '{source_rel}' was not found.")
+        target_path = _safe_path_within(workdir, target_rel)
+        if not target_path:
+            workspace.cleanup()
+            raise ValueError(f"Invalid hidden test target path '{target_rel}'.")
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        shutil.copy2(source_path, target_path)
+
+    sample_input = _coerce_string(test.get("input"))
+    expected_output = _coerce_string(test.get("expected") or test.get("output"))
+    stdin_file = _coerce_string(test.get("stdin_file")).strip()
+    expected_file = _coerce_string(test.get("expected_file")).strip()
+    if stdin_file:
+        if not bundle_root:
+            workspace.cleanup()
+            raise ValueError("A judge bundle is required for hidden tests that use stdin_file.")
+        sample_input = _read_workspace_text_file(bundle_root, stdin_file, "stdin_file")
+    if expected_file:
+        if not bundle_root:
+            workspace.cleanup()
+            raise ValueError("A judge bundle is required for hidden tests that use expected_file.")
+        expected_output = _read_workspace_text_file(bundle_root, expected_file, "expected_file")
+    return workspace, workdir, sample_input, expected_output
+
+def _extract_judge_bundle_to_tempdir(task):
+    file_info = _extract_file_info(getattr(task, "judge_bundle_file", None))
+    if not file_info:
+        return None, None
+    bundle_path = _safe_upload_path(file_info.get("path"))
+    if not bundle_path or not os.path.isfile(bundle_path):
+        raise FileNotFoundError("Judge bundle file was not found on disk.")
+    extracted = tempfile.TemporaryDirectory()
+    total_bytes = 0
+    with zipfile.ZipFile(bundle_path) as zf:
+        for member in zf.infolist():
+            member_name = _coerce_string(member.filename).strip()
+            if not member_name:
+                continue
+            target_path = _safe_path_within(extracted.name, member_name)
+            if not target_path:
+                extracted.cleanup()
+                raise ValueError(f"Judge bundle member '{member_name}' has an invalid path.")
+            if member.is_dir():
+                os.makedirs(target_path, exist_ok=True)
+                continue
+            total_bytes += int(member.file_size or 0)
+            if total_bytes > JUDGE_BUNDLE_MAX_EXTRACT_BYTES:
+                extracted.cleanup()
+                raise ValueError(f"Judge bundle expands beyond {JUDGE_BUNDLE_MAX_EXTRACT_MB} MB.")
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with zf.open(member, "r") as src, open(target_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    return extracted, extracted.name
 
 def _values_match(actual, expected):
     try:
@@ -4324,19 +5297,22 @@ def _run_with_code_timeout(seconds, callback):
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
 
-def _code_batch_timeout_seconds(test_count, mode):
-    per_step_limit = max(float(CODE_RUN_TIME_LIMIT_SEC or 0), 0.1)
-    setup_steps = 1 if mode in ("function", "class") else 0
-    per_test_steps = 2 if mode == "class" else 1
-    return per_step_limit * (max(1, int(test_count or 0)) * per_test_steps + setup_steps) + 1.0
+def _code_batch_timeout_seconds(tests, mode):
+    time_limits = [_test_timeout_seconds(test) for test in (tests or [])]
+    if not time_limits:
+        time_limits = [max(float(CODE_RUN_TIME_LIMIT_SEC or 0), 0.1)]
+    setup_budget = max(time_limits) if mode in ("function", "class") else 0.0
+    per_test_factor = 2.0 if mode == "class" else 1.0
+    return sum(time_limits) * per_test_factor + setup_budget + 1.0
 
-def _run_code_tests_worker(code_text, tests, mode):
+def _run_code_tests_worker(code_text, tests, mode, bundle_root=None):
     results = []
     if not tests:
         return results
     mode = (mode or "script").strip().lower()
     if mode not in ("script", "function", "class"):
         mode = "script"
+    requires_isolated_setup = mode in ("function", "class") and any(_test_needs_workspace(test) for test in tests)
     if not code_text:
         for idx, test in enumerate(tests):
             hidden = bool(test.get("hidden"))
@@ -4363,12 +5339,13 @@ def _run_code_tests_worker(code_text, tests, mode):
     env_base = None
     setup_failure_status = "error"
     setup_failure_message = ""
-    if mode in ("function", "class"):
+    setup_timeout = max((_test_timeout_seconds(test) for test in tests), default=float(CODE_RUN_TIME_LIMIT_SEC))
+    if mode in ("function", "class") and not requires_isolated_setup:
         try:
             env_base = safe_env()
             env_base["__name__"] = "__main__"
             _run_with_code_timeout(
-                CODE_RUN_TIME_LIMIT_SEC,
+                setup_timeout,
                 lambda: exec(code_text, env_base, env_base),
             )
         except CodeExecutionTimedOut:
@@ -4402,9 +5379,10 @@ def _run_code_tests_worker(code_text, tests, mode):
     for idx, test in enumerate(tests):
         hidden = bool(test.get("hidden"))
         name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+        test_timeout = _test_timeout_seconds(test)
         if mode in ("function", "class"):
             call_expr = (test.get("call") or test.get("input") or "").strip()
-            expected_output = (test.get("expected") or test.get("output") or "")
+            expected_output = _coerce_string(test.get("expected") or test.get("output"))
             expected_display = expected_output
             expected_trimmed = expected_output.strip()
             compare_mode = _effective_sample_compare_mode(test, "callable")
@@ -4422,38 +5400,78 @@ def _run_code_tests_worker(code_text, tests, mode):
             output_value = ""
             result_value = None
             init_call = ""
+            workspace = None
+            workdir = None
             if not call_expr:
                 status = "error"
                 error_text = "Missing call expression."
             else:
-                env = dict(env_base or safe_env())
-                stdout = io.StringIO()
-                original_stdout = sys.stdout
-                sys.stdout = stdout
                 try:
-                    if mode == "class":
-                        init_call = (test.get("init_call") or "").strip()
-                        if not init_call:
-                            raise RuntimeError("Missing __init__ call.")
-                        env["obj"] = _run_with_code_timeout(
-                            CODE_RUN_TIME_LIMIT_SEC,
-                            lambda: eval(init_call, env, env),
+                    if _test_needs_workspace(test):
+                        workspace, workdir, _, expected_output = _prepare_code_test_workspace(test, bundle_root=bundle_root)
+                        expected_display = expected_output
+                        expected_trimmed = expected_output.strip()
+                        expected_literal = None
+                        expected_literal_defined = False
+                        if expected_trimmed:
+                            try:
+                                expected_literal = ast.literal_eval(expected_trimmed)
+                                expected_literal_defined = True
+                            except Exception:
+                                expected_literal_defined = False
+                    if requires_isolated_setup:
+                        env = safe_env(workdir)
+                        env["__name__"] = "__main__"
+                        _run_in_workspace(
+                            workdir,
+                            lambda: _run_with_code_timeout(
+                                test_timeout,
+                                lambda: exec(code_text, env, env),
+                            ),
                         )
-                    result = _run_with_code_timeout(
-                        CODE_RUN_TIME_LIMIT_SEC,
-                        lambda: eval(call_expr, env, env),
-                    )
-                    result_value = result
-                    output_value = repr(result)
+                    else:
+                        env = dict(env_base or safe_env())
+                    stdout = io.StringIO()
+                    original_stdout = sys.stdout
+                    sys.stdout = stdout
+                    try:
+                        if mode == "class":
+                            init_call = (test.get("init_call") or "").strip()
+                            if not init_call:
+                                raise RuntimeError("Missing __init__ call.")
+                            env["obj"] = _run_in_workspace(
+                                workdir,
+                                lambda: _run_with_code_timeout(
+                                    test_timeout,
+                                    lambda: eval(init_call, env, env),
+                                ),
+                            )
+                        result = _run_in_workspace(
+                            workdir,
+                            lambda: _run_with_code_timeout(
+                                test_timeout,
+                                lambda: eval(call_expr, env, env),
+                            ),
+                        )
+                        result_value = result
+                        output_value = repr(result)
+                    except CodeExecutionTimedOut:
+                        status = "timeout"
+                        error_text = "Execution time limit exceeded."
+                    except Exception:
+                        status = "error"
+                        error_text = traceback.format_exc()
+                    finally:
+                        sys.stdout = original_stdout
                 except CodeExecutionTimedOut:
                     status = "timeout"
                     error_text = "Execution time limit exceeded."
                 except Exception:
                     status = "error"
                     error_text = traceback.format_exc()
-                finally:
-                    sys.stdout = original_stdout
             plot_images = _collect_plot_images()
+            if workspace:
+                workspace.cleanup()
             if status == "passed" and expected_trimmed:
                 matched, compare_error = _callable_result_matches(
                     result_value,
@@ -4484,15 +5502,19 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "plot_images": plot_images,
             })
         else:
-            sample_input = test.get("input") or ""
-            expected_output = (test.get("expected") or test.get("output") or "")
+            workspace = None
+            workdir = None
+            sample_input = _coerce_string(test.get("input"))
+            expected_output = _coerce_string(test.get("expected") or test.get("output"))
             compare_mode = _effective_sample_compare_mode(test, "script")
-            stdin_buffer = io.StringIO(sample_input)
             stdout_buffer = io.StringIO()
             status = "passed"
             error_text = ""
             try:
-                env = safe_env()
+                if _test_needs_workspace(test):
+                    workspace, workdir, sample_input, expected_output = _prepare_code_test_workspace(test, bundle_root=bundle_root)
+                stdin_buffer = io.StringIO(sample_input)
+                env = safe_env(workdir)
                 def fake_input(prompt: str = ""):
                     line = stdin_buffer.readline()
                     if line == "":
@@ -4503,9 +5525,12 @@ def _run_code_tests_worker(code_text, tests, mode):
                 original_stdout = sys.stdout
                 sys.stdout = stdout_buffer
                 try:
-                    _run_with_code_timeout(
-                        CODE_RUN_TIME_LIMIT_SEC,
-                        lambda: exec(code_text, env, env),
+                    _run_in_workspace(
+                        workdir,
+                        lambda: _run_with_code_timeout(
+                            test_timeout,
+                            lambda: exec(code_text, env, env),
+                        ),
                     )
                 except CodeExecutionTimedOut:
                     status = "timeout"
@@ -4518,6 +5543,8 @@ def _run_code_tests_worker(code_text, tests, mode):
                     error_text = traceback.format_exc()
             output_value = stdout_buffer.getvalue()
             plot_images = _collect_plot_images()
+            if workspace:
+                workspace.cleanup()
             if status == "passed" and expected_output.strip():
                 if not _text_matches(output_value, expected_output, compare_mode):
                     status = "mismatch"
@@ -4538,7 +5565,7 @@ def _run_code_tests_worker(code_text, tests, mode):
             })
     return results
 
-def _run_code_tests_backend(code_text, tests, mode):
+def _run_code_tests_backend(code_text, tests, mode, bundle_root=None):
     """
     Run code in a child process with a hard time limit.
     Returns (results, timed_out).
@@ -4557,7 +5584,7 @@ def _run_code_tests_backend(code_text, tests, mode):
 
     def _child():
         try:
-            res = _run_code_tests_worker(code_text, tests, mode)
+            res = _run_code_tests_worker(code_text, tests, mode, bundle_root=bundle_root)
         except Exception as e:
             res = []
             for idx, t in enumerate(tests):
@@ -4584,7 +5611,7 @@ def _run_code_tests_backend(code_text, tests, mode):
 
     proc = ctx.Process(target=_child)
     proc.start()
-    proc.join(_code_batch_timeout_seconds(len(tests), mode))
+    proc.join(_code_batch_timeout_seconds(tests, mode))
 
     timed_out = False
     results = []
@@ -6392,6 +7419,7 @@ def projects_task_new(code):
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     resource_upload = request.files.get("resource_file")
+    judge_bundle_upload = request.files.get("judge_bundle_file")
     form_data = {
         "title": request.form.get("title") or "",
         "description": request.form.get("description") or "",
@@ -6427,6 +7455,9 @@ def projects_task_new(code):
                 error = "Unable to parse task questions."
         if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
+        if not error and task_kind == "assessment":
+            if _questions_require_judge_bundle(questions) and not (judge_bundle_upload and judge_bundle_upload.filename):
+                error = "Hidden tests that use bundle files require a judge bundle .zip upload."
         if not error:
             order_index = (ProjectTask.query.filter_by(project_id=project.id).count() or 0) + 1
             task = ProjectTask(
@@ -6450,6 +7481,13 @@ def projects_task_new(code):
                     error = upload_error
                 else:
                     task.resource_file = file_info
+            if not error and judge_bundle_upload and judge_bundle_upload.filename:
+                bundle_info, upload_error = _save_task_judge_bundle(task, judge_bundle_upload)
+                if upload_error:
+                    db.session.rollback()
+                    error = upload_error
+                else:
+                    task.judge_bundle_file = bundle_info
             if not error:
                 db.session.commit()
                 return redirect(url_for("projects_show", code=project.code))
@@ -6470,6 +7508,7 @@ def projects_task_import(code):
     error = None
     default_json = json.dumps({"tasks": []}, indent=2)
     payload = request.form.get("payload") or default_json
+    judge_bundle_upload = request.files.get("judge_bundle_file")
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
@@ -6479,7 +7518,29 @@ def projects_task_import(code):
             error = f"Invalid JSON: {exc}"
         else:
             try:
-                created = _import_project_tasks_from_config(project, config)
+                created_tasks = _import_project_tasks_from_config(project, config)
+                if any(_questions_require_judge_bundle(task.questions_json) for task in created_tasks):
+                    if not (judge_bundle_upload and judge_bundle_upload.filename):
+                        raise ValueError("Hidden tests that use bundle files require a judge bundle .zip upload.")
+                db.session.flush()
+                if judge_bundle_upload and judge_bundle_upload.filename:
+                    try:
+                        judge_payload = judge_bundle_upload.read(JUDGE_BUNDLE_MAX_BYTES + 1)
+                    except Exception:
+                        raise ValueError("Unable to read the judge bundle.")
+                    if len(judge_payload) > JUDGE_BUNDLE_MAX_BYTES:
+                        raise ValueError(f"Judge bundle must be {JUDGE_BUNDLE_MAX_MB} MB or smaller.")
+                    for task in created_tasks:
+                        bundle_info, upload_error = _save_project_task_bundle_from_bytes(
+                            task,
+                            judge_bundle_upload.filename,
+                            judge_payload,
+                            content_type=(judge_bundle_upload.mimetype or ""),
+                            existing_info=None,
+                        )
+                        if upload_error:
+                            raise ValueError(upload_error)
+                        task.judge_bundle_file = bundle_info
                 db.session.commit()
                 return redirect(url_for("projects_show", code=project.code))
             except ValueError as exc:
@@ -6496,6 +7557,7 @@ def projects_task_import(code):
         "plot": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["plot_payload"], indent=2, ensure_ascii=False),
         "formatting": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["formatting_payload"], indent=2, ensure_ascii=False),
         "comparison": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["comparison_payload"], indent=2, ensure_ascii=False),
+        "hidden_judge": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["hidden_judge_payload"], indent=2, ensure_ascii=False),
     }
     return render_template(
         "projects_task_import.html",
@@ -6517,6 +7579,7 @@ def projects_task_edit(code, task_id):
     auto_flag_vals = request.form.getlist("auto_grade")
     review_flag = request.form.get("requires_review")
     resource_upload = request.files.get("resource_file")
+    judge_bundle_upload = request.files.get("judge_bundle_file")
     if request.method == "POST":
         form_data = {
             "title": request.form.get("title") or "",
@@ -6569,6 +7632,11 @@ def projects_task_edit(code, task_id):
                 error = "Unable to parse task questions."
         if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
+        if not error and task_kind == "assessment":
+            existing_bundle = _extract_file_info(task.judge_bundle_file)
+            has_bundle = bool(existing_bundle) or bool(judge_bundle_upload and judge_bundle_upload.filename)
+            if _questions_require_judge_bundle(questions) and not has_bundle:
+                error = "Hidden tests that use bundle files require a judge bundle .zip upload."
         if not error:
             task.task_kind = task_kind
             task.title = title
@@ -6585,6 +7653,13 @@ def projects_task_edit(code, task_id):
                     error = upload_error
                 else:
                     task.resource_file = file_info
+            if not error and judge_bundle_upload and judge_bundle_upload.filename:
+                existing_info = _extract_file_info(task.judge_bundle_file)
+                bundle_info, upload_error = _save_task_judge_bundle(task, judge_bundle_upload, existing_info)
+                if upload_error:
+                    error = upload_error
+                else:
+                    task.judge_bundle_file = bundle_info
             if not error:
                 db.session.commit()
                 return redirect(url_for("projects_show", code=project.code))
@@ -6607,6 +7682,7 @@ def projects_task_delete(code, task_id):
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first()
     if task:
         _remove_uploaded_file(task.resource_file)
+        _remove_uploaded_file(task.judge_bundle_file)
         db.session.delete(task)
         db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
@@ -6630,6 +7706,7 @@ def student_projects():
             submission = _project_task_submission(task, student)
             status = submission.status if submission and submission.status else "not_started"
             latest_attempt = _latest_task_attempt(submission) if submission else None
+            judge_info = _submission_judge_snapshot(submission, latest_attempt)
             review_notes = None
             reviewer_name = None
             if latest_attempt:
@@ -6643,7 +7720,9 @@ def student_projects():
             cooldown_seconds = 0
             can_retry_now = True
             if submission:
-                if status in ("pending_review", "submitted", "accepted"):
+                if judge_info["judge_verdict"] == "judge_error":
+                    can_retry_now = True
+                elif status in ("pending_review", "submitted", "accepted"):
                     can_retry_now = False
                 elif status == "rejected":
                     retry_minutes = project.retry_cooldown_minutes or 0
@@ -6659,6 +7738,10 @@ def student_projects():
                 "submission": submission,
                 "review_notes": review_notes,
                 "reviewer_name": reviewer_name,
+                "judge_state": judge_info["judge_state"],
+                "judge_verdict": judge_info["judge_verdict"],
+                "judge_feedback": judge_info["judge_feedback"],
+                "judge_summary": judge_info["judge_summary"],
                 "can_retry_now": can_retry_now,
                 "cooldown_seconds_remaining": cooldown_seconds,
             })
@@ -6720,6 +7803,7 @@ def student_project_detail(code):
         submission = _project_task_submission(task, student)
         status = submission.status if submission and submission.status else "not_started"
         latest_attempt = _latest_task_attempt(submission) if submission else None
+        judge_info = _submission_judge_snapshot(submission, latest_attempt)
         review_notes = None
         reviewer_name = None
         if latest_attempt:
@@ -6731,7 +7815,9 @@ def student_project_detail(code):
         cooldown_seconds = 0
         can_retry_now = True
         if submission:
-            if status in ("pending_review", "submitted", "accepted"):
+            if judge_info["judge_verdict"] == "judge_error":
+                can_retry_now = True
+            elif status in ("pending_review", "submitted", "accepted"):
                 can_retry_now = False
             elif status == "rejected":
                 retry_minutes = project.retry_cooldown_minutes or 0
@@ -6747,6 +7833,10 @@ def student_project_detail(code):
             "status": status,
             "review_notes": review_notes,
             "reviewer_name": reviewer_name,
+            "judge_state": judge_info["judge_state"],
+            "judge_verdict": judge_info["judge_verdict"],
+            "judge_feedback": judge_info["judge_feedback"],
+            "judge_summary": judge_info["judge_summary"],
             "can_retry_now": can_retry_now,
             "cooldown_seconds_remaining": cooldown_seconds,
         })
@@ -7021,7 +8111,30 @@ def project_task_take(code, task_id):
             grade_score = 0
             grade_total = 0
             grade_details = []
-            if task.auto_grade:
+            needs_async_judge = bool(task.auto_grade and _task_has_async_hidden_judge(questions))
+            if needs_async_judge and not ENABLE_BACKEND_CODE_RUNS:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
+                    persisted_answers=base_answers,
+                    upload_error="Hidden-test judging is disabled on the server.",
+                ), 503
+            if task.auto_grade and not needs_async_judge:
                 grade_score, grade_total, grade_details = _grade_exam_submission(task, answers)
                 try:
                     app.logger.info(
@@ -7043,25 +8156,40 @@ def project_task_take(code, task_id):
             submission.max_score = grade_total
             submission.last_activity_at = now
             submission.submitted_at = now
-            has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
-            if task.requires_review or has_manual_review:
-                submission.status = "pending_review"
+            submission.judge_state = None
+            submission.judge_verdict = None
+            submission.judge_feedback = None
+            submission.judge_summary_json = None
+            if needs_async_judge:
+                submission.status = "submitted"
+                submission.judge_state = "queued"
+                submission.judge_feedback = "Queued for hidden tests."
+                submission.judge_summary_json = {
+                    "verdict": None,
+                    "feedback": "Queued for hidden tests.",
+                    "queued_at": now.isoformat() + "Z",
+                }
+                grade_details_for_history = None
             else:
-                if task.auto_grade and grade_total > 0:
-                    if grade_score >= grade_total:
-                        submission.status = "accepted"
-                    else:
-                        submission.status = "rejected"
+                has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
+                if task.requires_review or has_manual_review:
+                    submission.status = "pending_review"
                 else:
-                    submission.status = "submitted"
-            grade_details_for_history = grade_details
-            if not grade_details_for_history and ENABLE_BACKEND_CODE_RUNS:
-                has_code_questions = any((q.get("type") == "code") for q in questions)
-                if has_code_questions:
-                    try:
-                        _, _, grade_details_for_history = _grade_exam_submission(task, answers)
-                    except Exception:
-                        grade_details_for_history = []
+                    if task.auto_grade and grade_total > 0:
+                        if grade_score >= grade_total:
+                            submission.status = "accepted"
+                        else:
+                            submission.status = "rejected"
+                    else:
+                        submission.status = "submitted"
+                grade_details_for_history = grade_details
+                if not grade_details_for_history and ENABLE_BACKEND_CODE_RUNS:
+                    has_code_questions = any((q.get("type") == "code") for q in questions)
+                    if has_code_questions:
+                        try:
+                            _, _, grade_details_for_history = _grade_exam_submission(task, answers)
+                        except Exception:
+                            grade_details_for_history = []
             attempt = ProjectTaskAttempt(
                 submission_id=submission.id,
                 attempt_number=_next_task_attempt_number(submission.id),
@@ -7072,8 +8200,21 @@ def project_task_take(code, task_id):
                 max_score=grade_total,
                 grading_json=grade_details_for_history or None,
                 submitted_at=now,
+                judge_state=("queued" if needs_async_judge else None),
+                judge_feedback=("Queued for hidden tests." if needs_async_judge else None),
+                judge_summary_json=(
+                    {
+                        "verdict": None,
+                        "feedback": "Queued for hidden tests.",
+                        "queued_at": now.isoformat() + "Z",
+                    }
+                    if needs_async_judge else None
+                ),
             )
             db.session.add(attempt)
+            db.session.flush()
+            if needs_async_judge:
+                _enqueue_project_task_judge(submission, attempt)
             # Run cheating detection
             _run_cheating_detection(student, submission, request.remote_addr)
             if submission.status == "accepted":
@@ -7148,6 +8289,7 @@ def project_task_submission_self_view(code, task_id):
         answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
     logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
+    judge_info = _submission_judge_snapshot(submission, latest_attempt)
     return render_template(
         "projects_submission_task_detail.html",
         project=project,
@@ -7161,6 +8303,7 @@ def project_task_submission_self_view(code, task_id):
         attempt_rows=[],
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
         latest_attempt=latest_attempt,
+        judge_summary=judge_info["judge_summary"],
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=current_user(),
         student_name=student.name,
@@ -7231,6 +8374,19 @@ def project_task_resource_download(task_id):
     if not full_path or not os.path.isfile(full_path):
         abort(404)
     download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "resource") or "resource"
+    return send_file(full_path, as_attachment=True, download_name=download_name)
+
+@app.route("/projects/tasks/<int:task_id>/judge-bundle")
+@require_user()
+def project_task_judge_bundle_download(task_id):
+    task = ProjectTask.query.get_or_404(task_id)
+    file_info = _extract_file_info(task.judge_bundle_file)
+    if not file_info:
+        abort(404)
+    full_path = _safe_upload_path(file_info.get("path"))
+    if not full_path or not os.path.isfile(full_path):
+        abort(404)
+    download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "judge_bundle.zip") or "judge_bundle.zip"
     return send_file(full_path, as_attachment=True, download_name=download_name)
 
 @app.route("/projects/submissions/<int:submission_id>/files/<question_id>")
@@ -7543,6 +8699,7 @@ def projects_submission_task_detail(code, student_id, task_id):
     logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
     grading_by_question = _grading_by_question(latest_attempt.grading_json) if latest_attempt else {}
+    judge_info = _submission_judge_snapshot(submission, latest_attempt)
     attempts = ProjectTaskAttempt.query.filter_by(submission_id=submission.id).order_by(ProjectTaskAttempt.attempt_number.desc()).all()
     attempt_rows = []
     for attempt in attempts:
@@ -7551,6 +8708,7 @@ def projects_submission_task_detail(code, student_id, task_id):
             "answers": attempt.answers_json if isinstance(attempt.answers_json, dict) else {},
             "logs_by_question": _run_logs_by_question(attempt.run_logs if isinstance(attempt.run_logs, list) else None),
             "grading_by_question": _grading_by_question(attempt.grading_json),
+            "judge_summary": _submission_judge_snapshot(submission, attempt).get("judge_summary"),
         })
     return render_template(
         "projects_submission_task_detail.html",
@@ -7565,6 +8723,7 @@ def projects_submission_task_detail(code, student_id, task_id):
         attempt_rows=attempt_rows,
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
         latest_attempt=latest_attempt,
+        judge_summary=judge_info["judge_summary"],
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=user,
         student_name=session.get("student_name"),
@@ -7733,8 +8892,9 @@ def projects_review_detail(submission_id):
     logs_source = active_attempt.run_logs if active_attempt and hasattr(active_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
     grading_by_question = _grading_by_question(active_attempt.grading_json) if active_attempt else {}
+    judge_info = _submission_judge_snapshot(submission, active_attempt)
     has_code_questions = any((q.get("type") == "code") for q in questions)
-    if not grading_by_question and task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
+    if not grading_by_question and not judge_info["judge_summary"] and task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
         try:
             _, _, grading_details = _grade_exam_submission(task, answers)
         except Exception:
@@ -7753,6 +8913,7 @@ def projects_review_detail(submission_id):
         review_attempt=review_attempt,
         active_attempt=active_attempt,
         is_latest_attempt=is_latest_attempt,
+        judge_summary=judge_info["judge_summary"],
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
         user=user,
         student_name=session.get("student_name"),
