@@ -116,6 +116,69 @@ PROJECT_TASKS_SCHEMA = {
     "additionalProperties": False,
 }
 
+PROFICIENCY_OUTCOMES_SCHEMA = {
+    "type": ["array", "object"],
+    "description": "Array of outcome definitions or an object with an 'outcomes' array.",
+    "properties": {
+        "outcomes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["tag_name", "display_name", "domain"],
+                "properties": {
+                    "tag_name": {"type": "string"},
+                    "display_name": {"type": "string"},
+                    "description": {"type": ["string", "null"]},
+                    "icon_emoji": {"type": ["string", "null"]},
+                    "domain": {"type": "string"},
+                    "domain_display": {"type": ["string", "null"]},
+                    "difficulty_level": {"type": "integer", "default": 1},
+                    "week_number": {"type": ["integer", "null"]},
+                    "prerequisites": {"type": "array", "items": {"type": "string"}},
+                    "exercise_count": {"type": "integer", "default": 3},
+                    "duration_minutes": {"type": "integer", "default": 20},
+                    "cooldown_hours": {"type": "integer", "default": 24},
+                    "passing_threshold": {"type": "number", "default": 0.75},
+                    "display_order": {"type": "integer", "default": 10},
+                    "is_active": {"type": "boolean", "default": True}
+                }
+            }
+        }
+    }
+}
+
+PROFICIENCY_EXERCISES_SCHEMA = {
+    "type": ["array", "object"],
+    "description": "Single exercise object, array of exercises, or an object with an 'exercises' array.",
+    "properties": {
+        "exercises": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "required": ["title", "outcome_tag", "test_cases"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": ["string", "null"]},
+                    "instructions": {"type": ["string", "null"]},
+                    "starter_code": {"type": ["string", "null"]},
+                    "outcome_tag": {"type": "string"},
+                    "difficulty_level": {"type": "integer", "default": 1},
+                    "test_cases": {
+                        "type": "object",
+                        "required": ["visible", "hidden"],
+                        "properties": {
+                            "visible": {"type": "array"},
+                            "hidden": {"type": "array"}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 LEADERBOARD_METRICS = {
     "total_points": {"label": "Total points", "description": "Sum of all recorded grade scores."},
     "projects_done": {"label": "Projects done", "description": "Count of projects with required tasks accepted."},
@@ -2522,6 +2585,221 @@ def _import_project_tasks_from_config(project, config):
     for task in new_tasks:
         db.session.add(task)
     return len(new_tasks)
+
+
+def _read_json_import_payload(form_key="payload", file_key="payload_file", default_payload=""):
+    uploaded = request.files.get(file_key)
+    if uploaded and uploaded.filename:
+        try:
+            raw = uploaded.read()
+        except Exception:
+            raise ValueError("Unable to read uploaded file.")
+        if not raw:
+            raise ValueError("Uploaded file is empty.")
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("Uploaded file must be valid UTF-8 JSON.")
+    return request.form.get(form_key) or default_payload
+
+
+def _extract_import_items(config, key, label, allow_single=False):
+    if isinstance(config, list):
+        items = config
+    elif isinstance(config, dict):
+        if isinstance(config.get(key), list):
+            items = config.get(key)
+        elif allow_single and key == "exercises" and isinstance(config.get("title"), str):
+            items = [config]
+        else:
+            raise ValueError(f"Config must include a non-empty '{key}' array.")
+    else:
+        raise ValueError("Config must be a JSON object or array.")
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"Config must include a non-empty '{key}' array.")
+    for idx, entry in enumerate(items, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{label} #{idx} must be an object.")
+    return items
+
+
+def _parse_bool_value(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off", ""):
+        return False
+    return default
+
+
+def _parse_int_value(value, default=None):
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except Exception:
+        raise ValueError("must be an integer")
+
+
+def _parse_float_value(value, default=None):
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except Exception:
+        raise ValueError("must be a number")
+
+
+def _normalize_test_cases_payload(test_cases, title):
+    if not isinstance(test_cases, dict):
+        raise ValueError(f"Exercise '{title}' must include a 'test_cases' object.")
+    normalized = {"visible": [], "hidden": []}
+    for group_name, label in (("visible", "Visible"), ("hidden", "Hidden")):
+        entries = test_cases.get(group_name, [])
+        if entries is None:
+            entries = []
+        if not isinstance(entries, list):
+            raise ValueError(f"Exercise '{title}': {label.lower()} tests must be an array.")
+        for index, entry in enumerate(entries, start=1):
+            if not isinstance(entry, dict):
+                raise ValueError(f"Exercise '{title}': {label} test #{index} must be an object.")
+            test_input = str(entry.get("input") or "").strip()
+            expected_output = str(entry.get("expected_output") or "").strip()
+            description = str(entry.get("description") or "").strip()
+            if not test_input and not expected_output:
+                continue
+            normalized[group_name].append({
+                "input": test_input,
+                "expected_output": expected_output,
+                "description": description or (f"{label} test {index}" if group_name == "hidden" else f"Test {index}"),
+            })
+    return normalized
+
+
+def _normalize_proficiency_outcome_entry(entry, offset):
+    tag_name = str(entry.get("tag_name") or "").strip()
+    display_name = str(entry.get("display_name") or "").strip()
+    description = str(entry.get("description") or "").strip()
+    domain = str(entry.get("domain") or "").strip()
+    domain_display = str(entry.get("domain_display") or "").strip()
+    icon_emoji = str(entry.get("icon_emoji") or "📚").strip() or "📚"
+    if not tag_name:
+        raise ValueError(f"Outcome #{offset} is missing a tag_name.")
+    if not display_name:
+        raise ValueError(f"Outcome '{tag_name}' is missing a display_name.")
+    if not domain:
+        raise ValueError(f"Outcome '{tag_name}' is missing a domain.")
+    prereqs = entry.get("prerequisites", entry.get("prerequisites_json"))
+    if prereqs in (None, ""):
+        prereqs = []
+    if not isinstance(prereqs, list):
+        raise ValueError(f"Outcome '{tag_name}': prerequisites must be an array.")
+    normalized_prereqs = []
+    for prereq in prereqs:
+        value = str(prereq or "").strip()
+        if value:
+            normalized_prereqs.append(value)
+    try:
+        difficulty_level = _parse_int_value(entry.get("difficulty_level"), 1)
+        week_number = _parse_int_value(entry.get("week_number"), None)
+        exercise_count = _parse_int_value(entry.get("exercise_count"), 3)
+        duration_minutes = _parse_int_value(entry.get("duration_minutes"), 20)
+        cooldown_hours = _parse_int_value(entry.get("cooldown_hours"), 24)
+        passing_threshold = _parse_float_value(entry.get("passing_threshold"), 0.75)
+        display_order = _parse_int_value(entry.get("display_order"), 10)
+    except ValueError as exc:
+        raise ValueError(f"Outcome '{tag_name}': {exc}")
+    return {
+        "tag_name": tag_name,
+        "display_name": display_name,
+        "description": description or None,
+        "icon_emoji": icon_emoji,
+        "domain": domain,
+        "domain_display": domain_display or domain.replace('_', ' ').title(),
+        "difficulty_level": difficulty_level,
+        "week_number": week_number,
+        "prerequisites_json": normalized_prereqs,
+        "exercise_count": exercise_count,
+        "duration_minutes": duration_minutes,
+        "cooldown_hours": cooldown_hours,
+        "passing_threshold": passing_threshold,
+        "display_order": display_order,
+        "is_active": _parse_bool_value(entry.get("is_active"), True),
+    }
+
+
+def _import_proficiency_outcomes_from_config(config):
+    items = _extract_import_items(config, "outcomes", "Outcome")
+    seen = set()
+    new_items = []
+    for offset, entry in enumerate(items, start=1):
+        normalized = _normalize_proficiency_outcome_entry(entry, offset)
+        tag_name = normalized["tag_name"]
+        if tag_name in seen:
+            raise ValueError(f"Outcome '{tag_name}' appears more than once in this import.")
+        seen.add(tag_name)
+        if LearningOutcome.query.filter_by(tag_name=tag_name).first():
+            raise ValueError(f"Outcome '{tag_name}' already exists.")
+        new_items.append(LearningOutcome(**normalized))
+    for item in new_items:
+        db.session.add(item)
+    return len(new_items)
+
+
+def _normalize_proficiency_exercise_entry(entry, offset, user_id):
+    title = str(entry.get("title") or "").strip()
+    if not title:
+        raise ValueError(f"Exercise #{offset} is missing a title.")
+    description = str(entry.get("description") or "").strip()
+    instructions = str(entry.get("instructions") or "").strip()
+    starter_code = str(entry.get("starter_code") or "").strip()
+    outcome_tag = str(entry.get("outcome_tag") or "").strip()
+    if not outcome_tag:
+        raise ValueError(f"Exercise '{title}' is missing an outcome_tag.")
+    if not LearningOutcome.query.filter_by(tag_name=outcome_tag).first():
+        raise ValueError(f"Exercise '{title}' references unknown outcome_tag '{outcome_tag}'.")
+    try:
+        difficulty_level = _parse_int_value(entry.get("difficulty_level"), 1)
+    except ValueError as exc:
+        raise ValueError(f"Exercise '{title}': {exc}")
+    test_cases = _normalize_test_cases_payload(entry.get("test_cases"), title)
+    duplicate = ProficiencyExercise.query.filter_by(title=title, outcome_tag=outcome_tag).first()
+    if duplicate:
+        raise ValueError(f"Exercise '{title}' already exists for outcome '{outcome_tag}'.")
+    return ProficiencyExercise(
+        title=title,
+        description=description or None,
+        instructions=instructions or None,
+        starter_code=starter_code or None,
+        test_cases_json=test_cases,
+        outcome_tag=outcome_tag,
+        difficulty_level=difficulty_level,
+        is_active=_parse_bool_value(entry.get("is_active"), True),
+        created_by_user_id=user_id,
+    )
+
+
+def _import_proficiency_exercises_from_config(config, user_id):
+    items = _extract_import_items(config, "exercises", "Exercise", allow_single=True)
+    seen = set()
+    new_items = []
+    for offset, entry in enumerate(items, start=1):
+        title = str(entry.get("title") or "").strip() or f"#{offset}"
+        outcome_tag = str(entry.get("outcome_tag") or "").strip()
+        key = (title.lower(), outcome_tag)
+        if key in seen:
+            raise ValueError(f"Exercise '{title}' appears more than once in this import.")
+        seen.add(key)
+        new_items.append(_normalize_proficiency_exercise_entry(entry, offset, user_id))
+    for item in new_items:
+        db.session.add(item)
+    return len(new_items)
 
 def _grade_exam_submission(exam, answers):
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
@@ -6228,12 +6506,102 @@ def proficiency_outcomes_delete(outcome_id):
     """Delete a learning outcome."""
     if not verify_csrf():
         abort(400, "bad csrf")
-    
+
     outcome = LearningOutcome.query.get_or_404(outcome_id)
+    outcome_tag = outcome.tag_name
+
+    for exercise in ProficiencyExercise.query.filter_by(outcome_tag=outcome_tag).all():
+        exercise.outcome_tag = None
+    for attempt in ProficiencyTestAttempt.query.filter_by(outcome_tag=outcome_tag).all():
+        attempt.outcome_tag = None
+    StudentOutcomeProgress.query.filter_by(outcome_tag=outcome_tag).delete(synchronize_session=False)
+    StudentProficiencyTag.query.filter_by(tag_name=outcome_tag).delete(synchronize_session=False)
+
+    dependent_outcomes = LearningOutcome.query.filter(LearningOutcome.id != outcome.id).all()
+    for dependent in dependent_outcomes:
+        prerequisites = dependent.prerequisites if isinstance(dependent.prerequisites, list) else []
+        cleaned = [tag for tag in prerequisites if tag != outcome_tag]
+        if cleaned != prerequisites:
+            dependent.prerequisites_json = cleaned
+
     db.session.delete(outcome)
     db.session.commit()
-    
+
     return redirect(url_for("proficiency_outcomes_list"))
+
+@app.route("/proficiency/outcomes/import", methods=["GET", "POST"])
+@require_user()
+def proficiency_outcomes_import():
+    user = current_user()
+    error = None
+    default_json = json.dumps({"outcomes": []}, indent=2)
+    payload = request.form.get("payload") or default_json
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        try:
+            payload = _read_json_import_payload(default_payload=default_json)
+            config = json.loads(payload or "{}")
+        except ValueError as exc:
+            error = f"Invalid JSON: {exc}"
+        else:
+            try:
+                _import_proficiency_outcomes_from_config(config)
+                db.session.commit()
+                return redirect(url_for("proficiency_outcomes_list"))
+            except ValueError as exc:
+                db.session.rollback()
+                error = str(exc)
+            except Exception:
+                db.session.rollback()
+                error = "Unable to import outcomes. Please review your JSON."
+    schema_json = json.dumps(PROFICIENCY_OUTCOMES_SCHEMA, indent=2)
+    return render_template(
+        "proficiency_outcomes_import.html",
+        user=user,
+        payload=payload,
+        schema_json=schema_json,
+        error=error,
+        student_name=session.get("student_name"),
+    )
+
+
+@app.route("/proficiency/exercises/import", methods=["GET", "POST"])
+@require_user()
+def proficiency_exercises_import():
+    user = current_user()
+    error = None
+    default_json = json.dumps({"exercises": []}, indent=2)
+    payload = request.form.get("payload") or default_json
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        try:
+            payload = _read_json_import_payload(default_payload=default_json)
+            config = json.loads(payload or "{}")
+        except ValueError as exc:
+            error = f"Invalid JSON: {exc}"
+        else:
+            try:
+                _import_proficiency_exercises_from_config(config, user.id if user else None)
+                db.session.commit()
+                return redirect(url_for("proficiency_exercises_list"))
+            except ValueError as exc:
+                db.session.rollback()
+                error = str(exc)
+            except Exception:
+                db.session.rollback()
+                error = "Unable to import exercises. Please review your JSON."
+    schema_json = json.dumps(PROFICIENCY_EXERCISES_SCHEMA, indent=2)
+    return render_template(
+        "proficiency_exercises_import.html",
+        user=user,
+        payload=payload,
+        schema_json=schema_json,
+        error=error,
+        student_name=session.get("student_name"),
+    )
+
 
 @app.route("/proficiency/exercises")
 @require_user()

@@ -620,23 +620,23 @@ class StudentOutcomeProgress(db.Model):
     __tablename__ = "student_outcome_progress"
     id = db.Column(db.Integer, primary_key=True)
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), index=True, nullable=False)
-    outcome_tag = db.Column(db.String(64), db.ForeignKey('learning_outcomes.tag_name', onupdate="CASCADE"), nullable=False, index=True)
-    
+    outcome_tag = db.Column(db.String(64), db.ForeignKey('learning_outcomes.tag_name', onupdate="CASCADE", ondelete="CASCADE"), nullable=False, index=True)
+
     # Progress tracking
     attempts = db.Column(db.Integer, nullable=False, default=0)
     best_score = db.Column(db.Float, nullable=True)  # Best % across attempts (0.0-1.0)
     is_unlocked = db.Column(db.Boolean, nullable=False, default=False)  # Prerequisites met
     is_passed = db.Column(db.Boolean, nullable=False, default=False)
-    
+
     # Timestamps
     first_attempt_at = db.Column(db.DateTime, nullable=True)
     last_attempt_at = db.Column(db.DateTime, nullable=True)
     passed_at = db.Column(db.DateTime, nullable=True)
-    
+
     # Relationships
     student = db.relationship('Student', backref=db.backref('outcome_progress', cascade="all,delete-orphan"))
-    outcome = db.relationship('LearningOutcome', backref='student_progress')
-    
+    outcome = db.relationship('LearningOutcome', backref=db.backref('student_progress', cascade="all,delete-orphan", passive_deletes=True))
+
     __table_args__ = (
         UniqueConstraint('student_id', 'outcome_tag', name='uq_student_outcome_progress'),
     )
