@@ -6388,9 +6388,10 @@ def proficiency_outcomes_list():
     outcomes = LearningOutcome.query.order_by(
         LearningOutcome.domain, LearningOutcome.display_order
     ).all()
-    
+
     # Group by domain
     by_domain = {}
+    active_count = 0
     for outcome in outcomes:
         if outcome.domain not in by_domain:
             by_domain[outcome.domain] = {
@@ -6398,9 +6399,17 @@ def proficiency_outcomes_list():
                 'outcomes': []
             }
         by_domain[outcome.domain]['outcomes'].append(outcome)
-    
-    return render_template("proficiency_outcomes_list.html", 
-                           user=user, by_domain=by_domain)
+        if outcome.is_active:
+            active_count += 1
+
+    summary = {
+        'total_outcomes': len(outcomes),
+        'active_outcomes': active_count,
+        'domain_count': len(by_domain),
+    }
+
+    return render_template("proficiency_outcomes_list.html",
+                           user=user, by_domain=by_domain, summary=summary)
 
 @app.route("/proficiency/outcomes/new", methods=["GET", "POST"])
 @require_user()
@@ -6610,8 +6619,14 @@ def proficiency_exercises_list():
     user = current_user()
     exercises = ProficiencyExercise.query.order_by(ProficiencyExercise.created_at.desc()).all()
     config = _get_proficiency_config()
-    return render_template("proficiency_exercises_list.html", 
-                           user=user, exercises=exercises, config=config)
+    summary = {
+        'total_exercises': len(exercises),
+        'active_exercises': sum(1 for ex in exercises if ex.is_active),
+        'visible_tests': sum(len(ex.visible_test_cases) for ex in exercises),
+        'hidden_tests': sum(len(ex.hidden_test_cases) for ex in exercises),
+    }
+    return render_template("proficiency_exercises_list.html",
+                           user=user, exercises=exercises, config=config, summary=summary)
 
 @app.route("/proficiency/exercises/new", methods=["GET", "POST"])
 @require_user()
@@ -6794,14 +6809,14 @@ def proficiency_review_detail(attempt_id):
     """Review a specific proficiency test attempt."""
     user = current_user()
     attempt = ProficiencyTestAttempt.query.get_or_404(attempt_id)
-    
+
     if request.method == "POST":
         action = request.form.get("action")
         if action == "pass":
             attempt.status = "passed"
             attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
-            
+
             # Calculate final score if not already calculated
             if not attempt.final_score:
                 total_tests = 0
@@ -6810,7 +6825,7 @@ def proficiency_review_detail(attempt_id):
                     total_tests += sub.visible_total + sub.hidden_total
                     passed_tests += sub.visible_passed + sub.hidden_passed
                 attempt.final_score = passed_tests / total_tests if total_tests > 0 else 0.0
-            
+
             # Award proficiency tag based on test type
             if attempt.outcome_tag:
                 # Outcome-based test
@@ -6825,7 +6840,7 @@ def proficiency_review_detail(attempt_id):
                         awarded_by_user_id=user.id,
                     )
                     db.session.add(tag)
-                
+
                 # Update outcome progress
                 progress = StudentOutcomeProgress.query.filter_by(
                     student_id=attempt.student_id,
@@ -6849,13 +6864,13 @@ def proficiency_review_detail(attempt_id):
                         awarded_by_user_id=user.id,
                     )
                     db.session.add(tag)
-            
+
             db.session.commit()
         elif action == "fail":
             attempt.status = "failed"
             attempt.reviewed_at = utcnow()
             attempt.reviewed_by_user_id = user.id
-            
+
             # Calculate final score if not already calculated
             if not attempt.final_score:
                 total_tests = 0
@@ -6864,7 +6879,7 @@ def proficiency_review_detail(attempt_id):
                     total_tests += sub.visible_total + sub.hidden_total
                     passed_tests += sub.visible_passed + sub.hidden_passed
                 attempt.final_score = passed_tests / total_tests if total_tests > 0 else 0.0
-            
+
             # Update outcome progress
             if attempt.outcome_tag:
                 progress = StudentOutcomeProgress.query.filter_by(
@@ -6874,12 +6889,29 @@ def proficiency_review_detail(attempt_id):
                 if progress:
                     if not progress.best_score or attempt.final_score > progress.best_score:
                         progress.best_score = attempt.final_score
-            
+
             db.session.commit()
-        
+
         return redirect(url_for("proficiency_reviews"))
-    
-    return render_template("proficiency_review_detail.html", user=user, attempt=attempt)
+
+    visible_passed_total = sum(sub.visible_passed for sub in attempt.submissions)
+    visible_total = sum(sub.visible_total for sub in attempt.submissions)
+    hidden_passed_total = sum(sub.hidden_passed for sub in attempt.submissions)
+    hidden_total = sum(sub.hidden_total for sub in attempt.submissions)
+    review_summary = {
+        'visible_passed_total': visible_passed_total,
+        'visible_total': visible_total,
+        'hidden_passed_total': hidden_passed_total,
+        'hidden_total': hidden_total,
+        'final_score_pct': int(round((attempt.final_score or 0) * 100)) if attempt.final_score is not None else None,
+        'threshold_pct': None,
+    }
+    if attempt.outcome_tag:
+        outcome = LearningOutcome.query.filter_by(tag_name=attempt.outcome_tag).first()
+        if outcome:
+            review_summary['threshold_pct'] = int(round(outcome.passing_threshold * 100))
+
+    return render_template("proficiency_review_detail.html", user=user, attempt=attempt, review_summary=review_summary)
 
 @app.route("/proficiency/reviews/<int:attempt_id>/change-status", methods=["POST"])
 @require_user()
@@ -7308,6 +7340,44 @@ def student_proficiency_outcomes():
         'total_unlocked': sum(1 for p in progress_records if p.is_unlocked),
         'total_locked': len(all_outcomes) - sum(1 for p in progress_records if p.is_unlocked)
     }
+
+    next_action = None
+    if not tests_enabled:
+        next_action = {
+            'title': 'Tests are currently unavailable',
+            'description': 'Your instructors have temporarily disabled proficiency tests. You can still view your progress.',
+            'kind': 'warning',
+        }
+    elif pending_attempts:
+        first_pending = next(iter(pending_attempts.values()))
+        next_action = {
+            'title': 'You have a test awaiting review',
+            'description': f"Your latest submission is waiting for mentor review since {first_pending.submitted_at.strftime('%Y-%m-%d %H:%M') if first_pending.submitted_at else 'recently'}.",
+            'kind': 'pending',
+        }
+    else:
+        next_ready = None
+        for outcome in all_outcomes:
+            progress = progress_dict.get(outcome.tag_name)
+            if progress and progress.is_passed:
+                continue
+            if progress and progress.is_unlocked and can_attempt.get(outcome.tag_name):
+                next_ready = outcome
+                break
+        if next_ready:
+            next_action = {
+                'title': f"Next recommended outcome: {next_ready.display_name}",
+                'description': f"This {next_ready.duration_minutes}-minute test has {next_ready.exercise_count} exercise{'s' if next_ready.exercise_count != 1 else ''}.",
+                'kind': 'ready',
+                'url': url_for('student_proficiency_test_outcome', outcome_tag=next_ready.tag_name),
+                'action_label': 'Open outcome',
+            }
+        elif stats['total_passed'] == stats['total_outcomes'] and stats['total_outcomes'] > 0:
+            next_action = {
+                'title': 'All current outcomes are completed',
+                'description': 'You have passed every active proficiency outcome currently available.',
+                'kind': 'success',
+            }
     
     # Prepare data for radar chart with abbreviated labels
     domain_progress = {
@@ -7343,7 +7413,8 @@ def student_proficiency_outcomes():
         pending_attempts=pending_attempts,
         stats=stats,
         domain_progress=domain_progress,
-        tests_enabled=tests_enabled
+        tests_enabled=tests_enabled,
+        next_action=next_action,
     )
 
 @app.route("/student/proficiency/test/<outcome_tag>")

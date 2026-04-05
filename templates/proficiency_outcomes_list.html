@@ -1,16 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  .summary-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+    gap:12px;
+    margin-top:16px;
+  }
+  .summary-card {
+    background:#1f2937;
+    border:1px solid #334155;
+    border-radius:12px;
+    padding:16px;
+  }
+  .summary-card .label { color:#94a3b8; font-size:0.9rem; }
+  .summary-card .value { font-size:1.8rem; font-weight:700; margin-top:8px; }
+  .badge-pill {
+    display:inline-block;
+    padding:4px 10px;
+    border-radius:999px;
+    font-size:0.82rem;
+    font-weight:600;
+  }
+  .badge-active { background:rgba(74,222,128,0.15); color:#4ade80; border:1px solid rgba(74,222,128,0.4); }
+  .badge-inactive { background:rgba(148,163,184,0.12); color:#cbd5e1; border:1px solid rgba(148,163,184,0.25); }
+  .tag-chip {
+    display:inline-block;
+    background:#0f172a;
+    border:1px solid #334155;
+    padding:4px 8px;
+    border-radius:8px;
+    font-size:0.82rem;
+  }
+</style>
+
 <div class="card">
-  <div class="row" style="justify-content:space-between; align-items:center;">
+  <div class="row" style="justify-content:space-between; align-items:center; gap:12px;">
     <div>
       <h2 style="margin:0;">Learning Outcomes</h2>
       <p class="muted" style="margin-top:4px;">Define the skills students must master</p>
     </div>
-    <div class="row" style="gap:8px;">
+    <div class="row" style="gap:8px; flex-wrap:wrap;">
       <a href="{{ url_for('proficiency_config') }}" class="btn">⚙️ Settings</a>
       <a href="{{ url_for('proficiency_exercises_list') }}" class="btn">Exercises</a>
       <a href="{{ url_for('proficiency_outcomes_import') }}" class="btn">Import JSON</a>
       <a href="{{ url_for('proficiency_outcomes_new') }}" class="btn btn-primary">+ New Outcome</a>
+    </div>
+  </div>
+
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="label">Total outcomes</div>
+      <div class="value">{{ summary.total_outcomes }}</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">Active outcomes</div>
+      <div class="value">{{ summary.active_outcomes }}</div>
+    </div>
+    <div class="summary-card">
+      <div class="label">Domains</div>
+      <div class="value">{{ summary.domain_count }}</div>
     </div>
   </div>
 </div>
@@ -19,9 +68,13 @@
 
 {% for domain_key, domain_info in by_domain.items() %}
 <div class="card">
-  <h3>{{ domain_info.display }}</h3>
-  <p class="muted">{{ domain_info.outcomes|length }} outcome(s)</p>
-  
+  <div class="row" style="justify-content:space-between; align-items:center; gap:10px; margin-bottom:12px;">
+    <div>
+      <h3 style="margin:0;">{{ domain_info.display }}</h3>
+      <p class="muted" style="margin:4px 0 0 0;">{{ domain_info.outcomes|length }} outcome(s)</p>
+    </div>
+  </div>
+
   {% if domain_info.outcomes %}
   <table style="margin-top:16px;">
     <thead>
@@ -39,37 +92,38 @@
       {% for outcome in domain_info.outcomes %}
       <tr>
         <td>
-          <div>{{ outcome.icon_emoji }} {{ outcome.display_name }}</div>
+          <div style="font-weight:600;">{{ outcome.icon_emoji }} {{ outcome.display_name }}</div>
           {% if outcome.description %}
           <div class="muted" style="font-size:0.9rem; margin-top:4px;">{{ outcome.description }}</div>
           {% endif %}
           {% if outcome.prerequisites %}
-          <div class="muted" style="font-size:0.85rem; margin-top:4px;">
-            Prerequisites: {{ outcome.prerequisites|join(', ') }}
+          <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+            {% for prereq in outcome.prerequisites %}
+            <span class="tag-chip">{{ prereq }}</span>
+            {% endfor %}
           </div>
           {% endif %}
         </td>
-        <td><code style="background:var(--bg); padding:4px 8px; border-radius:4px;">{{ outcome.tag_name }}</code></td>
+        <td><span class="tag-chip">{{ outcome.tag_name }}</span></td>
         <td>
-          {% if outcome.difficulty_level == 1 %}⭐ Basic
-          {% elif outcome.difficulty_level == 2 %}⭐⭐ Intermediate
-          {% elif outcome.difficulty_level == 3 %}⭐⭐⭐ Advanced
+          {% if outcome.difficulty_level == 1 %}<span class="badge-pill" style="background:rgba(96,165,250,0.12); color:#93c5fd; border:1px solid rgba(96,165,250,0.25);">⭐ Basic</span>
+          {% elif outcome.difficulty_level == 2 %}<span class="badge-pill" style="background:rgba(251,191,36,0.12); color:#fcd34d; border:1px solid rgba(251,191,36,0.25);">⭐⭐ Intermediate</span>
+          {% elif outcome.difficulty_level == 3 %}<span class="badge-pill" style="background:rgba(248,113,113,0.12); color:#fca5a5; border:1px solid rgba(248,113,113,0.25);">⭐⭐⭐ Advanced</span>
           {% endif %}
         </td>
         <td>{{ outcome.exercise_count }}</td>
         <td>{{ outcome.duration_minutes }}m</td>
         <td>
           {% if outcome.is_active %}
-          <span style="color:#4ade80;">✓ Active</span>
+          <span class="badge-pill badge-active">Active</span>
           {% else %}
-          <span class="muted">Inactive</span>
+          <span class="badge-pill badge-inactive">Inactive</span>
           {% endif %}
         </td>
         <td>
           <div class="row" style="gap:6px;">
             <a href="{{ url_for('proficiency_outcomes_edit', outcome_id=outcome.id) }}" class="btn">Edit</a>
-            <form method="POST" action="{{ url_for('proficiency_outcomes_delete', outcome_id=outcome.id) }}" 
-                  onsubmit="return confirm('Delete this outcome? This cannot be undone.');" style="margin:0;">
+            <form method="POST" action="{{ url_for('proficiency_outcomes_delete', outcome_id=outcome.id) }}" onsubmit="return confirm('Delete this outcome? This cannot be undone.');" style="margin:0;">
               <input type="hidden" name="csrf" value="{{ csrf_token() }}">
               <button type="submit" class="btn btn-danger">Delete</button>
             </form>

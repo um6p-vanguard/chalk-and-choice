@@ -15,6 +15,8 @@
     margin-bottom: 16px;
     padding-bottom: 12px;
     border-bottom: 2px solid #2d3350;
+    gap: 12px;
+    flex-wrap: wrap;
   }
   .domain-title {
     font-size: 1.3rem;
@@ -27,13 +29,14 @@
   }
   .outcome-item {
     display: flex;
-    align-items: center;
-    padding: 14px;
-    margin: 8px 0;
+    align-items: flex-start;
+    padding: 16px;
+    margin: 10px 0;
     background: #0f1220;
     border: 1px solid #2d3350;
-    border-radius: 8px;
+    border-radius: 10px;
     transition: all 0.2s;
+    gap: 16px;
   }
   .outcome-item:hover {
     border-color: var(--brand);
@@ -41,7 +44,7 @@
   }
   .outcome-icon {
     font-size: 1.8rem;
-    margin-right: 16px;
+    margin-top: 4px;
   }
   .outcome-info {
     flex: 1;
@@ -54,7 +57,7 @@
   .outcome-description {
     font-size: 0.9rem;
     color: #94a3b8;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
   }
   .outcome-meta {
     font-size: 0.85rem;
@@ -64,6 +67,8 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
   .status-badge {
     padding: 6px 14px;
@@ -71,62 +76,59 @@
     font-weight: 600;
     font-size: 0.9rem;
     white-space: nowrap;
+    border: 1px solid transparent;
   }
   .status-passed {
     background: rgba(74, 222, 128, 0.15);
-    border: 1px solid #4ade80;
+    border-color: #4ade80;
     color: #4ade80;
   }
   .status-unlocked {
     background: rgba(99, 127, 190, 0.15);
-    border: 1px solid var(--brand);
+    border-color: var(--brand);
     color: var(--brand);
   }
   .status-locked {
     background: rgba(148, 163, 184, 0.1);
-    border: 1px solid #475569;
+    border-color: #475569;
     color: #94a3b8;
   }
   .status-failed {
     background: rgba(248, 113, 113, 0.15);
-    border: 1px solid #f87171;
+    border-color: #f87171;
     color: #f87171;
+  }
+  .status-pending {
+    background: rgba(251,191,36,0.15);
+    border-color: #fbbf24;
+    color: #fbbf24;
   }
   .score-display {
     font-size: 0.9rem;
     font-weight: 600;
   }
-  .progress-ring {
-    width: 50px;
-    height: 50px;
-  }
-  .progress-ring__circle {
-    transition: stroke-dashoffset 0.35s;
-    transform: rotate(-90deg);
-    transform-origin: 50% 50%;
-  }
   .overall-progress {
     background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
     border: 1px solid #334155;
     border-radius: 16px;
-    padding: 40px;
-    margin-bottom: 32px;
+    padding: 32px;
+    margin-bottom: 24px;
     text-align: center;
   }
   .overall-progress h2 {
-    margin: 0 0 32px 0;
+    margin: 0 0 24px 0;
     color: #e2e8f0;
-    font-size: 1.6rem;
+    font-size: 1.5rem;
     font-weight: 600;
   }
   #progressChart {
     width: 100%;
-    max-width: 550px;
-    max-height: 550px;
-    margin: 0 auto 32px auto;
+    max-width: 520px;
+    max-height: 520px;
+    margin: 0 auto 24px auto;
   }
   .chart-container {
-    padding: 40px 80px;
+    padding: 20px 40px;
     max-width: 100%;
     margin: 0 auto;
     overflow: visible;
@@ -135,16 +137,17 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 48px;
-    margin-top: 32px;
-    padding-top: 32px;
+    gap: 40px;
+    margin-top: 24px;
+    padding-top: 24px;
     border-top: 1px solid #334155;
+    flex-wrap: wrap;
   }
   .progress-stat {
     text-align: center;
   }
   .progress-stat-value {
-    font-size: 2.5rem;
+    font-size: 2.4rem;
     font-weight: 700;
     color: var(--brand);
     line-height: 1;
@@ -159,8 +162,9 @@
   .legend {
     display: flex;
     justify-content: center;
-    gap: 32px;
-    margin-top: 24px;
+    gap: 24px;
+    margin-top: 18px;
+    flex-wrap: wrap;
   }
   .legend-item {
     display: flex;
@@ -170,27 +174,66 @@
     color: #cbd5e1;
   }
   .legend-color {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     border-radius: 4px;
+  }
+  .next-action-card {
+    background: #111827;
+    border: 1px solid #334155;
+    border-left: 4px solid var(--brand);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+  .next-action-card.pending { border-left-color: #fbbf24; }
+  .next-action-card.warning { border-left-color: #f87171; }
+  .next-action-card.success { border-left-color: #4ade80; }
+  .prereq-chips {
+    display:flex;
+    gap:6px;
+    flex-wrap:wrap;
+    margin-top:8px;
+  }
+  .prereq-chip {
+    display:inline-block;
+    padding:4px 8px;
+    border-radius:999px;
+    background:#111827;
+    border:1px solid #334155;
+    color:#cbd5e1;
+    font-size:0.78rem;
   }
 </style>
 
 <div class="card">
-  <h2 style="margin: 0 0 8px 0;">🎯 Python Proficiency - Learning Outcomes</h2>
-  <p class="muted" style="margin: 0;">Master Python skills through targeted proficiency tests across 5 domains</p>
+  <h2 style="margin: 0 0 8px 0;">Python Proficiency - Learning Outcomes</h2>
+  <p class="muted" style="margin: 0;">Master Python skills through targeted proficiency tests across your active domains.</p>
 </div>
 
 <div class="sp"></div>
 
-<!-- Overall Progress Visualization -->
+{% if next_action %}
+<div class="next-action-card {{ next_action.kind }}">
+  <div class="row" style="justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+    <div>
+      <h3 style="margin:0 0 6px 0;">{{ next_action.title }}</h3>
+      <p class="muted" style="margin:0;">{{ next_action.description }}</p>
+    </div>
+    {% if next_action.url %}
+    <a href="{{ next_action.url }}" class="btn btn-primary">{{ next_action.action_label }}</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <div class="overall-progress">
-  <h2>📊 Your Learning Progress</h2>
-  
+  <h2>Your Learning Progress</h2>
+
   <div class="chart-container">
     <canvas id="progressChart"></canvas>
   </div>
-  
+
   <div class="legend">
     <div class="legend-item">
       <div class="legend-color" style="background: #4ade80;"></div>
@@ -205,7 +248,7 @@
       <span>Locked</span>
     </div>
   </div>
-  
+
   <div class="progress-summary">
     <div class="progress-stat">
       <div class="progress-stat-value">{{ stats.total_passed }}</div>
@@ -216,28 +259,23 @@
       <div class="progress-stat-label">Unlocked</div>
     </div>
     <div class="progress-stat">
-      <div class="progress-stat-value">{{ (stats.total_passed / stats.total_outcomes * 100)|int }}%</div>
+      <div class="progress-stat-value">{{ (stats.total_passed / stats.total_outcomes * 100)|int if stats.total_outcomes else 0 }}%</div>
       <div class="progress-stat-label">Complete</div>
     </div>
   </div>
 </div>
 
-<div class="sp"></div>
-
-<!-- Test Access Status -->
 {% if not tests_enabled %}
 <div class="card" style="background:#1e293b; border:2px solid #fbbf24; padding:24px; text-align:center;">
-  <div style="font-size:2.5rem; margin-bottom:16px;">⏸️</div>
   <h3 style="margin:0 0 12px 0; color:#fbbf24;">Proficiency Tests Currently Unavailable</h3>
   <p class="muted" style="margin:0; max-width:600px; margin:0 auto;">
-    Your instructors have temporarily disabled test-taking while they configure the system. 
-    You can still view your progress above. Check back soon!
+    Your instructors have temporarily disabled test-taking while they configure the system.
+    You can still view your progress above.
   </p>
 </div>
 <div class="sp"></div>
 {% endif %}
 
-<!-- Outcomes by Domain -->
 {% for domain_key, domain_info in outcomes_by_domain.items() %}
 <div class="domain-card">
   <div class="domain-header">
@@ -246,7 +284,7 @@
       {{ domain_info.passed }} / {{ domain_info.total }} completed
     </div>
   </div>
-  
+
   {% for outcome in domain_info.outcomes %}
   <div class="outcome-item">
     <div class="outcome-icon">{{ outcome.icon_emoji }}</div>
@@ -255,30 +293,31 @@
       <div class="outcome-description">{{ outcome.description }}</div>
       <div class="outcome-meta">
         {% if outcome.week_number %}Week {{ outcome.week_number }} • {% endif %}
-        {{ outcome.exercise_count }} exercises • 
-        {{ outcome.duration_minutes }} min • 
+        {{ outcome.exercise_count }} exercises •
+        {{ outcome.duration_minutes }} min •
         Pass: {{ (outcome.passing_threshold * 100)|int }}%
-        {% if outcome.prerequisites %}
-        <br>Prerequisites: 
+      </div>
+      {% if outcome.prerequisites %}
+      <div class="prereq-chips">
         {% for prereq_tag in outcome.prerequisites %}
           {% set prereq = outcomes_dict.get(prereq_tag) %}
-          {% if prereq %}{{ prereq.display_name }}{% if not loop.last %}, {% endif %}{% endif %}
+          <span class="prereq-chip">{{ prereq.display_name if prereq else prereq_tag }}</span>
         {% endfor %}
-        {% endif %}
       </div>
+      {% endif %}
     </div>
     <div class="outcome-status">
       {% set progress = progress_dict.get(outcome.tag_name) %}
       {% set pending = pending_attempts.get(outcome.tag_name) %}
-      
+
       {% if progress and progress.is_passed %}
-        <div class="status-badge status-passed">✅ Passed</div>
+        <div class="status-badge status-passed">Passed</div>
         <div class="score-display" style="color: #4ade80;">{{ (progress.best_score * 100)|int }}%</div>
       {% elif pending %}
-        <div class="status-badge" style="background: rgba(251,191,36,0.15); color: #fbbf24; border-color: #fbbf24;">📋 Awaiting Review</div>
+        <div class="status-badge status-pending">Awaiting Review</div>
         <span class="muted" style="font-size: 0.85rem;">Submitted {{ pending.submitted_at.strftime('%m/%d %H:%M') if pending.submitted_at else 'recently' }}</span>
       {% elif progress and progress.attempts > 0 and not progress.is_passed %}
-        <div class="status-badge status-failed">❌ Retry ({{ progress.attempts }} attempts)</div>
+        <div class="status-badge status-failed">Retry</div>
         {% if progress.best_score %}
           <div class="score-display" style="color: #f87171;">Best: {{ (progress.best_score * 100)|int }}%</div>
         {% endif %}
@@ -290,14 +329,14 @@
           <span class="muted" style="font-size: 0.85rem;">Cooldown active</span>
         {% endif %}
       {% elif progress and progress.is_unlocked %}
-        <div class="status-badge status-unlocked">🔓 Ready</div>
+        <div class="status-badge status-unlocked">Ready</div>
         {% if tests_enabled %}
         <a href="{{ url_for('student_proficiency_test_outcome', outcome_tag=outcome.tag_name) }}" class="btn btn-primary">Take Test</a>
         {% else %}
         <span class="muted" style="font-size: 0.85rem;">Tests disabled</span>
         {% endif %}
       {% else %}
-        <div class="status-badge status-locked">🔒 Locked</div>
+        <div class="status-badge status-locked">Locked</div>
       {% endif %}
     </div>
   </div>
@@ -307,52 +346,35 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
-  // Clean, educational radar chart
   const ctx = document.getElementById('progressChart').getContext('2d');
-  
   const domainData = {{ domain_progress|tojson }};
-  
-  // Calculate percentages for cleaner display
   const percentages = domainData.passed.map((passed, idx) => {
     const total = domainData.totals[idx];
     return total > 0 ? (passed / total * 100) : 0;
   });
-  
-  const chart = new Chart(ctx, {
+
+  new Chart(ctx, {
     type: 'radar',
     data: {
       labels: domainData.labels,
-      datasets: [
-        {
-          label: 'Mastery Level',
-          data: percentages,
-          backgroundColor: 'rgba(102, 126, 234, 0.2)',
-          borderColor: 'rgb(102, 126, 234)',
-          borderWidth: 3,
-          pointBackgroundColor: 'rgb(102, 126, 234)',
-          pointBorderColor: '#fff',
-          pointBorderWidth: 2,
-          pointRadius: 6,
-          pointHoverRadius: 8,
-        }
-      ]
+      datasets: [{
+        label: 'Mastery Level',
+        data: percentages,
+        backgroundColor: 'rgba(102, 126, 234, 0.18)',
+        borderColor: 'rgb(102, 126, 234)',
+        borderWidth: 3,
+        pointBackgroundColor: 'rgb(102, 126, 234)',
+        pointBorderColor: '#fff',
+        pointBorderWidth: 2,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+      }]
     },
     options: {
       responsive: true,
       maintainAspectRatio: true,
       aspectRatio: 1,
-      layout: {
-        padding: {
-          top: 50,
-          bottom: 50,
-          left: 80,
-          right: 80
-        }
-      },
-      animation: {
-        duration: 1500,
-        easing: 'easeInOutQuad'
-      },
+      layout: { padding: { top: 30, bottom: 30, left: 40, right: 40 } },
       scales: {
         r: {
           beginAtZero: true,
@@ -361,71 +383,34 @@
             stepSize: 25,
             color: '#94a3b8',
             backdropColor: 'transparent',
-            font: {
-              size: 12
-            },
-            callback: function(value) {
-              return value + '%';
-            }
+            callback: function(value) { return value + '%'; }
           },
-          grid: {
-            color: 'rgba(148, 163, 184, 0.15)',
-            lineWidth: 1
-          },
-          angleLines: {
-            color: 'rgba(148, 163, 184, 0.15)',
-            lineWidth: 1
-          },
+          grid: { color: 'rgba(148, 163, 184, 0.15)' },
+          angleLines: { color: 'rgba(148, 163, 184, 0.15)' },
           pointLabels: {
             color: '#e2e8f0',
-            font: {
-              size: 14,
-              weight: '600'
-            },
-            padding: 20
+            font: { size: 13, weight: '600' },
+            padding: 14
           }
         }
       },
       plugins: {
-        legend: {
-          display: false
-        },
+        legend: { display: false },
         tooltip: {
           backgroundColor: 'rgba(15, 23, 42, 0.95)',
           titleColor: '#e2e8f0',
           bodyColor: '#cbd5e1',
           borderColor: 'rgba(102, 126, 234, 0.3)',
           borderWidth: 1,
-          padding: 16,
+          padding: 14,
           cornerRadius: 8,
-          titleFont: {
-            size: 15,
-            weight: '600'
-          },
-          bodyFont: {
-            size: 14
-          },
           displayColors: false,
           callbacks: {
-            title: function(context) {
-              return context[0].label;
-            },
             label: function(context) {
               const domainIdx = context.dataIndex;
               const passed = domainData.passed[domainIdx];
               const total = domainData.totals[domainIdx];
-              const percentage = context.parsed.r.toFixed(0);
-              return `${passed} of ${total} outcomes completed (${percentage}%)`;
-            },
-            afterLabel: function(context) {
-              const domainIdx = context.dataIndex;
-              const passed = domainData.passed[domainIdx];
-              const total = domainData.totals[domainIdx];
-              const remaining = total - passed;
-              if (remaining > 0) {
-                return `\n${remaining} more to master this domain`;
-              }
-              return '\n✓ Domain completed!';
+              return `${passed} of ${total} outcomes completed (${context.parsed.r.toFixed(0)}%)`;
             }
           }
         }

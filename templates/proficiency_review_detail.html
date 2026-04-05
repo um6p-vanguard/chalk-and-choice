@@ -12,7 +12,7 @@
     white-space:pre-wrap;
     line-height:1.5;
   }
-  .test-result { padding:8px 12px; border-radius:6px; margin:4px 0; }
+  .test-result { padding:8px 12px; border-radius:6px; margin:6px 0; }
   .test-result.passed { background:rgba(74,222,128,0.15); border-left:3px solid #4ade80; }
   .test-result.failed { background:rgba(239,68,68,0.15); border-left:3px solid #ef4444; }
   .test-result.error { background:rgba(251,191,36,0.15); border-left:3px solid #fbbf24; }
@@ -21,10 +21,24 @@
   .score-badge.good { background:rgba(74,222,128,0.2); color:#4ade80; }
   .score-badge.partial { background:rgba(251,191,36,0.2); color:#fbbf24; }
   .score-badge.bad { background:rgba(239,68,68,0.2); color:#ef4444; }
+  .review-summary-grid {
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));
+    gap:12px;
+    margin:16px 0 20px;
+  }
+  .review-summary-card {
+    background:#111827;
+    border:1px solid #334155;
+    border-radius:12px;
+    padding:16px;
+  }
+  .review-summary-card .label { color:#94a3b8; font-size:0.9rem; }
+  .review-summary-card .value { font-size:1.4rem; font-weight:700; margin-top:8px; }
 </style>
 
 <div class="card">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; gap:12px; flex-wrap:wrap;">
     <div>
       <h2 style="margin:0 0 6px 0;">Review: {{ attempt.student.name }}</h2>
       <span class="muted">Submitted: {{ attempt.submitted_at.strftime('%Y-%m-%d %H:%M') if attempt.submitted_at else 'N/A' }}</span>
@@ -38,24 +52,43 @@
   </div>
   {% elif attempt.status == 'passed' %}
   <div style="background:rgba(74,222,128,0.15); border:1px solid #4ade80; padding:16px; border-radius:10px; margin-bottom:20px;">
-    <strong style="color:#4ade80;">✓ PASSED</strong> by {{ attempt.reviewer.name if attempt.reviewer else 'N/A' }} on {{ attempt.reviewed_at.strftime('%Y-%m-%d %H:%M') if attempt.reviewed_at else 'N/A' }}
+    <strong style="color:#4ade80;">Passed</strong> by {{ attempt.reviewer.name if attempt.reviewer else 'N/A' }} on {{ attempt.reviewed_at.strftime('%Y-%m-%d %H:%M') if attempt.reviewed_at else 'N/A' }}
   </div>
   {% else %}
   <div style="background:rgba(239,68,68,0.15); border:1px solid #ef4444; padding:16px; border-radius:10px; margin-bottom:20px;">
-    <strong style="color:#ef4444;">✗ FAILED</strong> by {{ attempt.reviewer.name if attempt.reviewer else 'N/A' }} on {{ attempt.reviewed_at.strftime('%Y-%m-%d %H:%M') if attempt.reviewed_at else 'N/A' }}
+    <strong style="color:#ef4444;">Failed</strong> by {{ attempt.reviewer.name if attempt.reviewer else 'N/A' }} on {{ attempt.reviewed_at.strftime('%Y-%m-%d %H:%M') if attempt.reviewed_at else 'N/A' }}
   </div>
   {% endif %}
 
+  <div class="review-summary-grid">
+    <div class="review-summary-card">
+      <div class="label">Visible tests</div>
+      <div class="value">{{ review_summary.visible_passed_total }}/{{ review_summary.visible_total }}</div>
+    </div>
+    <div class="review-summary-card">
+      <div class="label">Hidden tests</div>
+      <div class="value">{{ review_summary.hidden_passed_total }}/{{ review_summary.hidden_total }}</div>
+    </div>
+    <div class="review-summary-card">
+      <div class="label">Final score</div>
+      <div class="value">{{ review_summary.final_score_pct if review_summary.final_score_pct is not none else '—' }}{% if review_summary.final_score_pct is not none %}%{% endif %}</div>
+    </div>
+    <div class="review-summary-card">
+      <div class="label">Passing threshold</div>
+      <div class="value">{{ review_summary.threshold_pct if review_summary.threshold_pct is not none else '—' }}{% if review_summary.threshold_pct is not none %}%{% endif %}</div>
+    </div>
+  </div>
+
   {% for sub in attempt.submissions %}
   <div class="exercise-section">
-    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:12px; flex-wrap:wrap;">
       <div>
         <h3 style="margin:0 0 6px 0;">Exercise {{ loop.index }}: {{ sub.exercise_title }}</h3>
         {% if sub.exercise_description %}
-        <p class="muted" style="margin:0;">{{ sub.exercise_description[:200] }}{% if sub.exercise_description|length > 200 %}...{% endif %}</p>
+        <p class="muted" style="margin:0;">{{ sub.exercise_description[:220] }}{% if sub.exercise_description|length > 220 %}...{% endif %}</p>
         {% endif %}
       </div>
-      <div style="text-align:right;">
+      <div style="text-align:right; min-width:150px;">
         {% set visible_pct = (sub.visible_passed / sub.visible_total * 100) if sub.visible_total > 0 else 0 %}
         {% set hidden_pct = (sub.hidden_passed / sub.hidden_total * 100) if sub.hidden_total > 0 else 0 %}
         <div>
@@ -92,7 +125,7 @@
           <p class="muted">No visible tests</p>
         {% endif %}
       </div>
-      
+
       <div>
         <h4 style="color:#fbbf24;">Hidden Test Results</h4>
         {% if sub.hidden_results_json %}
@@ -114,19 +147,19 @@
 
   {% if attempt.status == 'submitted' %}
   <hr style="border-color:var(--border); margin:24px 0;">
-  
-  <div style="display:flex; gap:16px; justify-content:center;">
+
+  <div style="display:flex; gap:16px; justify-content:center; flex-wrap:wrap;">
     <form method="POST" style="display:inline;">
       <input type="hidden" name="action" value="pass">
-      <button type="submit" class="btn btn-primary" style="font-size:1.1rem; padding:14px 32px;" onclick="return confirm('Mark this student as PASSED? They will receive the Python proficiency tag.');">
-        ✓ Pass Student
+      <button type="submit" class="btn btn-primary" style="font-size:1.05rem; padding:14px 32px;" onclick="return confirm('Mark this student as PASSED? They will receive the Python proficiency tag.');">
+        Pass Student
       </button>
     </form>
-    
+
     <form method="POST" style="display:inline;">
       <input type="hidden" name="action" value="fail">
-      <button type="submit" class="btn btn-danger" style="font-size:1.1rem; padding:14px 32px;" onclick="return confirm('Mark this student as FAILED? They will need to wait for the cooldown period before retrying.');">
-        ✗ Fail Student
+      <button type="submit" class="btn btn-danger" style="font-size:1.05rem; padding:14px 32px;" onclick="return confirm('Mark this student as FAILED? They will need to wait for the cooldown period before retrying.');">
+        Fail Student
       </button>
     </form>
   </div>
