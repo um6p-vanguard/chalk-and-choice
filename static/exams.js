@@ -2711,16 +2711,12 @@ json.dumps(results)
   function setupCodeEditors() {
     const codeAreas = Array.from(document.querySelectorAll("textarea[data-code-input]"));
     if (!codeAreas.length) return;
-<<<<<<< HEAD
     const telemetry = getTelemetryController();
     if (telemetry) {
       codeAreas.forEach((area) => telemetry.registerTextarea(area));
     }
-    const MONACO_BASE = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs";
-=======
     const MONACO_ROOT = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min";
     const MONACO_BASE = `${MONACO_ROOT}/vs`;
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
     const MONACO_LOADER = `${MONACO_BASE}/loader.min.js`;
 
     const ensureLoader = () => {

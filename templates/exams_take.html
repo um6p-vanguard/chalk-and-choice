@@ -34,19 +34,18 @@
   {% endif %}
 </div>
 <div class="sp"></div>
-<<<<<<< HEAD
 <div class="card"
      data-exam-take
      data-run-log-url="{{ log_url or '' }}"
      data-telemetry-url="{{ telemetry_endpoint or '' }}"
      data-telemetry-attempt-ref="{{ telemetry_attempt_ref or '' }}"
      data-csrf="{{ csrf_token() }}"
+     data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}"
+     data-plot-artifact-max-bytes="{{ plot_artifact_max_bytes }}"
+     data-plot-artifact-max-mb="{{ plot_artifact_max_mb }}"
      data-current-question="{{ question.id if question else '' }}"
      data-current-question-type="{{ question.type if question else '' }}"
      data-current-question-index="{{ (current_index + 1) if question else '' }}">
-=======
-<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}" data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}" data-plot-artifact-max-bytes="{{ plot_artifact_max_bytes }}" data-plot-artifact-max-mb="{{ plot_artifact_max_mb }}">
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
@@ -473,18 +472,13 @@
     submitted = true;
     if (warningEl) warningEl.style.display = "block";
     if (autoInput) autoInput.value = "submit";
-<<<<<<< HEAD
-    if (typeof form.requestSubmit === "function") {
-      form.requestSubmit();
-    } else {
-      form.submit();
-=======
     const submitBtn = form.querySelector("[data-auto-submit]");
     if (typeof form.requestSubmit === "function") {
       form.requestSubmit(submitBtn || undefined);
     } else if (submitBtn) {
       submitBtn.click();
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
+    } else {
+      form.submit();
     }
   };
 

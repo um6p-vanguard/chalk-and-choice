@@ -23,14 +23,9 @@ from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
-<<<<<<< HEAD
-                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
-                    AttendanceSheet, AttendanceEntry, StudentLogSession, SubmissionTelemetryEvent,
-=======
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
-                    AttendanceSheet, AttendanceEntry, StudentLogSession,
+                    AttendanceSheet, AttendanceEntry, StudentLogSession, SubmissionTelemetryEvent,
                     Announcement, AnnouncementDelivery,
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func, inspect, text
@@ -2364,12 +2359,11 @@ def verify_csrf(form_field="csrf"):
     sent = request.form.get(form_field, "")
     return hmac.compare_digest(sent, csrf_token())
 
-<<<<<<< HEAD
 def verify_json_csrf(payload=None):
     payload = payload if isinstance(payload, dict) else {}
     sent = request.headers.get("X-CSRF", "") or payload.get("csrf") or ""
     return hmac.compare_digest(str(sent), csrf_token())
-=======
+
 def _student_unseen_announcement_deliveries(student):
     if not student:
         return []
@@ -2384,7 +2378,6 @@ def _student_unseen_announcement_deliveries(student):
         .order_by(Announcement.created_at.asc(), Announcement.id.asc(), AnnouncementDelivery.id.asc())
         .all()
     )
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
 
 @app.context_processor
 def inject_csrf():
@@ -5632,14 +5625,11 @@ def exam_take(code):
         already_submitted=(submission and submission.status == "submitted"),
         previous_answers=previous_answers,
         time_remaining_seconds=time_remaining if time_remaining is not None else None,
-<<<<<<< HEAD
         run_log_url=run_log_url,
         telemetry_url=telemetry_url,
         telemetry_attempt_ref=telemetry_attempt_ref,
-=======
         submission_id=(submission.id if submission else None),
         upload_error=upload_error,
->>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
         user=user,
         student_name=session.get("student_name"),
     )
