@@ -640,6 +640,7 @@
     }
     const hidden = root.querySelector("#questions_payload");
     const form = root.querySelector("#exam-builder-form");
+    const taskKindField = root.querySelector("[data-task-kind-value]");
     if (!list || !addBtn || !typeSelect || !hidden || !form) return;
 
     const addQuestion = (type, data = {}) => {
@@ -675,10 +676,10 @@
         if (!card) return;
         const modeField = card.querySelector('[data-field="code-mode"]');
         const mode = modeField ? (modeField.value || "script") : "script";
-        const selector = mode === "function" ? '[data-sample-list="function"]' : '[data-sample-list="script"]';
+        const selector = mode === "script" ? '[data-sample-list="script"]' : '[data-sample-list="callable"]';
         const container = card.querySelector(selector);
         if (container) {
-          const row = mode === "function" ? buildFunctionSampleRow() : buildScriptSampleRow();
+          const row = mode === "script" ? buildScriptSampleRow() : buildCallableSampleRow({}, mode);
           container.appendChild(row);
           syncHidden();
         }
@@ -690,6 +691,10 @@
     });
 
     form.addEventListener("submit", () => {
+      if (taskKindField && (taskKindField.value || "assessment") === "tutorial") {
+        hidden.value = "[]";
+        return;
+      }
       syncHidden();
     });
 
@@ -702,7 +707,7 @@
     }
     if (initial.length) {
       initial.forEach((q) => addQuestion(q.type || "mcq", q));
-    } else {
+    } else if (!taskKindField || (taskKindField.value || "assessment") !== "tutorial") {
       addQuestion("mcq");
     }
   }
@@ -830,6 +835,7 @@
         <span class="muted">Mode:</span>
         <button type="button" class="btn" data-mode-choice="script">Script (stdin/stdout)</button>
         <button type="button" class="btn" data-mode-choice="function">Function (call/return)</button>
+        <button type="button" class="btn" data-mode-choice="class">Class (init + method call)</button>
       `;
       card.appendChild(modePicker);
 
@@ -847,6 +853,39 @@
       signatureWrap.appendChild(signatureInput);
       card.appendChild(signatureWrap);
 
+      const classSignatureWrap = document.createElement("div");
+      classSignatureWrap.dataset.codeMode = "class-signature";
+      classSignatureWrap.style.marginTop = "10px";
+      const classSignatureLabel = document.createElement("label");
+      classSignatureLabel.textContent = "Class signature";
+      classSignatureWrap.appendChild(classSignatureLabel);
+      const classSignatureInput = document.createElement("input");
+      classSignatureInput.type = "text";
+      classSignatureInput.dataset.field = "class-signature";
+      classSignatureInput.placeholder = "class Counter:";
+      classSignatureInput.value = data.class_signature || "";
+      classSignatureWrap.appendChild(classSignatureInput);
+      card.appendChild(classSignatureWrap);
+
+      const initWrap = document.createElement("div");
+      initWrap.dataset.codeMode = "class-init";
+      initWrap.style.marginTop = "10px";
+      const initLabel = document.createElement("label");
+      initLabel.textContent = "__init__ call";
+      initWrap.appendChild(initLabel);
+      const initInput = document.createElement("input");
+      initInput.type = "text";
+      initInput.dataset.field = "class-init";
+      initInput.placeholder = "Counter(0)";
+      initInput.value = data.class_init || "";
+      initWrap.appendChild(initInput);
+      const initHelp = document.createElement("p");
+      initHelp.className = "muted";
+      initHelp.style.marginTop = "6px";
+      initHelp.textContent = "A fresh object is created before each test and exposed as obj.";
+      initWrap.appendChild(initHelp);
+      card.appendChild(initWrap);
+
       const sampleHeader = document.createElement("div");
       sampleHeader.className = "row";
       sampleHeader.style.justifyContent = "space-between";
@@ -859,7 +898,7 @@
       const sampleHelper = document.createElement("p");
       sampleHelper.className = "muted";
       sampleHelper.style.marginTop = "-4px";
-      sampleHelper.textContent = "Provide input/output pairs for script mode, or function calls and expected returns for function mode.";
+      sampleHelper.textContent = "Provide sample cases and choose how each one should be compared.";
       card.appendChild(sampleHelper);
 
       const scriptSampleList = document.createElement("div");
@@ -869,17 +908,17 @@
       scriptSampleList.style.gap = "10px";
       card.appendChild(scriptSampleList);
 
-      const functionSampleList = document.createElement("div");
-      functionSampleList.dataset.sampleList = "function";
-      functionSampleList.style.display = "flex";
-      functionSampleList.style.flexDirection = "column";
-      functionSampleList.style.gap = "10px";
-      card.appendChild(functionSampleList);
+      const callableSampleList = document.createElement("div");
+      callableSampleList.dataset.sampleList = "callable";
+      callableSampleList.style.display = "flex";
+      callableSampleList.style.flexDirection = "column";
+      callableSampleList.style.gap = "10px";
+      card.appendChild(callableSampleList);
 
       const samples = Array.isArray(data.samples) && data.samples.length ? data.samples : [{}];
       samples.forEach((sample) => {
         if (sample.call) {
-          functionSampleList.appendChild(buildFunctionSampleRow(sample));
+          callableSampleList.appendChild(buildCallableSampleRow(sample, data.mode || "function"));
         } else {
           scriptSampleList.appendChild(buildScriptSampleRow(sample));
         }
@@ -887,15 +926,25 @@
       if (!scriptSampleList.children.length) {
         scriptSampleList.appendChild(buildScriptSampleRow());
       }
-      if (!functionSampleList.children.length) {
-        functionSampleList.appendChild(buildFunctionSampleRow());
+      if (!callableSampleList.children.length) {
+        callableSampleList.appendChild(buildCallableSampleRow({}, data.mode || "function"));
       }
 
       const updateModeUI = () => {
         const mode = modeField.value || "script";
         scriptSampleList.style.display = mode === "script" ? "flex" : "none";
-        functionSampleList.style.display = mode === "function" ? "flex" : "none";
+        callableSampleList.style.display = mode === "script" ? "none" : "flex";
         signatureWrap.style.display = mode === "function" ? "block" : "none";
+        classSignatureWrap.style.display = mode === "class" ? "block" : "none";
+        initWrap.style.display = mode === "class" ? "block" : "none";
+        sampleHelper.textContent = mode === "script"
+          ? "Provide input/output pairs for script mode and choose a text comparison rule."
+          : mode === "class"
+            ? "Set the __init__ call once, then provide method calls or expressions that run against obj and choose how results are compared."
+            : "Provide function calls, expected returns, and the comparison rule for each sample.";
+        callableSampleList.querySelectorAll("[data-sample-row]").forEach((row) => {
+          setCallableSampleRowMode(row, mode);
+        });
         modePicker.querySelectorAll("button[data-mode-choice]").forEach((btn) => {
           const active = btn.dataset.modeChoice === mode;
           btn.classList.toggle("btn-primary", active);
@@ -908,6 +957,31 @@
         });
       });
       updateModeUI();
+    } else if (type === "plot") {
+      const info = document.createElement("p");
+      info.className = "muted";
+      info.textContent = "Students write Python that generates a matplotlib plot. The latest PNG preview is uploaded only when they submit.";
+      card.appendChild(info);
+
+      const statementLabel = document.createElement("label");
+      statementLabel.textContent = "Plot instructions";
+      card.appendChild(statementLabel);
+      const statement = document.createElement("textarea");
+      statement.rows = 4;
+      statement.dataset.field = "statement";
+      statement.placeholder = "Describe the required chart, labels, annotations, and style constraints.";
+      statement.value = data.statement || "";
+      card.appendChild(statement);
+
+      const starterLabel = document.createElement("label");
+      starterLabel.textContent = "Starter code";
+      card.appendChild(starterLabel);
+      const starter = document.createElement("textarea");
+      starter.rows = 8;
+      starter.dataset.field = "starter";
+      starter.placeholder = "import matplotlib.pyplot as plt\n";
+      starter.value = data.starter || "";
+      card.appendChild(starter);
     } else if (type === "tokens") {
       const info = document.createElement("p");
       info.className = "muted";
@@ -1066,6 +1140,56 @@
     wrapper.appendChild(correctInput);
   }
 
+  const DEFAULT_SCRIPT_COMPARE_MODE = "rstrip";
+  const DEFAULT_CALLABLE_COMPARE_MODE = "exact";
+  const DEFAULT_NUMERIC_TOLERANCE = "1e-6";
+
+  const SCRIPT_SAMPLE_COMPARE_OPTIONS = [
+    { value: "rstrip", label: "Ignore trailing whitespace" },
+    { value: "exact", label: "Exact text" },
+    { value: "normalize_whitespace", label: "Normalize whitespace" },
+    { value: "contains", label: "Contains text" },
+  ];
+
+  const CALLABLE_SAMPLE_COMPARE_OPTIONS = [
+    { value: "exact", label: "Exact result" },
+    { value: "numeric_tolerance", label: "Numeric tolerance" },
+    { value: "contains", label: "Result text contains" },
+  ];
+
+  function buildSampleCompareSelect(options, value, fallbackValue) {
+    const select = document.createElement("select");
+    select.dataset.field = "sample-compare-mode";
+    const selected = value || fallbackValue;
+    options.forEach((option) => {
+      const opt = document.createElement("option");
+      opt.value = option.value;
+      opt.textContent = option.label;
+      if (option.value === selected) opt.selected = true;
+      select.appendChild(opt);
+    });
+    return select;
+  }
+
+  function describeSampleComparison(sample) {
+    const mode = (sample && sample.mode) || "script";
+    const compareMode = (sample && sample.compare_mode) || (mode === "script" ? DEFAULT_SCRIPT_COMPARE_MODE : DEFAULT_CALLABLE_COMPARE_MODE);
+    if (mode === "script") {
+      if (compareMode === "exact") return "Comparison: exact text";
+      if (compareMode === "normalize_whitespace") return "Comparison: normalized whitespace";
+      if (compareMode === "contains") return "Comparison: contains text";
+      return "Comparison: ignore trailing whitespace";
+    }
+    if (compareMode === "numeric_tolerance") {
+      const tolerance = sample && sample.tolerance !== undefined && sample.tolerance !== null && String(sample.tolerance).trim()
+        ? sample.tolerance
+        : DEFAULT_NUMERIC_TOLERANCE;
+      return `Comparison: numeric tolerance (${tolerance})`;
+    }
+    if (compareMode === "contains") return "Comparison: result text contains";
+    return "Comparison: exact result";
+  }
+
   function buildScriptSampleRow(sample = {}) {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
@@ -1103,6 +1227,17 @@
     outputField.value = sample.output || "";
     wrapper.appendChild(outputField);
 
+    const compareLabel = document.createElement("label");
+    compareLabel.textContent = "Comparison";
+    wrapper.appendChild(compareLabel);
+
+    const compareSelect = buildSampleCompareSelect(
+      SCRIPT_SAMPLE_COMPARE_OPTIONS,
+      sample.compare_mode || sample.compare || "",
+      DEFAULT_SCRIPT_COMPARE_MODE,
+    );
+    wrapper.appendChild(compareSelect);
+
     const hiddenLabel = document.createElement("label");
     hiddenLabel.style.display = "flex";
     hiddenLabel.style.alignItems = "center";
@@ -1126,7 +1261,48 @@
     return wrapper;
   }
 
-  function buildFunctionSampleRow(sample = {}) {
+  function callableSampleMeta(mode) {
+    if (mode === "class") {
+      return {
+        callLabel: "Method call / expression",
+        callPlaceholder: "obj.increment()",
+        expectedLabel: "Expected result",
+      };
+    }
+    return {
+      callLabel: "Function call",
+      callPlaceholder: "square(5)",
+      expectedLabel: "Expected return",
+    };
+  }
+
+  function setCallableSampleRowMode(wrapper, mode) {
+    if (!wrapper) return;
+    const meta = callableSampleMeta(mode);
+    wrapper.dataset.callableMode = mode || "function";
+    const callLabel = wrapper.querySelector('[data-role="sample-call-label"]');
+    const callInput = wrapper.querySelector('[data-field="sample-call"]');
+    const expectedLabel = wrapper.querySelector('[data-role="sample-expected-label"]');
+    if (callLabel) callLabel.textContent = meta.callLabel;
+    if (callInput) callInput.placeholder = meta.callPlaceholder;
+    if (expectedLabel) expectedLabel.textContent = meta.expectedLabel;
+  }
+
+  function updateCallableSampleCompareUI(wrapper) {
+    if (!wrapper) return;
+    const compareSelect = wrapper.querySelector('[data-field="sample-compare-mode"]');
+    const toleranceWrap = wrapper.querySelector('[data-role="sample-tolerance-wrap"]');
+    const toleranceInput = wrapper.querySelector('[data-field="sample-tolerance"]');
+    const compareMode = compareSelect ? (compareSelect.value || DEFAULT_CALLABLE_COMPARE_MODE) : DEFAULT_CALLABLE_COMPARE_MODE;
+    if (toleranceWrap) {
+      toleranceWrap.style.display = compareMode === "numeric_tolerance" ? "block" : "none";
+    }
+    if (toleranceInput && compareMode === "numeric_tolerance" && !String(toleranceInput.value || "").trim()) {
+      toleranceInput.value = DEFAULT_NUMERIC_TOLERANCE;
+    }
+  }
+
+  function buildCallableSampleRow(sample = {}, mode = "function") {
     const wrapper = document.createElement("div");
     wrapper.dataset.sampleRow = "1";
     wrapper.style.border = "1px dashed #334155";
@@ -1144,26 +1320,54 @@
     wrapper.appendChild(nameInput);
 
     const callLabel = document.createElement("label");
-    callLabel.textContent = "Function call";
+    callLabel.dataset.role = "sample-call-label";
     wrapper.appendChild(callLabel);
 
     const callInput = document.createElement("input");
     callInput.type = "text";
     callInput.dataset.field = "sample-call";
-    callInput.placeholder = "square(5)";
     callInput.value = sample.call || sample.input || "";
     wrapper.appendChild(callInput);
 
     const expectedLabel = document.createElement("label");
-    expectedLabel.textContent = "Expected return";
+    expectedLabel.dataset.role = "sample-expected-label";
     wrapper.appendChild(expectedLabel);
 
     const expectedInput = document.createElement("textarea");
     expectedInput.rows = 3;
     expectedInput.dataset.field = "sample-expected";
-    expectedInput.placeholder = "25";
     expectedInput.value = sample.expected || sample.output || "";
     wrapper.appendChild(expectedInput);
+
+    const compareLabel = document.createElement("label");
+    compareLabel.textContent = "Comparison";
+    wrapper.appendChild(compareLabel);
+
+    const compareSelect = buildSampleCompareSelect(
+      CALLABLE_SAMPLE_COMPARE_OPTIONS,
+      sample.compare_mode || sample.compare || "",
+      DEFAULT_CALLABLE_COMPARE_MODE,
+    );
+    wrapper.appendChild(compareSelect);
+
+    const toleranceWrap = document.createElement("div");
+    toleranceWrap.dataset.role = "sample-tolerance-wrap";
+    toleranceWrap.style.marginTop = "8px";
+    const toleranceLabel = document.createElement("label");
+    toleranceLabel.textContent = "Tolerance";
+    toleranceWrap.appendChild(toleranceLabel);
+    const toleranceInput = document.createElement("input");
+    toleranceInput.type = "text";
+    toleranceInput.dataset.field = "sample-tolerance";
+    toleranceInput.placeholder = DEFAULT_NUMERIC_TOLERANCE;
+    toleranceInput.value = sample.tolerance !== undefined && sample.tolerance !== null ? String(sample.tolerance) : "";
+    toleranceWrap.appendChild(toleranceInput);
+    const toleranceHelp = document.createElement("p");
+    toleranceHelp.className = "muted";
+    toleranceHelp.style.marginTop = "6px";
+    toleranceHelp.textContent = "Absolute tolerance for numbers or arrays, for example 1e-6.";
+    toleranceWrap.appendChild(toleranceHelp);
+    wrapper.appendChild(toleranceWrap);
 
     const hiddenLabel = document.createElement("label");
     hiddenLabel.style.display = "flex";
@@ -1185,6 +1389,11 @@
     removeBtn.textContent = "Remove sample";
     wrapper.appendChild(removeBtn);
 
+    setCallableSampleRowMode(wrapper, mode);
+    compareSelect.addEventListener("change", () => {
+      updateCallableSampleCompareUI(wrapper);
+    });
+    updateCallableSampleCompareUI(wrapper);
     return wrapper;
   }
 
@@ -1222,22 +1431,54 @@
         payload.starter = getFieldValue(card, "starter");
         if (mode === "function") {
           payload.function_signature = getFieldValue(card, "function-signature");
-          const rows = card.querySelectorAll('[data-sample-list="function"] [data-sample-row]');
-          payload.samples = Array.from(rows).map((row) => ({
-            name: getFieldValue(row, "sample-name"),
-            call: getFieldValue(row, "sample-call"),
-            expected: getFieldValue(row, "sample-expected"),
-            hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
-          }));
+          const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
+          payload.samples = Array.from(rows).map((row) => {
+            const compareMode = getFieldValue(row, "sample-compare-mode") || DEFAULT_CALLABLE_COMPARE_MODE;
+            const sample = {
+              name: getFieldValue(row, "sample-name"),
+              call: getFieldValue(row, "sample-call"),
+              expected: getFieldValue(row, "sample-expected"),
+              compare_mode: compareMode,
+              hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
+            };
+            if (compareMode === "numeric_tolerance") {
+              sample.tolerance = getFieldValue(row, "sample-tolerance");
+            }
+            return sample;
+          });
+        } else if (mode === "class") {
+          const classInit = getFieldValue(card, "class-init");
+          payload.class_signature = getFieldValue(card, "class-signature");
+          payload.class_init = classInit;
+          const rows = card.querySelectorAll('[data-sample-list="callable"] [data-sample-row]');
+          payload.samples = Array.from(rows).map((row) => {
+            const compareMode = getFieldValue(row, "sample-compare-mode") || DEFAULT_CALLABLE_COMPARE_MODE;
+            const sample = {
+              name: getFieldValue(row, "sample-name"),
+              call: getFieldValue(row, "sample-call"),
+              expected: getFieldValue(row, "sample-expected"),
+              init_call: classInit,
+              compare_mode: compareMode,
+              hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
+            };
+            if (compareMode === "numeric_tolerance") {
+              sample.tolerance = getFieldValue(row, "sample-tolerance");
+            }
+            return sample;
+          });
         } else {
           const rows = card.querySelectorAll('[data-sample-list="script"] [data-sample-row]');
           payload.samples = Array.from(rows).map((row) => ({
             name: getFieldValue(row, "sample-name"),
             input: getFieldValue(row, "sample-input"),
             output: getFieldValue(row, "sample-output"),
+            compare_mode: getFieldValue(row, "sample-compare-mode") || DEFAULT_SCRIPT_COMPARE_MODE,
             hidden: !!row.querySelector('[data-field="sample-hidden"]')?.checked,
           }));
         }
+      } else if (type === "plot") {
+        payload.statement = getFieldValue(card, "statement");
+        payload.starter = getFieldValue(card, "starter");
       } else if (type === "tokens") {
         payload.template = getFieldValue(card, "tokens-template");
         payload.correct_tokens = getFieldValue(card, "tokens-correct");
@@ -1265,9 +1506,17 @@
     const telemetry = getTelemetryController();
     const buttons = root.querySelectorAll("[data-run-samples]");
     const customButtons = root.querySelectorAll("[data-run-custom]");
-    if (!buttons.length && !customButtons.length) return;
+    const plotButtons = root.querySelectorAll("[data-run-plot]");
+    const form = root.querySelector("[data-exam-form]");
+    const artifactNamespace = root.dataset.artifactNamespace || "";
+    const plotArtifactMaxBytes = Number.parseInt(root.dataset.plotArtifactMaxBytes || "0", 10) || 0;
+    const plotArtifactMaxMb = Number.parseFloat(root.dataset.plotArtifactMaxMb || "0") || 0;
+    if (!buttons.length && !customButtons.length && !plotButtons.length && !form) return;
     let pyodidePromise = null;
     let packagesPromise = null;
+    let plotDbPromise = null;
+    const plotRuntimeState = new Map();
+    let hiddenMatplotlibTarget = null;
 
     const ensurePyodide = async () => {
       if (!window.loadPyodide) {
@@ -1286,9 +1535,39 @@
       await packagesPromise;
       return pyodide;
     };
+    const ensureHiddenMatplotlibTarget = () => {
+      if (!document.body) return null;
+      if (hiddenMatplotlibTarget && hiddenMatplotlibTarget.isConnected) {
+        return hiddenMatplotlibTarget;
+      }
+      hiddenMatplotlibTarget = document.createElement("div");
+      hiddenMatplotlibTarget.setAttribute("data-hidden-matplotlib-target", "true");
+      hiddenMatplotlibTarget.setAttribute("aria-hidden", "true");
+      Object.assign(hiddenMatplotlibTarget.style, {
+        position: "fixed",
+        left: "-10000px",
+        top: "0",
+        width: "1px",
+        height: "1px",
+        overflow: "hidden",
+        opacity: "0",
+        pointerEvents: "none",
+      });
+      document.body.appendChild(hiddenMatplotlibTarget);
+      return hiddenMatplotlibTarget;
+    };
+    const clearHiddenMatplotlibTarget = () => {
+      if (hiddenMatplotlibTarget) {
+        hiddenMatplotlibTarget.replaceChildren();
+      }
+    };
+    const listVisibleMatplotlibRoots = () => Array.from(document.querySelectorAll('div[id^="matplotlib_"]'))
+      .filter((node) => node.querySelector('canvas[id^="matplotlib_"]'))
+      .filter((node) => !node.closest("[data-hidden-matplotlib-target]"));
 
     const logUrl = root.dataset.runLogUrl;
     const csrf = root.dataset.csrf;
+    const autoInput = form ? form.querySelector('input[name="nav_action_auto"]') : null;
 
     const postLog = async (questionId, samples) => {
       if (!logUrl || !csrf) return;
@@ -1304,6 +1583,287 @@
       } catch (err) {
         console.warn("Unable to log run", err);
       }
+    };
+
+    const openPlotDb = async () => {
+      if (!("indexedDB" in window)) return null;
+      if (!plotDbPromise) {
+        plotDbPromise = new Promise((resolve, reject) => {
+          const request = window.indexedDB.open("chalk_and_choice_plot_artifacts", 1);
+          request.onupgradeneeded = () => {
+            const db = request.result;
+            if (!db.objectStoreNames.contains("artifacts")) {
+              const store = db.createObjectStore("artifacts", { keyPath: "id" });
+              store.createIndex("namespace", "namespace", { unique: false });
+            }
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error || new Error("Unable to open plot cache"));
+        }).catch((err) => {
+          console.warn("Plot cache unavailable", err);
+          return null;
+        });
+      }
+      return plotDbPromise;
+    };
+
+    const plotKey = (namespace, questionId) => `${namespace}:${questionId}`;
+
+    const loadPlotArtifact = async (namespace, questionId) => {
+      const db = await openPlotDb();
+      if (!db) return null;
+      return new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readonly");
+        const req = tx.objectStore("artifacts").get(plotKey(namespace, questionId));
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      });
+    };
+
+    const savePlotArtifact = async (namespace, questionId, record) => {
+      const db = await openPlotDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readwrite");
+        tx.objectStore("artifacts").put({
+          ...record,
+          id: plotKey(namespace, questionId),
+          namespace,
+          questionId,
+        });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    };
+
+    const deletePlotArtifact = async (namespace, questionId) => {
+      const db = await openPlotDb();
+      if (!db) return;
+      await new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readwrite");
+        tx.objectStore("artifacts").delete(plotKey(namespace, questionId));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      });
+    };
+
+    const getNamespaceArtifacts = async (namespace) => {
+      const db = await openPlotDb();
+      if (!db) return [];
+      return new Promise((resolve) => {
+        const tx = db.transaction("artifacts", "readonly");
+        const index = tx.objectStore("artifacts").index("namespace");
+        const items = [];
+        const req = index.openCursor(window.IDBKeyRange.only(namespace));
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) {
+            resolve(items);
+            return;
+          }
+          items.push(cursor.value);
+          cursor.continue();
+        };
+        req.onerror = () => resolve(items);
+      });
+    };
+
+    const clearNamespaceArtifacts = async (namespace) => {
+      const items = await getNamespaceArtifacts(namespace);
+      await Promise.all(items.map((item) => deletePlotArtifact(namespace, item.questionId)));
+    };
+    const clearInjectedPlotFields = () => {
+      if (!form) return;
+      form.querySelectorAll("[data-plot-upload-proxy]").forEach((node) => node.remove());
+    };
+    const formatBytes = (value) => {
+      const bytes = Number(value) || 0;
+      if (bytes <= 0) return "";
+      if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+      }
+      return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    };
+    const injectPlotArtifactsIntoForm = (artifacts) => {
+      if (!form || !Array.isArray(artifacts) || !artifacts.length) return false;
+      clearInjectedPlotFields();
+      let injected = false;
+      artifacts.forEach((record) => {
+        if (!record || !record.questionId) return;
+        const blob = record.blob instanceof Blob ? record.blob : null;
+        const omitArtifact = !!blob && plotArtifactMaxBytes > 0 && blob.size > plotArtifactMaxBytes;
+        if (blob && !omitArtifact) {
+          const fileInput = document.createElement("input");
+          fileInput.type = "file";
+          fileInput.name = `plot_artifact_${record.questionId}`;
+          fileInput.hidden = true;
+          fileInput.setAttribute("data-plot-upload-proxy", "true");
+          try {
+            const transfer = new DataTransfer();
+            transfer.items.add(
+              new File([blob], `plot-${record.questionId}.png`, { type: "image/png" }),
+            );
+            fileInput.files = transfer.files;
+          } catch (err) {
+            return;
+          }
+          form.appendChild(fileInput);
+          injected = true;
+        }
+        const metaInput = document.createElement("input");
+        metaInput.type = "hidden";
+        metaInput.name = `plot_meta_${record.questionId}`;
+        const metaPayload = {
+          status: record.status || "passed",
+          stdout: record.stdout || "",
+          error: record.error || "",
+          code_snapshot: record.codeSnapshot || "",
+          plot_count: record.plotCount || 1,
+        };
+        if (omitArtifact) {
+          metaPayload.artifact_status = "too_large";
+          metaPayload.artifact_size = blob.size || 0;
+        }
+        metaInput.value = JSON.stringify(metaPayload);
+        metaInput.setAttribute("data-plot-upload-proxy", "true");
+        form.appendChild(metaInput);
+        injected = true;
+      });
+      return injected;
+    };
+
+    const revokePlotObjectUrl = (questionId) => {
+      const state = plotRuntimeState.get(questionId);
+      if (state && state.objectUrl) {
+        URL.revokeObjectURL(state.objectUrl);
+      }
+    };
+
+    const base64ToBlob = (base64Data, type = "image/png") => {
+      const raw = window.atob(base64Data || "");
+      const bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i += 1) {
+        bytes[i] = raw.charCodeAt(i);
+      }
+      return new Blob([bytes], { type });
+    };
+    const normalizeCodeText = (value) => {
+      const normalized = String(value || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      const lines = normalized.split("\n").map((line) => line.replace(/[ \t]+$/g, ""));
+      while (lines.length && lines[lines.length - 1] === "") {
+        lines.pop();
+      }
+      return lines.join("\n");
+    };
+
+    const setPlotSummary = (questionId, text, color) => {
+      const summaryEl = root.querySelector(`[data-plot-summary="${questionId}"]`);
+      if (!summaryEl) return;
+      summaryEl.textContent = text;
+      summaryEl.style.color = color || "#94a3b8";
+      summaryEl.style.borderColor = "#334155";
+    };
+
+    const renderPlotPreview = (questionId, record, currentCode = "") => {
+      const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+      if (!preview) return;
+      const normalizedCurrentCode = normalizeCodeText(currentCode);
+      const isFresh = !!record
+        && typeof record.codeSnapshot === "string"
+        && record.codeSnapshot === normalizedCurrentCode;
+      const imageUrl = record ? (record.url || null) : null;
+      const artifactSize = record && record.blob ? (record.blob.size || 0) : (record && record.artifactSize ? record.artifactSize : 0);
+      const artifactTooLarge = !!record
+        && (
+          record.artifactStatus === "too_large"
+          || (plotArtifactMaxBytes > 0 && artifactSize > plotArtifactMaxBytes)
+        );
+
+      if (!record || (!record.blob && !imageUrl && !artifactTooLarge)) {
+        revokePlotObjectUrl(questionId);
+        plotRuntimeState.delete(questionId);
+        preview.innerHTML = `<p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>`;
+        setPlotSummary(questionId, "Not run", "#94a3b8");
+        return;
+      }
+
+      revokePlotObjectUrl(questionId);
+      const nextState = { ...record };
+      if (record.blob) {
+        nextState.objectUrl = URL.createObjectURL(record.blob);
+      }
+      plotRuntimeState.set(questionId, nextState);
+      const details = [];
+      if (record.plotCount && record.plotCount > 1) {
+        details.push(`${record.plotCount} figures generated`);
+      }
+      if (record.updatedAt) {
+        details.push(`Last run: ${record.updatedAt}`);
+      }
+      if (artifactTooLarge) {
+        details.push(`PNG ${formatBytes(artifactSize)}; not stored on submit`);
+      }
+      preview.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          ${nextState.objectUrl || nextState.url ? `<img src="${nextState.objectUrl || nextState.url || ""}" alt="Latest plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">` : ""}
+          <div class="muted" style="font-size:0.85rem;">${details.join(" • ") || "Latest plot preview"}</div>
+          ${record.stdout ? `<div><div class="muted">Stdout</div><pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">${escapeHtml(record.stdout)}</pre></div>` : ""}
+          ${record.error ? `<div><div class="muted">Runner message</div><pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(record.error)}</pre></div>` : ""}
+          ${artifactTooLarge ? `<div style="font-size:0.85rem; color:#fbbf24;">This PNG exceeds ${plotArtifactMaxMb || "the"} MB limit. Submitting will keep the code but skip the image.</div>` : ""}
+          ${isFresh ? `<div class="muted" style="font-size:0.85rem;">This preview matches the current code.</div>` : `<div style="font-size:0.85rem; color:#fbbf24;">Code changed since the last successful run. Run the plot again before submitting.</div>`}
+        </div>
+      `;
+      if (artifactTooLarge) {
+        setPlotSummary(questionId, isFresh ? "Code only" : "Stale", "#fbbf24");
+      } else {
+        setPlotSummary(questionId, isFresh ? "Ready" : "Stale", isFresh ? "#4ade80" : "#fbbf24");
+      }
+    };
+
+    const syncPlotPreviewFromCache = async (questionId) => {
+      const area = root.querySelector(`[data-code-input="${questionId}"]`);
+      const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+      const existingRecord = preview ? {
+        url: preview.dataset.existingUrl || "",
+        codeSnapshot: area ? normalizeCodeText(area.value || "") : "",
+        stdout: preview.dataset.existingStdout || "",
+        error: preview.dataset.existingError || "",
+        updatedAt: preview.dataset.existingUpdatedAt || "",
+        plotCount: parseInt(preview.dataset.existingPlotCount || "1", 10) || 1,
+        artifactStatus: preview.dataset.existingArtifactStatus || "",
+        artifactSize: parseInt(preview.dataset.existingArtifactSize || "0", 10) || 0,
+      } : null;
+      if (!artifactNamespace) {
+        if (existingRecord && (existingRecord.url || existingRecord.artifactStatus === "too_large")) {
+          renderPlotPreview(questionId, existingRecord, area ? area.value : "");
+        }
+        return;
+      }
+      const cached = await loadPlotArtifact(artifactNamespace, questionId);
+      if (!cached) {
+        if (existingRecord && (existingRecord.url || existingRecord.artifactStatus === "too_large")) {
+          renderPlotPreview(questionId, existingRecord, area ? area.value : "");
+          return;
+        }
+        renderPlotPreview(questionId, null, area ? area.value : "");
+        return;
+      }
+      plotRuntimeState.set(questionId, cached);
+      renderPlotPreview(questionId, cached, area ? area.value : "");
+    };
+
+    const attachPlotStaleTracker = (questionId) => {
+      const area = root.querySelector(`[data-code-input="${questionId}"]`);
+      if (!area || area.dataset.plotWatchAttached === "1") return;
+      area.dataset.plotWatchAttached = "1";
+      const refresh = () => {
+        const state = plotRuntimeState.get(questionId);
+        if (!state) return;
+        renderPlotPreview(questionId, state, area.value || "");
+      };
+      area.addEventListener("input", refresh);
+      area.addEventListener("change", refresh);
+      window.setTimeout(refresh, 250);
     };
 
     const renderResults = (container, results, summaryEl) => {
@@ -1435,8 +1995,19 @@
           toggle.textContent = open ? "Details" : "Hide details";
         });
 
-        const labelInput = sample.mode === "function" ? "Call" : "Input";
+        const labelInput = sample.mode === "class" ? "Method call" : sample.mode === "function" ? "Call" : "Input";
+        const outputLabel = sample.mode === "script" ? "Your output" : "Your result";
+        const expectedLabel = sample.mode === "script" ? "Expected output" : "Expected result";
+        if (sample.mode === "class" && sample.init_call) {
+          const initBlock = document.createElement("div");
+          initBlock.innerHTML = `
+            <div class="muted">Init</div>
+            <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.init_call || "")}</pre>
+          `;
+          details.appendChild(initBlock);
+        }
         const inputBlock = document.createElement("div");
+        inputBlock.style.marginTop = sample.mode === "class" && sample.init_call ? "8px" : "0";
         inputBlock.innerHTML = `
           <div class="muted">${labelInput}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.input || "")}</pre>
@@ -1445,14 +2016,14 @@
         const outputBlock = document.createElement("div");
         outputBlock.style.marginTop = "8px";
         outputBlock.innerHTML = `
-          <div class="muted">Your output</div>
+          <div class="muted">${outputLabel}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.output || "")}</pre>
         `;
 
         const expectedBlock = document.createElement("div");
         expectedBlock.style.marginTop = "8px";
         expectedBlock.innerHTML = `
-          <div class="muted">Expected output</div>
+          <div class="muted">${expectedLabel}</div>
           <pre style="white-space:pre-wrap; background:#0b1220; padding:8px; border-radius:8px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">${escapeHtml(sample.expected || "")}</pre>
         `;
 
@@ -1460,12 +2031,18 @@
         details.appendChild(outputBlock);
         details.appendChild(expectedBlock);
 
+        const compareInfo = document.createElement("div");
+        compareInfo.className = "muted";
+        compareInfo.style.marginTop = "8px";
+        compareInfo.textContent = describeSampleComparison(sample);
+        details.appendChild(compareInfo);
+
         if (sample.expected && (sample.output || sample.output === "")) {
           const diffWrap = buildDiff(sample.expected, sample.output);
           const diffLabel = document.createElement("div");
           diffLabel.className = "muted";
           diffLabel.style.marginTop = "8px";
-          diffLabel.textContent = "Diff (expected vs your output)";
+          diffLabel.textContent = sample.mode === "script" ? "Diff (expected vs your output)" : "Diff (expected vs your result)";
           details.appendChild(diffLabel);
           details.appendChild(diffWrap);
         }
@@ -1517,10 +2094,27 @@
       const pyodide = await ensurePackages();
       const codeInput = root.querySelector(`[data-code-input="${triggerBtn.dataset.question}"]`);
       const codeValue = codeOverride !== undefined ? codeOverride : (codeInput ? codeInput.value : "");
+      const mode = modeOverride || triggerBtn.getAttribute("data-mode") || "script";
+      const classInit = triggerBtn.getAttribute("data-class-init") || "";
+      const runnerSamples = mode === "class"
+        ? (Array.isArray(samples) ? samples : []).map((sample) => ({
+          ...sample,
+          init_call: sample && sample.init_call ? sample.init_call : classInit,
+        }))
+        : samples;
+      const hiddenTarget = ensureHiddenMatplotlibTarget();
+      const hadPreviousTarget = Object.prototype.hasOwnProperty.call(document, "pyodideMplTarget");
+      const previousTarget = hadPreviousTarget ? document.pyodideMplTarget : undefined;
+      const existingVisibleRoots = new Set(listVisibleMatplotlibRoots());
+      if (hiddenTarget) {
+        clearHiddenMatplotlibTarget();
+        document.pyodideMplTarget = hiddenTarget;
+      }
       pyodide.globals.set("runner_code", codeValue);
-      pyodide.globals.set("runner_samples", samples);
-      pyodide.globals.set("runner_mode", modeOverride || triggerBtn.getAttribute("data-mode") || "script");
-      const output = await pyodide.runPythonAsync(`
+      pyodide.globals.set("runner_samples", runnerSamples);
+      pyodide.globals.set("runner_mode", mode);
+      try {
+        const output = await pyodide.runPythonAsync(`
 import io, sys, traceback, json, builtins, ast, base64
 
 plt = None
@@ -1543,12 +2137,27 @@ def _collect_plots():
     if plt is None:
         return []
     images = []
+    max_width = 10.0
+    max_height = 7.5
+    export_dpi = 120
     try:
         figs = list(plt.get_fignums())
         for num in figs:
             fig = plt.figure(num)
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
+            original_size = None
+            try:
+                width, height = fig.get_size_inches()
+                if width > 0 and height > 0:
+                    scale = min(max_width / width, max_height / height, 1.0)
+                    if scale < 1.0:
+                        original_size = (width, height)
+                        fig.set_size_inches(width * scale, height * scale, forward=False)
+            except Exception:
+                original_size = None
+            fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0.1, dpi=export_dpi)
+            if original_size:
+                fig.set_size_inches(*original_size, forward=False)
             images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
         plt.close("all")
     except Exception:
@@ -1596,12 +2205,109 @@ def _safe_eval(expr, glb, lcl, limit):
     finally:
         sys.settrace(None)
 
+def _values_match(actual, expected):
+    if np is not None:
+        try:
+            if isinstance(actual, np.ndarray) or isinstance(expected, np.ndarray):
+                try:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected), equal_nan=True))
+                except TypeError:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected)))
+                except Exception:
+                    return False
+        except Exception:
+            pass
+    try:
+        comparison = actual == expected
+    except Exception:
+        return False
+    if np is not None:
+        try:
+            if isinstance(comparison, np.ndarray):
+                return bool(comparison.all())
+        except Exception:
+            pass
+    try:
+        return bool(comparison)
+    except Exception:
+        return False
+
+def _normalize_compare_text(value):
+    return " ".join(str(value or "").split())
+
+def _text_matches(actual_text, expected_text, compare_mode):
+    actual = str(actual_text or "")
+    expected = str(expected_text or "")
+    if compare_mode == "exact":
+        return actual == expected
+    if compare_mode == "normalize_whitespace":
+        return _normalize_compare_text(actual) == _normalize_compare_text(expected)
+    if compare_mode == "contains":
+        return expected in actual
+    return actual.rstrip() == expected.rstrip()
+
+def _numeric_values_close(actual, expected, tolerance):
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        if len(actual) != len(expected):
+            return False
+        return all(_numeric_values_close(a, b, tolerance) for a, b in zip(actual, expected))
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return False
+    if isinstance(actual, (str, bytes)) or isinstance(expected, (str, bytes)):
+        return False
+    try:
+        left = float(actual)
+        right = float(expected)
+    except Exception:
+        return False
+    if left != left and right != right:
+        return True
+    return abs(left - right) <= tolerance
+
+def _values_close(actual, expected, tolerance):
+    try:
+        tolerance = max(float(tolerance), 0.0)
+    except Exception:
+        tolerance = 1e-6
+    if np is not None:
+        try:
+            return bool(np.allclose(np.asarray(actual), np.asarray(expected), atol=tolerance, rtol=0.0, equal_nan=True))
+        except Exception:
+            pass
+    return _numeric_values_close(actual, expected, tolerance)
+
+def _sample_compare_mode(sample, sample_kind):
+    raw = (sample.get("compare_mode") or sample.get("compare") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if sample_kind == "script":
+        return raw if raw in ("exact", "rstrip", "normalize_whitespace", "contains") else "rstrip"
+    return raw if raw in ("exact", "numeric_tolerance", "contains") else "exact"
+
+def _sample_tolerance(sample):
+    value = sample.get("tolerance")
+    if value in (None, ""):
+        return 1e-6
+    try:
+        return max(float(value), 0.0)
+    except Exception:
+        return 1e-6
+
+def _callable_result_matches(result_value, output_value, expected_text, compare_mode, expected_literal_defined, expected_literal, tolerance=None):
+    if compare_mode == "contains":
+        return _text_matches(output_value, expected_text, "contains"), ""
+    if compare_mode == "numeric_tolerance":
+        if not expected_literal_defined:
+            return False, "Numeric tolerance comparison requires a literal expected value."
+        return _values_close(result_value, expected_literal, tolerance), ""
+    if expected_literal_defined:
+        return _values_match(result_value, expected_literal), ""
+    return _text_matches(output_value.strip(), expected_text.strip(), "exact"), ""
+
 results = []
-namespace = {}
+namespace = {"__name__": "__main__"}
 setup_error = None
 
-# ---------- Setup for function mode ----------
-if mode == "function":
+# ---------- Setup for callable modes ----------
+if mode in ("function", "class"):
     try:
         _safe_exec(code, namespace, namespace, MAX_SETUP_OPS)
     except TimeLimitExceeded:
@@ -1613,10 +2319,13 @@ if mode == "function":
 for sample in samples:
     name = sample.get("name") or "Sample"
 
-    if mode == "function":
+    if mode in ("function", "class"):
         call_expr = (sample.get("call") or sample.get("input") or "").strip()
         expected_output_display = (sample.get("expected") or sample.get("output") or "")
         expected_output = expected_output_display.strip()
+        init_call = (sample.get("init_call") or "").strip() if mode == "class" else ""
+        compare_mode = _sample_compare_mode(sample, "callable")
+        tolerance = _sample_tolerance(sample) if compare_mode == "numeric_tolerance" else None
         expected_literal = None
         expected_literal_defined = False
         if expected_output:
@@ -1638,12 +2347,17 @@ for sample in samples:
             status = "error"
             error_text = setup_error
         else:
+            sample_ns = dict(namespace)
             stdout = io.StringIO()
             original_stdout = sys.stdout
             sys.stdout = stdout
             try:
                 try:
-                    result = _safe_eval(call_expr, namespace, namespace, MAX_RUN_OPS)
+                    if mode == "class":
+                        if not init_call:
+                            raise RuntimeError("Missing __init__ call.")
+                        sample_ns["obj"] = _safe_eval(init_call, sample_ns, sample_ns, MAX_RUN_OPS)
+                    result = _safe_eval(call_expr, sample_ns, sample_ns, MAX_RUN_OPS)
                     result_value = result
                     output_value = repr(result)
                 except TimeLimitExceeded:
@@ -1656,12 +2370,20 @@ for sample in samples:
                 sys.stdout = original_stdout
 
         if status == "passed" and expected_output:
-            if expected_literal_defined:
-                if result_value != expected_literal:
-                    status = "mismatch"
-            else:
-                if output_value.strip() != expected_output:
-                    status = "mismatch"
+            matched, compare_error = _callable_result_matches(
+                result_value,
+                output_value,
+                expected_output,
+                compare_mode,
+                expected_literal_defined,
+                expected_literal,
+                tolerance=tolerance,
+            )
+            if compare_error:
+                status = "error"
+                error_text = compare_error
+            elif not matched:
+                status = "mismatch"
         plot_images = _collect_plots()
 
         results.append({
@@ -1671,7 +2393,10 @@ for sample in samples:
             "output": output_value,
             "expected": expected_output_display,
             "error": error_text,
-            "mode": "function",
+            "mode": mode,
+            "init_call": init_call,
+            "compare_mode": compare_mode,
+            "tolerance": tolerance,
             "plot_images": plot_images,
         })
 
@@ -1679,6 +2404,7 @@ for sample in samples:
         # script / stdin mode
         sample_input = sample.get("input") or ""
         expected_output = sample.get("expected") or sample.get("output") or ""
+        compare_mode = _sample_compare_mode(sample, "script")
 
         stdin = io.StringIO(sample_input)
         stdout = io.StringIO()
@@ -1695,7 +2421,10 @@ for sample in samples:
 
         try:
             try:
-                _safe_exec(code, {"__name__": "__main__"}, {}, MAX_RUN_OPS)
+                # Use one shared namespace so top-level assignments/imports remain
+                # visible inside comprehensions and function bodies.
+                script_ns = {"__name__": "__main__"}
+                _safe_exec(code, script_ns, script_ns, MAX_RUN_OPS)
             except TimeLimitExceeded:
                 status = "timeout"
                 error_text = "Execution time limit exceeded."
@@ -1709,7 +2438,7 @@ for sample in samples:
 
         output_value = stdout.getvalue()
 
-        if status == "passed" and expected_output.strip() and output_value.strip() != expected_output.strip():
+        if status == "passed" and expected_output.strip() and not _text_matches(output_value, expected_output, compare_mode):
             status = "mismatch"
         plot_images = _collect_plots()
 
@@ -1721,15 +2450,39 @@ for sample in samples:
             "expected": expected_output,
             "error": error_text,
             "mode": "script",
+            "compare_mode": compare_mode,
+            "tolerance": None,
             "plot_images": plot_images,
         })
 
 json.dumps(results)
       `);
-      pyodide.globals.delete("runner_code");
-      pyodide.globals.delete("runner_samples");
-      pyodide.globals.delete("runner_mode");
-      return JSON.parse(output);
+        return JSON.parse(output);
+      } finally {
+        pyodide.globals.delete("runner_code");
+        pyodide.globals.delete("runner_samples");
+        pyodide.globals.delete("runner_mode");
+        clearHiddenMatplotlibTarget();
+        listVisibleMatplotlibRoots().forEach((node) => {
+          if (!existingVisibleRoots.has(node)) {
+            node.remove();
+          }
+        });
+        if (hadPreviousTarget) {
+          document.pyodideMplTarget = previousTarget;
+        } else {
+          delete document.pyodideMplTarget;
+        }
+      }
+    };
+    const executePlotPreview = async (triggerBtn, codeValue) => {
+      const results = await executeSamples(
+        triggerBtn,
+        [{ name: "Preview", input: "", expected: "" }],
+        "script",
+        codeValue,
+      );
+      return Array.isArray(results) ? results[0] || {} : {};
     };
 
     buttons.forEach((btn) => {
@@ -1802,14 +2555,22 @@ json.dumps(results)
         const summaryEl = root.querySelector(`[data-custom-summary="${questionId}"]`);
         if (!questionId || !container) return;
         let samples = [];
-        if (mode === "function") {
+        if (mode === "function" || mode === "class") {
           const callInput = root.querySelector(`[data-custom-call="${questionId}"]`);
           const callExpr = callInput ? callInput.value.trim() : "";
           if (!callExpr) {
-            container.textContent = "Enter a function call to run.";
+            container.textContent = mode === "class"
+              ? "Enter a method call or expression to run."
+              : "Enter a function call to run.";
             return;
           }
-          samples = [{ name: "Custom run", call: callExpr, input: callExpr, expected: "" }];
+          samples = [{
+            name: "Custom run",
+            call: callExpr,
+            input: callExpr,
+            expected: "",
+            init_call: mode === "class" ? (btn.dataset.classInit || "") : "",
+          }];
         } else {
           const stdinField = root.querySelector(`[data-custom-stdin="${questionId}"]`);
           const stdinValue = stdinField ? stdinField.value : "";
@@ -1844,16 +2605,122 @@ json.dumps(results)
         }
       });
     });
+
+    plotButtons.forEach((btn) => {
+      const questionId = btn.dataset.question;
+      if (!questionId) return;
+      attachPlotStaleTracker(questionId);
+      syncPlotPreviewFromCache(questionId);
+      btn.addEventListener("click", async () => {
+        const area = root.querySelector(`[data-code-input="${questionId}"]`);
+        if (!area) return;
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Running...";
+        setPlotSummary(questionId, "Running...", "#38bdf8");
+        try {
+          const entry = await executePlotPreview(btn, area.value || "");
+          const plotImages = Array.isArray(entry.plot_images) ? entry.plot_images.filter(Boolean) : [];
+          if (!plotImages.length) {
+            revokePlotObjectUrl(questionId);
+            plotRuntimeState.delete(questionId);
+            if (artifactNamespace) {
+              await deletePlotArtifact(artifactNamespace, questionId);
+            }
+            if (entry.error) {
+              const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+              if (preview) {
+                preview.innerHTML = `
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <p class="muted" style="margin:0;">No plot was generated.</p>
+                    <pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(entry.error)}</pre>
+                  </div>
+                `;
+              }
+              setPlotSummary(questionId, "Run failed", "#f87171");
+            } else {
+              renderPlotPreview(questionId, null, area.value || "");
+              setPlotSummary(questionId, "No plot", "#fbbf24");
+            }
+            return;
+          }
+
+          const latest = plotImages[plotImages.length - 1];
+          const record = {
+            blob: base64ToBlob(latest, "image/png"),
+            codeSnapshot: normalizeCodeText(area.value || ""),
+            stdout: entry.output || "",
+            error: entry.error || "",
+            status: entry.status || "passed",
+            plotCount: plotImages.length,
+            updatedAt: new Date().toISOString(),
+          };
+          plotRuntimeState.set(questionId, record);
+          if (artifactNamespace) {
+            await savePlotArtifact(artifactNamespace, questionId, record);
+          }
+          renderPlotPreview(questionId, record, area.value || "");
+        } catch (err) {
+          const preview = root.querySelector(`[data-plot-preview="${questionId}"]`);
+          if (preview) {
+            preview.innerHTML = `<pre style="white-space:pre-wrap; background:#1f2937; padding:8px; border-radius:8px; border:1px solid #334155;">${escapeHtml(err.message || String(err))}</pre>`;
+          }
+          setPlotSummary(questionId, "Run failed", "#f87171");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
+    });
+
+    if (form && artifactNamespace) {
+      let replayingNativeSubmit = false;
+      form.addEventListener("submit", async (event) => {
+        if (replayingNativeSubmit) {
+          replayingNativeSubmit = false;
+          return;
+        }
+        const submitter = event.submitter;
+        const artifacts = await getNamespaceArtifacts(artifactNamespace);
+        if (!artifacts.length) {
+          clearInjectedPlotFields();
+          return;
+        }
+        event.preventDefault();
+        const injected = injectPlotArtifactsIntoForm(artifacts);
+        if (!injected) {
+          clearInjectedPlotFields();
+          replayingNativeSubmit = true;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit(submitter || undefined);
+          } else {
+            form.submit();
+          }
+          return;
+        }
+        replayingNativeSubmit = true;
+        if (typeof form.requestSubmit === "function") {
+          form.requestSubmit(submitter || undefined);
+        } else {
+          form.submit();
+        }
+      });
+    }
   }
 
   function setupCodeEditors() {
     const codeAreas = Array.from(document.querySelectorAll("textarea[data-code-input]"));
     if (!codeAreas.length) return;
+<<<<<<< HEAD
     const telemetry = getTelemetryController();
     if (telemetry) {
       codeAreas.forEach((area) => telemetry.registerTextarea(area));
     }
     const MONACO_BASE = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs";
+=======
+    const MONACO_ROOT = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min";
+    const MONACO_BASE = `${MONACO_ROOT}/vs`;
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
     const MONACO_LOADER = `${MONACO_BASE}/loader.min.js`;
 
     const ensureLoader = () => {
@@ -1888,7 +2755,7 @@ json.dumps(results)
           window.MonacoEnvironment = window.MonacoEnvironment || {};
           window.MonacoEnvironment.getWorkerUrl = () => {
             const workerScript = [
-              `self.MonacoEnvironment = { baseUrl: '${MONACO_BASE}/' };`,
+              `self.MonacoEnvironment = { baseUrl: '${MONACO_ROOT}/' };`,
               `importScripts('${workerSrc}');`,
             ].join("\n");
             return `data:text/javascript;charset=utf-8,${encodeURIComponent(workerScript)}`;
@@ -1929,6 +2796,7 @@ json.dumps(results)
           area._monacoEditor = editor;
           const syncValue = () => {
             area.value = editor.getValue();
+            area.dispatchEvent(new Event("input", { bubbles: true }));
           };
           editor.onDidChangeModelContent(syncValue);
           syncValue();

@@ -93,6 +93,18 @@ class StudentGroupReviewer(db.Model):
         UniqueConstraint('user_id', 'group_id', name='uq_group_reviewer'),
     )
 
+class StudentPrivateNote(db.Model):
+    __tablename__ = "student_private_notes"
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False, index=True)
+    author_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True, index=True)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    student = db.relationship('Student', backref=db.backref('private_notes', cascade="all,delete-orphan", order_by="StudentPrivateNote.created_at.desc()"))
+    author = db.relationship('User', backref=db.backref('student_private_notes', cascade="all,delete-orphan"))
+
 class AttendanceSheet(db.Model):
     __tablename__ = "attendance_sheets"
     id = db.Column(db.Integer, primary_key=True)
@@ -122,6 +134,37 @@ class AttendanceEntry(db.Model):
 
     __table_args__ = (
         UniqueConstraint('sheet_id', 'student_id', name='uq_attendance_sheet_student'),
+    )
+
+class Announcement(db.Model):
+    __tablename__ = "announcements"
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True, index=True)
+    target_group_id = db.Column(db.Integer, db.ForeignKey('student_groups.id', ondelete="SET NULL"), nullable=True, index=True)
+    target_group_name = db.Column(db.String(120), nullable=True)
+
+    creator = db.relationship('User')
+    target_group = db.relationship('StudentGroup')
+
+class AnnouncementDelivery(db.Model):
+    __tablename__ = "announcement_deliveries"
+    id = db.Column(db.Integer, primary_key=True)
+    announcement_id = db.Column(db.Integer, db.ForeignKey('announcements.id', ondelete="CASCADE"), nullable=False, index=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    seen_at = db.Column(db.DateTime, nullable=True)
+
+    announcement = db.relationship(
+        'Announcement',
+        backref=db.backref('deliveries', cascade="all,delete-orphan", order_by="AnnouncementDelivery.created_at.asc()"),
+    )
+    student = db.relationship('Student')
+
+    __table_args__ = (
+        UniqueConstraint('announcement_id', 'student_id', name='uq_announcement_delivery_student'),
     )
 
 class Leaderboard(db.Model):
@@ -303,6 +346,7 @@ class Project(db.Model):
     collection = db.Column(db.String(64), nullable=False, default="comp101")
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)
+    deadline_at = db.Column(db.DateTime, nullable=True)
     required_task_count = db.Column(db.Integer, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
@@ -366,6 +410,7 @@ class ProjectTask(db.Model):
     __tablename__ = "project_tasks"
     id = db.Column(db.Integer, primary_key=True)
     project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    task_kind = db.Column(db.String(32), nullable=False, default="assessment")
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text, nullable=True)
     instructions = db.Column(db.Text, nullable=True)

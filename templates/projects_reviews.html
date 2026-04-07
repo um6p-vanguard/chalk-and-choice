@@ -3,7 +3,13 @@
 <div class="card">
   <h3 style="margin:0;">Pending task reviews</h3>
   <p class="muted" style="margin-top:6px;">Approve or reject submissions for tasks that require mentor feedback.</p>
+  {% if review_scope_limited %}
+    <p class="muted" style="margin-top:6px;">You can only see students from groups assigned to you.</p>
+  {% endif %}
   <div style="margin-top:10px;">
+    {% if user and user.role == 'admin' %}
+      <a class="btn" href="{{ url_for('admin_review_dashboard') }}">Review dashboard</a>
+    {% endif %}
     <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
   </div>
   
@@ -23,6 +29,15 @@
 <div class="sp"></div>
 <div class="card">
   <form method="get" class="row" style="gap:10px; flex-wrap:wrap; align-items:flex-end;">
+    <div>
+      <label>Collection filter</label>
+      <select name="collection">
+        <option value="">All collections</option>
+        {% for collection in collections %}
+          <option value="{{ collection }}" {% if filter_collection == collection %}selected{% endif %}>{{ collection }}</option>
+        {% endfor %}
+      </select>
+    </div>
     <div>
       <label>Project filter</label>
       <select name="project_id">
@@ -80,9 +95,9 @@
             {% endif %}
           </td>
           <td>
-            {% if sub.student and sub.student.group_memberships %}
-              {% for membership in sub.student.group_memberships %}
-                {{ membership.group.name if membership.group else "(deleted)" }}{% if not loop.last %}, {% endif %}
+            {% if sub.visible_groups %}
+              {% for group in sub.visible_groups %}
+                {{ group.name }}{% if not loop.last %}, {% endif %}
               {% endfor %}
             {% else %}
               <span class="muted">—</span>
@@ -133,6 +148,8 @@
         No submissions from warned students need review.
       {% elif filter_warning == 'clean' %}
         No submissions from clean students need review.
+      {% elif review_scope_limited %}
+        No submissions in your assigned groups need review.
       {% else %}
         No submissions need review.
       {% endif %}

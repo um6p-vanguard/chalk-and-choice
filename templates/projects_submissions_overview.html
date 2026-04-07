@@ -6,6 +6,9 @@
       <h3 style="margin:0;">Student attempts — {{ project.title }}</h3>
       {% if project.description %}<p class="muted" style="margin:6px 0;">{{ project.description }}</p>{% endif %}
       <p class="muted" style="margin:6px 0;">{{ project.tasks|length }} task(s) • Code: <code>{{ project.code }}</code></p>
+      {% if review_scope_limited %}
+        <p class="muted" style="margin:6px 0 0 0;">Showing only students from groups assigned to you.</p>
+      {% endif %}
     </div>
     <div class="row" style="gap:8px;">
       <a class="btn" href="{{ url_for('projects_show', code=project.code) }}">Back to project</a>
@@ -58,7 +61,13 @@
       </tbody>
     </table>
   {% else %}
-    <p class="muted" style="margin:0;">No submissions for this project yet.</p>
+    <p class="muted" style="margin:0;">
+      {% if review_scope_limited %}
+        No visible submissions for this project in your assigned groups.
+      {% else %}
+        No submissions for this project yet.
+      {% endif %}
+    </p>
   {% endif %}
 </div>
 {% endblock %}

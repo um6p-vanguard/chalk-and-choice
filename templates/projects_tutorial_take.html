@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content:space-between; align-items:flex-start; gap:12px;">
+    <div>
+      <div class="muted" style="font-size:0.9rem;">Tutorial task</div>
+      <h3 style="margin:4px 0 0 0;">{{ project.title }} — {{ task.title }}</h3>
+      {% if task.description %}
+        <div class="muted markdown-block" style="margin:8px 0 0 0;">{{ task.description|markdown }}</div>
+      {% endif %}
+      <p class="muted" style="margin:8px 0 0 0;">
+        Completed by reading.
+        {% if submission and submission.submitted_at %}
+          First opened {{ submission.submitted_at.strftime("%b %d %H:%M UTC") }}.
+        {% endif %}
+      </p>
+    </div>
+    <div class="row" style="gap:8px; flex-wrap:wrap;">
+      <a class="btn" href="{{ url_for('project_task_tutorial_download', task_id=task.id) }}">Download Markdown</a>
+      {% if task.resource_file %}
+        <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download resource</a>
+      {% endif %}
+      <a class="btn" href="{{ url_for('student_project_detail', code=project.code) }}">Back to project</a>
+    </div>
+  </div>
+</div>
+
+{% if task.instructions %}
+  <div class="sp"></div>
+  <div class="card">
+    <div class="markdown-block">{{ task.instructions|markdown }}</div>
+  </div>
+{% endif %}
+
+{% if task.resource_file %}
+  <div class="sp"></div>
+  <div class="card">
+    <strong>Attached resource</strong>
+    <div class="row" style="gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+      <span>{{ task.resource_file.original_name or task.resource_file.stored_name or "resource" }}</span>
+      {% if task.resource_file.size %}
+        <span class="muted">({{ (task.resource_file.size // 1024) }} KB)</span>
+      {% endif %}
+      <a class="btn" href="{{ url_for('project_task_resource_download', task_id=task.id) }}">Download</a>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

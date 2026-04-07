@@ -37,6 +37,7 @@
     <div class="row" style="gap:8px;">
       {% if submission.student %}
         <a class="btn" href="{{ url_for('warnings_student_detail', student_id=submission.student.id) }}" style="background: #5775B8; color: white; border: none;">View Warnings</a>
+        <a class="btn" href="{{ url_for('student_private_notes', student_id=submission.student.id) }}">Private notes</a>
       {% endif %}
       <a class="btn" href="{{ url_for('projects_reviews_mine') }}">My reviews</a>
       <a class="btn" href="{{ url_for('projects_reviews') }}">Back to review list</a>

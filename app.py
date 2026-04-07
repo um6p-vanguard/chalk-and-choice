@@ -1,4 +1,5 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct
+from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -22,8 +23,14 @@ from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
+<<<<<<< HEAD
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession, SubmissionTelemetryEvent,
+=======
+                    StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
+                    AttendanceSheet, AttendanceEntry, StudentLogSession,
+                    Announcement, AnnouncementDelivery,
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
 from sqlalchemy import func, inspect, text
@@ -95,6 +102,245 @@ def _serialize_grade_export_row(grade):
         "updated_at": (grade.updated_at.isoformat() if grade.updated_at else ""),
     }
 
+def _iso_or_none(value):
+    return value.isoformat() if value else None
+
+def _export_code_expected(value):
+    text = _coerce_string(value).strip()
+    if not text:
+        return ""
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return text
+
+def _serialize_project_task_resource_export(resource_file):
+    info = _extract_file_info(resource_file)
+    if not info:
+        return None
+    payload = {
+        "original_name": info.get("original_name") or info.get("stored_name") or "resource",
+        "included_in_export": False,
+    }
+    if info.get("size") is not None:
+        payload["size"] = info.get("size")
+    content_type = _coerce_string(info.get("content_type")).strip()
+    if content_type:
+        payload["content_type"] = content_type
+    uploaded_at = _coerce_string(info.get("uploaded_at")).strip()
+    if uploaded_at:
+        payload["uploaded_at"] = uploaded_at
+    return payload
+
+def _serialize_project_question_export(question):
+    if not isinstance(question, dict):
+        return {}
+    try:
+        points = max(0, int(question.get("points") or 1))
+    except Exception:
+        points = 1
+    payload = {
+        "id": _coerce_string(question.get("id")).strip(),
+        "type": _normalize_question_type_name(question.get("type")),
+        "prompt": _coerce_string(question.get("prompt")).strip(),
+        "points": points,
+    }
+    title = _coerce_string(question.get("title")).strip()
+    if title:
+        payload["title"] = title
+    code_snippet = _coerce_string(question.get("code_snippet")).strip("\n")
+    if code_snippet:
+        payload["code_snippet"] = code_snippet
+
+    q_type = payload["type"]
+    if q_type in ("mcq", "multi"):
+        correct_indices = {
+            idx for idx in _coerce_int_list(question.get("correct_indices"))
+            if idx >= 0
+        }
+        choices = []
+        for idx, option in enumerate(question.get("options") or []):
+            choice = {"text": _coerce_string(option)}
+            if idx in correct_indices:
+                choice["is_correct"] = True
+            choices.append(choice)
+        payload["choices"] = choices
+        payload["shuffle"] = bool(question.get("shuffle"))
+    elif q_type == "text":
+        payload["placeholder"] = _coerce_string(question.get("placeholder")).strip()
+        try:
+            payload["lines"] = max(1, int(question.get("lines") or 4))
+        except Exception:
+            payload["lines"] = 4
+    elif q_type == "tokens":
+        payload["template"] = _coerce_string(question.get("template"))
+        payload["correct_tokens"] = _coerce_token_list(question.get("correct_tokens"))
+        payload["distractor_tokens"] = _coerce_token_list(question.get("distractor_tokens"))
+    elif q_type == "fill":
+        payload["template"] = _coerce_string(question.get("template"))
+        payload["answers"] = _coerce_token_list(question.get("answers"))
+        payload["case_sensitive"] = bool(question.get("case_sensitive"))
+    elif q_type == "file":
+        payload["accept"] = _coerce_string(question.get("accept")).strip() or UPLOAD_DEFAULT_ACCEPT
+        try:
+            payload["max_mb"] = max(1, int(question.get("max_mb") or UPLOAD_MAX_MB))
+        except Exception:
+            payload["max_mb"] = UPLOAD_MAX_MB
+    elif q_type == "plot":
+        payload["problem_statement"] = _coerce_string(question.get("statement")).strip()
+        starter_code = _coerce_string(question.get("starter"))
+        if starter_code:
+            payload["starter_code"] = starter_code
+    elif q_type == "code":
+        payload["problem_statement"] = _coerce_string(question.get("statement")).strip()
+        starter_code = _coerce_string(question.get("starter"))
+        if starter_code:
+            payload["starter_code"] = starter_code
+        mode = _normalize_code_mode_name(question.get("mode") or "script")
+        payload["code_mode"] = mode
+        if mode == "function":
+            payload["function_signature"] = _coerce_string(question.get("function_signature")).strip()
+        elif mode == "class":
+            payload["class_signature"] = _coerce_string(question.get("class_signature")).strip()
+            payload["class_init"] = _coerce_string(question.get("class_init")).strip()
+        tests = []
+        class_init = _coerce_string(question.get("class_init")).strip()
+        for sample in question.get("samples") or []:
+            if not isinstance(sample, dict):
+                continue
+            name = _coerce_string(sample.get("name")).strip()
+            compare_mode = _coerce_string(sample.get("compare_mode")).strip()
+            hidden = bool(sample.get("hidden"))
+            if mode == "script":
+                item = {
+                    "name": name or "Sample",
+                    "stdin": _coerce_string(sample.get("input")),
+                    "expected_stdout": _coerce_string(sample.get("output")),
+                }
+            elif mode == "function":
+                item = {
+                    "name": name or "Sample",
+                    "function_call": _coerce_string(sample.get("call") or sample.get("input")).strip(),
+                    "expected_return": _export_code_expected(sample.get("expected")),
+                }
+            else:
+                item = {
+                    "name": name or "Method test",
+                    "method_call": _coerce_string(sample.get("call") or sample.get("input")).strip(),
+                    "expected_return": _export_code_expected(sample.get("expected")),
+                }
+                sample_init = _coerce_string(sample.get("init_call")).strip()
+                if sample_init and sample_init != class_init:
+                    item["init_call"] = sample_init
+            if compare_mode:
+                item["compare_mode"] = compare_mode
+            if hidden:
+                item["hidden"] = True
+            if sample.get("tolerance") is not None:
+                try:
+                    item["tolerance"] = float(sample.get("tolerance"))
+                except Exception:
+                    item["tolerance"] = sample.get("tolerance")
+            tests.append(item)
+        payload["tests"] = tests
+    return payload
+
+def _serialize_project_task_export(task):
+    payload = {
+        "task_kind": _task_kind_value(task),
+        "title": task.title,
+        "description": task.description,
+        "instructions": task.instructions,
+        "required": bool(task.required),
+        "auto_grade": bool(task.auto_grade),
+        "requires_review": bool(task.requires_review),
+        "questions": [
+            _serialize_project_question_export(question)
+            for question in (task.questions_json or [])
+            if isinstance(question, dict)
+        ],
+    }
+    resource_file = _serialize_project_task_resource_export(task.resource_file)
+    if resource_file:
+        payload["resource_file"] = resource_file
+    return payload
+
+def _project_task_download_basename(project, task):
+    project_code = secure_filename((project.code if project else "") or "project") or "project"
+    task_slug = secure_filename((task.title if task else "") or "") or f"task_{getattr(task, 'id', 'item')}"
+    return f"{project_code}_{task_slug}"
+
+def _project_task_tutorial_markdown(project, task):
+    lines = [f"# {task.title}", ""]
+    if project:
+        lines.extend([
+            f"- Project: {project.title}",
+            f"- Project code: `{project.code}`",
+            "",
+        ])
+    if task.description:
+        lines.extend([task.description.strip(), ""])
+    body = _coerce_string(task.instructions).strip()
+    if body:
+        lines.extend([body, ""])
+    if isinstance(task.resource_file, dict):
+        resource_name = (
+            task.resource_file.get("original_name")
+            or task.resource_file.get("stored_name")
+            or "resource"
+        )
+        lines.extend([
+            "## Attached resource",
+            "",
+            f"- {resource_name}",
+            "",
+        ])
+    text = "\n".join(lines).strip()
+    return text + "\n"
+
+def _serialize_project_export(project, tasks=None, dependencies=None, group_assignments=None):
+    project_payload = {
+        "code": project.code,
+        "title": project.title,
+        "collection": project.collection,
+        "description": project.description,
+        "instructions": project.instructions,
+        "deadline_at": _iso_or_none(project.deadline_at),
+        "required_task_count": project.required_task_count,
+        "is_active": bool(project.is_active),
+        "points": project.points,
+        "retry_cooldown_minutes": project.retry_cooldown_minutes,
+        "created_at": _iso_or_none(project.created_at),
+    }
+    project_payload["dependencies"] = [
+        {
+            "code": dep.prerequisite.code if dep.prerequisite else None,
+            "title": dep.prerequisite.title if dep.prerequisite else None,
+        }
+        for dep in (dependencies or [])
+    ]
+    project_payload["group_assignments"] = [
+        {
+            "scope": "all" if assignment.applies_to_all else "group",
+            "group_id": assignment.group_id,
+            "group_name": assignment.group.name if assignment.group else None,
+            "is_required": bool(assignment.is_required),
+            "created_at": _iso_or_none(assignment.created_at),
+        }
+        for assignment in (group_assignments or [])
+    ]
+    return {
+        "schema_name": "project_export",
+        "schema_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "task_import_schema": {
+            "name": PROJECT_TASKS_SCHEMA.get("schema_name"),
+            "version": PROJECT_TASKS_SCHEMA.get("schema_version"),
+        },
+        "project": project_payload,
+        "tasks": [_serialize_project_task_export(task) for task in (tasks or [])],
+    }
+
 # --------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------
@@ -111,6 +357,11 @@ UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
 TASK_RESOURCE_MAX_MB = 10
 TASK_RESOURCE_MAX_BYTES = TASK_RESOURCE_MAX_MB * 1024 * 1024
+PLOT_ARTIFACT_MAX_MB = 3
+PLOT_ARTIFACT_MAX_BYTES = PLOT_ARTIFACT_MAX_MB * 1024 * 1024
+PLOT_EXPORT_MAX_WIDTH_IN = 10.0
+PLOT_EXPORT_MAX_HEIGHT_IN = 7.5
+PLOT_EXPORT_DPI = 120
 LOG_SESSION_GAP_SEC = 10 * 60
 LOG_ACTIVITY_UPDATE_SEC = 60
 
@@ -130,35 +381,763 @@ ATTENDANCE_STATUS_OPTIONS = [
 ]
 ATTENDANCE_STATUS_VALUES = {value for value, _ in ATTENDANCE_STATUS_OPTIONS}
 
-PROJECT_TASKS_SCHEMA = {
-    "type": "object",
-    "required": ["tasks"],
-    "properties": {
-        "tasks": {
-            "description": "List of task definitions to create for the project.",
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "object",
-                "required": ["title", "questions"],
-                "properties": {
-                    "title": {"type": "string"},
-                    "description": {"type": ["string", "null"]},
-                    "instructions": {"type": ["string", "null"]},
-                    "required": {"type": "boolean", "default": True},
-                    "auto_grade": {"type": "boolean", "default": True},
-                    "requires_review": {"type": "boolean", "default": False},
-                    "questions": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": "Question objects that follow the same structure as the task builder (multi-choice, code, text, tokens, etc.)."
+QUESTION_TYPE_ALIASES = {
+    "mcq": "mcq",
+    "single_choice": "mcq",
+    "single_select": "mcq",
+    "multiple_choice": "mcq",
+    "radio": "mcq",
+    "multi": "multi",
+    "multi_select": "multi",
+    "multiple_select": "multi",
+    "checkbox": "multi",
+    "checkboxes": "multi",
+    "text": "text",
+    "free_text": "text",
+    "long_text": "text",
+    "open_text": "text",
+    "code": "code",
+    "coding": "code",
+    "python_code": "code",
+    "programming": "code",
+    "plot": "plot",
+    "plotting": "plot",
+    "matplotlib": "plot",
+    "python_plot": "plot",
+    "tokens": "tokens",
+    "token_fill": "tokens",
+    "drag_tokens": "tokens",
+    "fill": "fill",
+    "fill_blank": "fill",
+    "fill_in_blank": "fill",
+    "file": "file",
+    "upload": "file",
+    "file_upload": "file",
+}
+
+TASK_KIND_ALIASES = {
+    "assessment": "assessment",
+    "task": "assessment",
+    "exercise": "assessment",
+    "practice": "assessment",
+    "quiz": "assessment",
+    "tutorial": "tutorial",
+    "lesson": "tutorial",
+    "reading": "tutorial",
+    "read_only": "tutorial",
+    "content": "tutorial",
+    "guide": "tutorial",
+}
+
+CODE_MODE_ALIASES = {
+    "script": "script",
+    "stdin": "script",
+    "program": "script",
+    "program_io": "script",
+    "standard_input": "script",
+    "function": "function",
+    "callable": "function",
+    "call_return": "function",
+    "class": "class",
+    "object": "class",
+    "method": "class",
+    "object_method": "class",
+}
+
+def _first_present(mapping, *keys):
+    if not isinstance(mapping, dict):
+        return None
+    for key in keys:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+def _coerce_bool(value, default=False):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in ("1", "true", "yes", "y", "on"):
+            return True
+        if token in ("0", "false", "no", "n", "off"):
+            return False
+    return bool(value)
+
+def _coerce_string(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+def _coerce_token_list(value):
+    if isinstance(value, str):
+        return [tok.strip() for tok in value.replace("\n", ",").split(",") if tok.strip()]
+    if isinstance(value, list):
+        return [str(tok).strip() for tok in value if str(tok).strip()]
+    return []
+
+def _coerce_int_list(value):
+    items = []
+    if isinstance(value, str):
+        tokens = [tok.strip() for tok in value.replace(";", ",").replace("\n", ",").split(",") if tok.strip()]
+    elif isinstance(value, list):
+        tokens = value
+    else:
+        tokens = []
+    for tok in tokens:
+        try:
+            items.append(int(tok))
+        except Exception:
+            continue
+    return items
+
+def _normalize_question_type_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return QUESTION_TYPE_ALIASES.get(token, token)
+
+def _normalize_code_mode_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return CODE_MODE_ALIASES.get(token, token)
+
+def _normalize_task_kind_name(value):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if not token:
+        return "assessment"
+    return TASK_KIND_ALIASES.get(token, token)
+
+def _task_kind_value(task):
+    if not task:
+        return "assessment"
+    return _normalize_task_kind_name(getattr(task, "task_kind", "assessment") or "assessment")
+
+def _is_tutorial_task(task):
+    return _task_kind_value(task) == "tutorial"
+
+def _coerce_code_expected(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            ast.literal_eval(text)
+            return text
+        except Exception:
+            return repr(text)
+    return repr(value)
+
+DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE = "rstrip"
+DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE = "exact"
+DEFAULT_NUMERIC_TOLERANCE = 1e-6
+
+SCRIPT_SAMPLE_COMPARE_ALIASES = {
+    "exact": "exact",
+    "exact_text": "exact",
+    "strict": "exact",
+    "rstrip": "rstrip",
+    "ignore_trailing_whitespace": "rstrip",
+    "trim_end": "rstrip",
+    "trimmed": "rstrip",
+    "normalize_whitespace": "normalize_whitespace",
+    "normalized_whitespace": "normalize_whitespace",
+    "ignore_whitespace": "normalize_whitespace",
+    "contains": "contains",
+    "substring": "contains",
+}
+
+CALLABLE_SAMPLE_COMPARE_ALIASES = {
+    "exact": "exact",
+    "equality": "exact",
+    "numeric_tolerance": "numeric_tolerance",
+    "tolerance": "numeric_tolerance",
+    "allclose": "numeric_tolerance",
+    "close": "numeric_tolerance",
+    "contains": "contains",
+    "repr_contains": "contains",
+    "text_contains": "contains",
+    "string_contains": "contains",
+}
+
+def _normalize_sample_compare_mode(value, sample_kind):
+    token = _coerce_string(value).strip().lower().replace("-", "_").replace(" ", "_")
+    if sample_kind == "script":
+        if not token:
+            return DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE
+        mode = SCRIPT_SAMPLE_COMPARE_ALIASES.get(token)
+        if not mode:
+            raise ValueError(f"Unknown script comparison mode '{value}'.")
+        return mode
+    if not token:
+        return DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE
+    mode = CALLABLE_SAMPLE_COMPARE_ALIASES.get(token)
+    if not mode:
+        raise ValueError(f"Unknown callable comparison mode '{value}'.")
+    return mode
+
+def _coerce_sample_tolerance(value, default=DEFAULT_NUMERIC_TOLERANCE):
+    if value in (None, ""):
+        return float(default)
+    try:
+        tolerance = float(_coerce_string(value).strip())
+    except Exception:
+        raise ValueError("Tolerance must be a non-negative number.")
+    if tolerance < 0:
+        raise ValueError("Tolerance must be a non-negative number.")
+    return tolerance
+
+def _sample_compare_settings(sample, sample_kind):
+    compare_mode = _normalize_sample_compare_mode(
+        _first_present(sample, "compare_mode", "compare", "comparison", "match_mode", "matcher"),
+        sample_kind,
+    )
+    tolerance = None
+    if sample_kind != "script" and compare_mode == "numeric_tolerance":
+        tolerance = _coerce_sample_tolerance(
+            _first_present(sample, "tolerance", "abs_tolerance", "atol", "epsilon"),
+        )
+    return compare_mode, tolerance
+
+def _validate_numeric_tolerance_expected(expected_text):
+    text = _coerce_string(expected_text).strip()
+    if not text:
+        raise ValueError("Numeric tolerance comparison requires an expected value.")
+    try:
+        ast.literal_eval(text)
+    except Exception:
+        raise ValueError("Numeric tolerance comparison requires a literal expected value.")
+
+def _extract_choice_options(value):
+    options = []
+    implied_correct = []
+    if isinstance(value, str):
+        options = [line.strip() for line in value.splitlines() if line.strip()]
+        return options, implied_correct
+    if not isinstance(value, list):
+        return options, implied_correct
+    for item in value:
+        if isinstance(item, dict):
+            text = _coerce_string(_first_present(item, "text", "label", "option", "value")).strip()
+            if not text:
+                continue
+            options.append(text)
+            if _coerce_bool(_first_present(item, "is_correct", "correct"), False):
+                implied_correct.append(len(options) - 1)
+        else:
+            text = _coerce_string(item).strip()
+            if text:
+                options.append(text)
+    return options, implied_correct
+
+def _build_project_tasks_schema():
+    minimal_payload = {
+        "tasks": [
+            {
+                "title": "Lists warmup",
+                "description": "Short practice on Python lists.",
+                "instructions": "Answer every question. Code questions run in Python only.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_lists_mcq",
+                        "type": "mcq",
+                        "title": "Indexing",
+                        "prompt": "Which expression returns the first element of `items`?",
+                        "points": 2,
+                        "choices": [
+                            {"text": "items[0]", "is_correct": True},
+                            {"text": "items[1]"},
+                            {"text": "items[-0]"}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    class_payload = {
+        "tasks": [
+            {
+                "title": "Accumulator class",
+                "description": "Implement and test a small Python class.",
+                "instructions": "Write the class exactly as described. Each test creates a fresh object named `obj`.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_accumulator_class",
+                        "type": "code",
+                        "title": "Build Accumulator",
+                        "prompt": "Implement the `Accumulator` class.",
+                        "points": 10,
+                        "problem_statement": "Create a class `Accumulator` with `__init__(start)`, `add(amount)` that returns the updated total, and `total()` that returns the current total.",
+                        "starter_code": "class Accumulator:\n    pass\n",
+                        "code_mode": "class",
+                        "class_signature": "class Accumulator:",
+                        "class_init": "Accumulator(3)",
+                        "tests": [
+                            {
+                                "name": "initial total",
+                                "method_call": "obj.total()",
+                                "expected_result": 3,
+                                "compare_mode": "exact"
+                            },
+                            {
+                                "name": "add returns new total",
+                                "method_call": "obj.add(2)",
+                                "expected_result": 5,
+                                "compare_mode": "exact"
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    plot_payload = {
+        "tasks": [
+            {
+                "title": "Line chart practice",
+                "description": "Generate a labeled matplotlib plot.",
+                "instructions": "Write Python that creates the requested chart. Students can preview the final PNG before submitting.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": True,
+                "questions": [
+                    {
+                        "id": "q_sales_plot",
+                        "type": "plot",
+                        "title": "Monthly sales chart",
+                        "prompt": "Create the line chart described below.",
+                        "points": 10,
+                        "problem_statement": "Use matplotlib to plot months `[1, 2, 3, 4]` against sales `[10, 14, 11, 18]`. Add a title, axis labels, and markers on each point.",
+                        "starter_code": "import matplotlib.pyplot as plt\n\nmonths = [1, 2, 3, 4]\nsales = [10, 14, 11, 18]\n\n# build your chart here\n"
+                    }
+                ]
+            }
+        ]
+    }
+    formatting_payload = {
+        "tasks": [
+            {
+                "title": "Formatting reference",
+                "description": "This task shows how markdown text is rendered from imported JSON.\n\n- Use `\\n` for a new line\n- Use `\\n\\n` for a blank line between paragraphs\n- Use markdown lists and fenced code blocks when structure matters",
+                "instructions": "Read the prompt carefully.\n\n## Rendering rules\n- Bullet items should stay on separate lines.\n- Blank lines should stay blank.\n\n```python\nfor value in [1, 2, 3]:\n    print(value)\n```",
+                "required": True,
+                "auto_grade": False,
+                "requires_review": True,
+                "questions": [
+                    {
+                        "id": "q_formatting_text",
+                        "type": "text",
+                        "title": "Explain the rendering",
+                        "prompt": "Describe what the student should notice.\n\n- The heading above\n- The bullet list\n- The fenced code block",
+                        "points": 3,
+                        "placeholder": "Write 2-3 sentences.\nMention both line breaks and markdown.",
+                        "lines": 5
+                    }
+                ]
+            }
+        ]
+    }
+    comparison_payload = {
+        "tasks": [
+            {
+                "title": "Comparison modes demo",
+                "description": "Reference payload showing how JSON imports can control sample comparison rules.",
+                "instructions": "Use these samples as a template when you need flexible output matching, substring checks, or numeric tolerance for floats and arrays.",
+                "required": True,
+                "auto_grade": True,
+                "requires_review": False,
+                "questions": [
+                    {
+                        "id": "q_compare_script",
+                        "type": "code",
+                        "title": "Flexible stdout checks",
+                        "prompt": "Print a greeting for the provided name.",
+                        "points": 5,
+                        "problem_statement": "Read one name from stdin and print `Hello, <name>!`.",
+                        "starter_code": "name = input().strip()\n# print your greeting here\n",
+                        "code_mode": "script",
+                        "tests": [
+                            {
+                                "name": "ignore extra spacing",
+                                "stdin": "Ada\n",
+                                "expected_stdout": "Hello, Ada!",
+                                "compare_mode": "normalize_whitespace"
+                            },
+                            {
+                                "name": "must mention the name",
+                                "stdin": "Grace\n",
+                                "expected_stdout": "Grace",
+                                "compare_mode": "contains"
+                            }
+                        ]
                     },
-                },
-                "additionalProperties": False,
+                    {
+                        "id": "q_compare_function",
+                        "type": "code",
+                        "title": "Numeric tolerance",
+                        "prompt": "Implement mean(values).",
+                        "points": 5,
+                        "problem_statement": "Return the arithmetic mean of the numeric values.",
+                        "starter_code": "def mean(values):\n    pass\n",
+                        "code_mode": "function",
+                        "function_signature": "def mean(values):",
+                        "tests": [
+                            {
+                                "name": "simple average",
+                                "function_call": "mean([1, 2, 3])",
+                                "expected_return": 2.0,
+                                "compare_mode": "numeric_tolerance",
+                                "tolerance": 0.000001
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    tutorial_payload = {
+        "tasks": [
+            {
+                "task_kind": "tutorial",
+                "title": "Python list basics",
+                "description": "Short read-only tutorial introducing indexing and slicing.",
+                "tutorial_markdown": "## Goal\nLearn how to read values from a Python list.\n\n## Key ideas\n- `items[0]` returns the first element.\n- Negative indexes count from the end.\n- Slices use `start:stop`.\n\n```python\nitems = ['a', 'b', 'c', 'd']\nprint(items[0])\nprint(items[1:3])\n```\n\n## Try mentally\nWhat does `items[-1]` print?",
+                "required": True
+            }
+        ]
+    }
+    return {
+        "schema_name": "project_task_import",
+        "schema_version": 6,
+        "summary": "Reference document for importing project tasks from JSON. It covers read-only tutorial tasks plus assessment tasks with MCQ, text, token-fill, file upload, code, class-mode code, plot questions, markdown escaping, and per-sample comparison rules such as whitespace normalization and numeric tolerance.",
+        "paste_payload_shape": {
+            "type": "object",
+            "required": ["tasks"],
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "List of task definitions to create. The importer also accepts the alias keys `project_tasks` and `items`.",
+                    "items": {
+                        "type": "object",
+                        "required": ["title"],
+                        "properties": {
+                            "task_kind": {"type": "string", "description": "Task kind. Use `assessment` for normal answerable tasks or `tutorial` for read-only markdown lessons. Aliases: `task_type`, `mode`, `kind`."},
+                            "title": {"type": "string", "description": "Task title. Alias: `name`. Rendered with inline markdown."},
+                            "description": {"type": ["string", "null"], "description": "Short summary shown above the task. Rendered as a markdown block. Use \\n for line breaks and \\n\\n for paragraph breaks."},
+                            "instructions": {"type": ["string", "null"], "description": "Task instructions shown to students. For tutorial tasks this is the main markdown lesson body. Supports headings, lists, fenced code blocks, and \\n / \\n\\n escapes."},
+                            "tutorial_markdown": {"type": ["string", "null"], "description": "Tutorial-only alias for `instructions`. Also accepts `content_markdown`, `content`, and `body`."},
+                            "required": {"type": "boolean", "default": True},
+                            "auto_grade": {"type": "boolean", "default": True},
+                            "requires_review": {"type": "boolean", "default": False},
+                            "questions": {
+                                "type": "array",
+                                "minItems": 1,
+                                "description": "Question definitions for assessment tasks. Alias: `items`. Tutorial tasks must omit this field or provide an empty array."
+                            }
+                        },
+                        "additionalProperties": True
+                    }
+                }
             },
+            "additionalProperties": True
         },
-    },
-    "additionalProperties": False,
+        "task_kind_reference": {
+            "default": "assessment",
+            "supported_values": {
+                "assessment": {
+                    "description": "Regular task with one or more questions. Students submit answers and may be auto-graded or reviewed."
+                },
+                "tutorial": {
+                    "description": "Read-only markdown tutorial. No questions or student input. The task is completed when the student opens it.",
+                    "content_fields": ["instructions", "tutorial_markdown", "content_markdown", "content", "body"]
+                }
+            },
+            "rules": [
+                "Assessment tasks must include a non-empty `questions` array.",
+                "Tutorial tasks must not include questions.",
+                "Tutorial tasks are always read-only: auto-grading and mentor review flags are ignored."
+            ]
+        },
+        "text_rendering_reference": {
+            "summary": "Most visible text fields are rendered with markdown. Because the payload is JSON, line breaks must be escaped inside strings.",
+            "markdown_block_fields": [
+                "task.description",
+                "task.instructions",
+                "question.prompt",
+                "code.problem_statement",
+                "plot.problem_statement",
+                "mcq/multi option text"
+            ],
+            "inline_markdown_fields": [
+                "task.title",
+                "question.title",
+                "tokens/fill template text segments"
+            ],
+            "plain_text_fields": [
+                "code_snippet",
+                "starter_code",
+                "function_signature",
+                "class_signature",
+                "class_init"
+            ],
+            "newline_rules": [
+                "JSON strings cannot contain raw line breaks. Use escaped sequences like \\n inside the string value.",
+                "Use \\n for a visible new line.",
+                "Use \\n\\n to separate paragraphs or create a blank line between sections.",
+                "For bullet lists, keep one item per line: - first\\n- second",
+                "For code blocks inside markdown, use fenced code with escaped new lines: ```python\\nprint('hi')\\n```"
+            ],
+            "examples": {
+                "single_line_break": {
+                    "prompt": "Line one\\nLine two"
+                },
+                "paragraphs_and_list": {
+                    "instructions": "Read carefully.\\n\\n- First requirement\\n- Second requirement"
+                },
+                "fenced_code_block": {
+                    "problem_statement": "Starter shape:\\n```python\\ndef solve():\\n    pass\\n```"
+                }
+            }
+        },
+        "accepted_aliases": {
+            "root": {
+                "tasks": ["tasks", "project_tasks", "items"]
+            },
+            "task_fields": {
+                "task_kind": ["task_kind", "task_type", "mode", "kind"],
+                "title": ["title", "name"],
+                "description": ["description", "summary"],
+                "instructions": ["instructions", "student_instructions", "tutorial_markdown", "content_markdown", "content", "body"],
+                "required": ["required", "is_required"],
+                "auto_grade": ["auto_grade", "autograde", "automatic_grading"],
+                "requires_review": ["requires_review", "mentor_review", "manual_review"],
+                "questions": ["questions", "items"]
+            },
+            "question_common_fields": {
+                "type": ["type", "question_type", "kind"],
+                "id": ["id", "question_id"],
+                "title": ["title", "name", "label"],
+                "prompt": ["prompt", "question", "question_text"],
+                "points": ["points", "score", "max_points"],
+                "code_snippet": ["code_snippet", "context_code", "reference_code"]
+            },
+            "question_type_aliases": QUESTION_TYPE_ALIASES,
+            "code_mode_aliases": CODE_MODE_ALIASES,
+            "code_question_fields": {
+                "statement": ["statement", "problem_statement", "description"],
+                "starter": ["starter", "starter_code", "starter_template"],
+                "mode": ["mode", "code_mode"],
+                "samples": ["samples", "tests", "test_cases"],
+                "function_signature": ["function_signature", "signature", "callable_signature"],
+                "class_signature": ["class_signature", "signature"],
+                "class_init": ["class_init", "init_call", "constructor_call", "object_initializer"]
+            },
+            "code_sample_fields": {
+                "common": {
+                    "name": ["name", "label"],
+                    "hidden": ["hidden", "is_hidden"],
+                    "compare_mode": ["compare_mode", "compare", "comparison", "match_mode", "matcher"]
+                },
+                "script_mode": {
+                    "input": ["input", "stdin"],
+                    "output": ["output", "expected_stdout", "expected"]
+                },
+                "function_mode": {
+                    "call": ["call", "function_call", "expression"],
+                    "expected": ["expected", "expected_return", "expected_result", "output"],
+                    "tolerance": ["tolerance", "abs_tolerance", "atol", "epsilon"]
+                },
+                "class_mode": {
+                    "call": ["call", "method_call", "expression"],
+                    "expected": ["expected", "expected_return", "expected_result", "output"],
+                    "init_call": ["init_call", "constructor_call", "object_initializer"],
+                    "tolerance": ["tolerance", "abs_tolerance", "atol", "epsilon"]
+                }
+            }
+        },
+        "question_reference": {
+            "common_rules": [
+                "Assessment-task questions each need a `type` and a visible `prompt`.",
+                "Tutorial tasks do not define questions at all; put the lesson in task-level markdown instead.",
+                "Question `id` is optional. The importer will generate one if missing.",
+                "For booleans, use real JSON booleans: true or false.",
+                "For function/class code tests, expected values may be strings or JSON scalars/arrays/objects.",
+                "Code samples can set `compare_mode`. Callable samples may also set `tolerance` for numeric tolerance checks.",
+                "Visible text fields support markdown; in JSON strings use `\\n` for a new line and `\\n\\n` for a blank line.",
+                "Prefer markdown lists, headings, and fenced code blocks over manual spacing."
+            ],
+            "types": {
+                "mcq": {
+                    "required_fields": ["type", "prompt", "choices", "correct answer"],
+                    "recommended_shape": {
+                        "type": "mcq",
+                        "prompt": "Question text",
+                        "choices": [
+                            {"text": "Option A", "is_correct": True},
+                            {"text": "Option B", "is_correct": False}
+                        ]
+                    },
+                    "notes": [
+                        "You can use `options` as a list of strings or `choices` as a list of objects.",
+                        "If you do not use `is_correct`, provide `correct_indices` with 0-based indexes."
+                    ]
+                },
+                "multi": {
+                    "required_fields": ["type", "prompt", "choices", "at least one correct answer"],
+                    "recommended_shape": {
+                        "type": "multi",
+                        "prompt": "Select all correct answers.",
+                        "choices": [
+                            {"text": "Option A", "is_correct": True},
+                            {"text": "Option B", "is_correct": True},
+                            {"text": "Option C", "is_correct": False}
+                        ]
+                    }
+                },
+                "text": {
+                    "required_fields": ["type", "prompt"],
+                    "recommended_shape": {
+                        "type": "text",
+                        "prompt": "Explain your reasoning.\n\n- Mention the main idea\n- Mention one edge case",
+                        "placeholder": "Write 3-5 sentences.",
+                        "lines": 5
+                    },
+                    "notes": [
+                        "Prompt and placeholder text accept escaped new lines like `\\n`.",
+                        "Prompt text is rendered as markdown."
+                    ]
+                },
+                "tokens": {
+                    "required_fields": ["type", "prompt", "template", "correct_tokens"],
+                    "recommended_shape": {
+                        "type": "tokens",
+                        "prompt": "Drag the correct tokens into the blanks.",
+                        "template": "[[blank]]([[blank]](myvar))",
+                        "correct_tokens": ["print", "str"],
+                        "distractor_tokens": ["len", "int"]
+                    }
+                },
+                "fill": {
+                    "required_fields": ["type", "prompt", "template", "answers"],
+                    "recommended_shape": {
+                        "type": "fill",
+                        "prompt": "Complete the statement.",
+                        "template": "carname = \"[[blank]]\"",
+                        "answers": ["Volvo"],
+                        "case_sensitive": False
+                    }
+                },
+                "file": {
+                    "required_fields": ["type", "prompt"],
+                    "recommended_shape": {
+                        "type": "file",
+                        "prompt": "Upload your ZIP submission.",
+                        "accept": ".zip",
+                        "max_mb": 5
+                    }
+                },
+                "plot": {
+                    "required_fields": ["type", "prompt", "problem_statement"],
+                    "recommended_shape": plot_payload["tasks"][0]["questions"][0],
+                    "notes": [
+                        "Plot questions are Python-only and always require manual review.",
+                        "Students preview the latest PNG in the browser, and the final PNG is uploaded only on submit.",
+                        "`problem_statement` is rendered as markdown, so use `\\n`, lists, and fenced code blocks if you need structure."
+                    ]
+                },
+                "code": {
+                    "required_fields": ["type", "prompt", "problem_statement", "code_mode", "tests"],
+                    "shared_shape": {
+                        "type": "code",
+                        "prompt": "Short visible question prompt.",
+                        "problem_statement": "Detailed coding instructions.\n\n- Requirement one\n- Requirement two",
+                        "starter_code": "# optional starter code",
+                        "code_mode": "script | function | class"
+                    },
+                    "modes": {
+                        "script": {
+                            "use_when": "Students write a full program that reads stdin and prints stdout.",
+                            "example": {
+                                "type": "code",
+                                "prompt": "Echo two lines.",
+                                "problem_statement": "Read two lines and print them in reverse order.",
+                                "code_mode": "script",
+                                "tests": [
+                                    {
+                                        "name": "two words",
+                                        "stdin": "apple\nbanana\n",
+                                        "expected_stdout": "banana\napple\n",
+                                        "compare_mode": "rstrip"
+                                    }
+                                ]
+                            },
+                            "notes": [
+                                "Script compare modes: `rstrip` (default), `exact`, `normalize_whitespace`, `contains`."
+                            ]
+                        },
+                        "function": {
+                            "use_when": "Students implement a function and each test calls it directly.",
+                            "example": {
+                                "type": "code",
+                                "prompt": "Implement square.",
+                                "problem_statement": "Write a function that returns the square of n.",
+                                "code_mode": "function",
+                                "function_signature": "def square(n):",
+                                "tests": [
+                                    {
+                                        "name": "square of five",
+                                        "function_call": "square(5)",
+                                        "expected_return": 25,
+                                        "compare_mode": "numeric_tolerance",
+                                        "tolerance": 0.000001
+                                    }
+                                ]
+                            },
+                            "notes": [
+                                "Callable compare modes: `exact` (default), `numeric_tolerance`, `contains`.",
+                                "Use `numeric_tolerance` for floats or arrays and set `tolerance` to an absolute tolerance such as `1e-6`."
+                            ]
+                        },
+                        "class": {
+                            "use_when": "Students implement a class. Each test creates a fresh object named `obj` using `class_init` before evaluating the method call or expression.",
+                            "example": class_payload["tasks"][0]["questions"][0],
+                            "notes": [
+                                "Class-mode tests use the same compare modes as function-mode tests."
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "example_payloads": {
+            "minimal_payload": minimal_payload,
+            "tutorial_payload": tutorial_payload,
+            "class_code_payload": class_payload,
+            "plot_payload": plot_payload,
+            "formatting_payload": formatting_payload,
+            "comparison_payload": comparison_payload
+        }
+    }
+
+PROJECT_TASKS_SCHEMA = _build_project_tasks_schema()
+PROJECT_TASKS_EXAMPLE_DOWNLOADS = {
+    "minimal": "minimal_payload",
+    "tutorial": "tutorial_payload",
+    "class_code": "class_code_payload",
+    "plot": "plot_payload",
+    "formatting": "formatting_payload",
+    "comparison": "comparison_payload",
 }
 
 LEADERBOARD_METRICS = {
@@ -193,6 +1172,50 @@ def _ensure_project_collection_column():
         # Fail open: don't block app start if migration fails
         pass
 
+def _ensure_project_deadline_column():
+    try:
+        inspector = inspect(db.engine)
+        if "projects" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("projects")}
+        if "deadline_at" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE projects "
+                        "ADD COLUMN deadline_at DATETIME NULL"
+                    )
+                )
+    except Exception:
+        # Fail open: don't block app start if migration fails
+        pass
+
+def _ensure_project_task_kind_column():
+    try:
+        inspector = inspect(db.engine)
+        if "project_tasks" not in inspector.get_table_names():
+            return
+        columns = {col["name"] for col in inspector.get_columns("project_tasks")}
+        if "task_kind" not in columns:
+            with db.engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE project_tasks "
+                        "ADD COLUMN task_kind VARCHAR(32) NOT NULL DEFAULT 'assessment'"
+                    )
+                )
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE project_tasks "
+                    "SET task_kind='assessment' "
+                    "WHERE task_kind IS NULL OR task_kind=''"
+                )
+            )
+    except Exception:
+        # Fail open: don't block app start if migration fails
+        pass
+
 def create_app(db_path=DB_URI):
     app = Flask(__name__)
     app.config["SECRET_KEY"] = APP_SECRET
@@ -205,6 +1228,8 @@ def create_app(db_path=DB_URI):
     with app.app_context():
         db.create_all()
         _ensure_project_collection_column()
+        _ensure_project_deadline_column()
+        _ensure_project_task_kind_column()
     return app
 
 app = create_app()
@@ -691,6 +1716,251 @@ def _save_task_resource(task, file_storage, existing_info=None):
         _remove_uploaded_file(existing_info)
     return file_info, None
 
+def _png_dimensions_from_bytes(data):
+    if not data or len(data) < 24:
+        return None
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    if data[12:16] != b"IHDR":
+        return None
+    try:
+        width, height = struct.unpack(">II", data[16:24])
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+def _save_plot_artifact_upload(scope, question_id, file_storage):
+    if not file_storage:
+        return None, "Missing plot PNG.", None
+    filename = file_storage.filename or ""
+    if not filename:
+        return None, "No plot PNG was submitted.", None
+    try:
+        payload = file_storage.read(PLOT_ARTIFACT_MAX_BYTES + 1)
+    except Exception:
+        return None, "Unable to read the uploaded plot.", None
+    if not payload:
+        return None, "The uploaded plot is empty.", None
+    if len(payload) > PLOT_ARTIFACT_MAX_BYTES:
+        return None, None, {
+            "artifact_status": "too_large",
+            "artifact_size": len(payload),
+        }
+    dims = _png_dimensions_from_bytes(payload)
+    if not dims:
+        return None, "Uploaded plot must be a valid PNG image.", None
+    width, height = dims
+
+    question_slug = secure_filename(str(question_id)) or "plot"
+    stored_name = f"{uuid.uuid4().hex}_{question_slug}.png"
+    kind = (scope or {}).get("kind") or "exam"
+    if kind == "project_task":
+        upload_dir = os.path.join(
+            UPLOAD_ROOT,
+            "plot_artifacts",
+            "project_tasks",
+            str(scope.get("project_id") or 0),
+            str(scope.get("task_id") or 0),
+            str(scope.get("submission_id") or 0),
+            question_slug,
+        )
+    else:
+        upload_dir = os.path.join(
+            UPLOAD_ROOT,
+            "plot_artifacts",
+            "exams",
+            str(scope.get("exam_id") or 0),
+            str(scope.get("submission_id") or 0),
+            question_slug,
+        )
+    os.makedirs(upload_dir, exist_ok=True)
+    full_path = os.path.join(upload_dir, stored_name)
+    try:
+        with open(full_path, "wb") as fh:
+            fh.write(payload)
+    except Exception:
+        return None, "Unable to save the plot PNG.", None
+    rel_path = os.path.relpath(full_path, UPLOAD_ROOT)
+    return {
+        "original_name": "plot.png",
+        "stored_name": stored_name,
+        "path": rel_path,
+        "size": len(payload),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "content_type": "image/png",
+        "width": width,
+        "height": height,
+    }, None, None
+
+def _normalize_plot_code(value):
+    text = _coerce_string(value)
+    if not text:
+        return ""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.rstrip() for line in normalized.split("\n")]
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+def _plot_answer_code(answer):
+    if isinstance(answer, dict):
+        return _normalize_plot_code(answer.get("code"))
+    return _normalize_plot_code(answer)
+
+def _plot_answer_artifact(answer):
+    if isinstance(answer, dict):
+        return _extract_file_info(answer.get("artifact"))
+    return None
+
+def _plot_label(question, index):
+    if isinstance(question, dict):
+        title = _coerce_string(question.get("title")).strip()
+        if title:
+            return title
+    return f"Question {index + 1}"
+
+def _parse_plot_submission_meta(raw_value):
+    if not raw_value:
+        return {}
+    try:
+        data = json.loads(raw_value)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    meta = {}
+    status = _coerce_string(data.get("status")).strip().lower()
+    if status:
+        meta["status"] = status[:32]
+    stdout = _coerce_string(data.get("stdout"))
+    if stdout:
+        meta["stdout"] = stdout[:4000]
+    error = _coerce_string(data.get("error"))
+    if error:
+        meta["error"] = error[:8000]
+    code_snapshot = _coerce_string(data.get("code_snapshot"))
+    if code_snapshot:
+        meta["code_snapshot"] = _normalize_plot_code(code_snapshot)[:200000]
+    try:
+        plot_count = int(data.get("plot_count") or 0)
+    except Exception:
+        plot_count = 0
+    if plot_count > 0:
+        meta["plot_count"] = min(plot_count, 20)
+    artifact_status = _coerce_string(data.get("artifact_status")).strip().lower()
+    if artifact_status in {"too_large", "attached"}:
+        meta["artifact_status"] = artifact_status
+    try:
+        artifact_size = int(data.get("artifact_size") or 0)
+    except Exception:
+        artifact_size = 0
+    if artifact_size > 0:
+        meta["artifact_size"] = artifact_size
+    return meta
+
+def _build_plot_answer_payload(code_text, artifact_info, meta, updated_at):
+    payload = {
+        "code": code_text,
+        "updated_at": updated_at,
+    }
+    if artifact_info:
+        payload["artifact"] = artifact_info
+    if meta.get("status"):
+        payload["status"] = meta["status"]
+    if meta.get("stdout"):
+        payload["stdout"] = meta["stdout"]
+    if meta.get("error"):
+        payload["error"] = meta["error"]
+    if meta.get("plot_count"):
+        payload["plot_count"] = meta["plot_count"]
+    if meta.get("artifact_status") and meta.get("artifact_status") != "attached":
+        payload["artifact_status"] = meta["artifact_status"]
+    if meta.get("artifact_size"):
+        payload["artifact_size"] = meta["artifact_size"]
+    return payload
+
+def _collect_plot_submission_updates(questions, answers, request_files, request_form, plot_scope, strict_code_match=True):
+    answers = answers if isinstance(answers, dict) else {}
+    updates = {}
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    for idx, question in enumerate(questions or []):
+        if not isinstance(question, dict) or question.get("type") != "plot":
+            continue
+        qid = str(question.get("id"))
+        upload = request_files.get(f"plot_artifact_{qid}")
+        current_answer = answers.get(qid, "")
+        code_text = _plot_answer_code(current_answer)
+        existing_artifact = _plot_answer_artifact(current_answer)
+        meta = _parse_plot_submission_meta(request_form.get(f"plot_meta_{qid}"))
+        has_upload = bool(upload and getattr(upload, "filename", ""))
+        if not has_upload and not meta:
+            continue
+        code_snapshot = meta.get("code_snapshot")
+        if strict_code_match and code_snapshot and code_snapshot != code_text:
+            return None, f"{_plot_label(question, idx)}: rerun the plot after your latest code changes."
+        artifact_info = None
+        if has_upload:
+            artifact_info, error, artifact_meta = _save_plot_artifact_upload(plot_scope, qid, upload)
+            if error:
+                return None, f"{_plot_label(question, idx)}: {error}"
+            if artifact_meta:
+                meta.update(artifact_meta)
+        elif meta.get("artifact_status") != "too_large":
+            continue
+        if existing_artifact and artifact_info and existing_artifact != artifact_info:
+            _remove_uploaded_file(existing_artifact)
+        payload_code = code_snapshot or code_text
+        updates[qid] = _build_plot_answer_payload(payload_code, artifact_info, meta, now_iso)
+    return updates, None
+
+def _preserve_plot_answer_metadata(code_text, existing_answer):
+    if isinstance(existing_answer, dict) and code_text == _plot_answer_code(existing_answer):
+        payload = dict(existing_answer)
+        payload["code"] = code_text
+        return payload
+    return code_text
+
+def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, request_files, request_form, plot_scope):
+    prepared = dict(answers or {})
+    persisted_answers = persisted_answers if isinstance(persisted_answers, dict) else {}
+    plot_updates, error = _collect_plot_submission_updates(
+        questions,
+        prepared,
+        request_files,
+        request_form,
+        plot_scope,
+    )
+    if error:
+        return None, error
+    prepared.update(plot_updates or {})
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    for idx, question in enumerate(questions or []):
+        if not isinstance(question, dict) or question.get("type") != "plot":
+            continue
+        qid = str(question.get("id"))
+        current_answer = prepared.get(qid, "")
+        prior_answer = persisted_answers.get(qid)
+        code_text = _plot_answer_code(current_answer)
+
+        if isinstance(current_answer, dict) and code_text == _plot_answer_code(current_answer):
+            payload = dict(current_answer)
+            payload["code"] = code_text
+            payload.setdefault("updated_at", now_iso)
+            prepared[qid] = payload
+            continue
+
+        if isinstance(prior_answer, dict) and code_text == _plot_answer_code(prior_answer):
+            payload = dict(prior_answer)
+            payload["code"] = code_text
+            payload.setdefault("updated_at", now_iso)
+            prepared[qid] = payload
+            continue
+
+        return None, f"{_plot_label(question, idx)}: run the code to generate a plot before submitting."
+    return prepared, None
+
 def _touch_student_log_session(student, now):
     if not student:
         return
@@ -1094,14 +2364,40 @@ def verify_csrf(form_field="csrf"):
     sent = request.form.get(form_field, "")
     return hmac.compare_digest(sent, csrf_token())
 
+<<<<<<< HEAD
 def verify_json_csrf(payload=None):
     payload = payload if isinstance(payload, dict) else {}
     sent = request.headers.get("X-CSRF", "") or payload.get("csrf") or ""
     return hmac.compare_digest(str(sent), csrf_token())
+=======
+def _student_unseen_announcement_deliveries(student):
+    if not student:
+        return []
+    return (
+        AnnouncementDelivery.query
+        .join(Announcement, Announcement.id == AnnouncementDelivery.announcement_id)
+        .options(subqueryload(AnnouncementDelivery.announcement))
+        .filter(
+            AnnouncementDelivery.student_id == student.id,
+            AnnouncementDelivery.seen_at.is_(None),
+        )
+        .order_by(Announcement.created_at.asc(), Announcement.id.asc(), AnnouncementDelivery.id.asc())
+        .all()
+    )
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
 
 @app.context_processor
 def inject_csrf():
-    return {"csrf_token": csrf_token}
+    student = current_student()
+    unseen_announcements = []
+    if student and not current_user():
+        unseen_announcements = _student_unseen_announcement_deliveries(student)
+    return {
+        "csrf_token": csrf_token,
+        "student_unseen_announcements": unseen_announcements,
+        "plot_artifact_max_mb": PLOT_ARTIFACT_MAX_MB,
+        "plot_artifact_max_bytes": PLOT_ARTIFACT_MAX_BYTES,
+    }
 
 # Markdown rendering helpers.
 _MD_BLOCKED_URL_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.IGNORECASE)
@@ -1494,6 +2790,35 @@ def student_ping():
         db.session.rollback()
     return jsonify({"ok": True})
 
+@app.post("/student/announcements/mark-seen")
+@require_student()
+def student_announcements_mark_seen():
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    student = current_student()
+    next_url = _safe_redirect_target(request.form.get("next"), fallback_endpoint="student_home")
+    if not student:
+        return redirect(next_url)
+    delivery_ids = []
+    for raw_id in request.form.getlist("announcement_ids"):
+        try:
+            delivery_ids.append(int(raw_id))
+        except Exception:
+            continue
+    query = AnnouncementDelivery.query.filter(
+        AnnouncementDelivery.student_id == student.id,
+        AnnouncementDelivery.seen_at.is_(None),
+    )
+    if delivery_ids:
+        query = query.filter(AnnouncementDelivery.id.in_(delivery_ids))
+    deliveries = query.all()
+    if deliveries:
+        now = datetime.utcnow()
+        for delivery in deliveries:
+            delivery.seen_at = now
+        db.session.commit()
+    return redirect(next_url)
+
 # --------------------------------------------------------------------
 # Login / Logout / First-login password set
 # --------------------------------------------------------------------
@@ -1597,6 +2922,10 @@ def password_new():
 def index():
     u = current_user()
     student = current_student()
+    if u and getattr(u, "role", "") == "mentor":
+        return redirect(url_for("mentor_dashboard"))
+    if u and getattr(u, "role", "") == "admin":
+        return redirect(url_for("admin_review_dashboard"))
     if student and not u:
         return blog_index()
     exams = Exam.query.order_by(Exam.created_at.desc()).all() if (u or student) else []
@@ -1677,6 +3006,19 @@ def _is_staff(user):
         return False
     role = getattr(user, "role", "")
     return role in ("instructor", "admin", "mentor", "staff")
+
+def _safe_redirect_target(raw_path, fallback_endpoint="index"):
+    target = (raw_path or "").strip()
+    if target.startswith("/") and not target.startswith("//"):
+        return target
+    return url_for(fallback_endpoint)
+
+def _announcement_target_label(announcement):
+    if announcement.target_group and announcement.target_group.name:
+        return announcement.target_group.name
+    if announcement.target_group_name:
+        return announcement.target_group_name
+    return "All students"
 
 def _paginate_posts(query, page, per_page=10):
     total = query.count()
@@ -2159,56 +3501,54 @@ def _normalize_exam_questions(payload):
     for idx, raw in enumerate(payload):
         if not isinstance(raw, dict):
             raise ValueError("Question payload must be objects.")
-        q_type = (raw.get("type") or "").strip().lower()
-        if q_type not in ("mcq", "multi", "text", "code", "tokens", "fill", "file"):
+        q_type = _normalize_question_type_name(_first_present(raw, "type", "question_type", "kind"))
+        if q_type not in ("mcq", "multi", "text", "code", "plot", "tokens", "fill", "file"):
             raise ValueError(f"Unsupported question type '{q_type}'.")
-        prompt = (raw.get("prompt") or "").strip()
+        prompt_value = _first_present(raw, "prompt", "question", "question_text")
+        if not prompt_value and q_type in ("code", "plot"):
+            prompt_value = _first_present(raw, "statement", "problem_statement", "description")
+        prompt = _coerce_string(prompt_value).strip()
         if not prompt:
             raise ValueError("Every question needs a prompt.")
-        q_id = (raw.get("id") or "").strip() or f"q{idx+1}"
+        q_id = _coerce_string(_first_present(raw, "id", "question_id")).strip() or f"q{idx+1}"
         if q_id in seen:
             q_id = f"{q_id}_{idx+1}"
         seen.add(q_id)
         normalized = {"id": q_id, "type": q_type, "prompt": prompt}
-        title = (raw.get("title") or "").strip()
+        title = _coerce_string(_first_present(raw, "title", "name", "label")).strip()
         if title:
             normalized["title"] = title
-        snippet = raw.get("code_snippet")
-        if isinstance(snippet, str):
-            snippet = snippet.strip("\n")
-            if snippet:
-                normalized["code_snippet"] = snippet
+        snippet = _first_present(raw, "code_snippet", "context_code", "reference_code")
+        if snippet is not None:
+            snippet_text = _coerce_string(snippet).strip("\n")
+            if snippet_text:
+                normalized["code_snippet"] = snippet_text
         try:
-            points = int(raw.get("points") or 1)
+            points = int(_first_present(raw, "points", "score", "max_points") or 1)
         except Exception:
             points = 1
         normalized["points"] = max(0, points)
 
         if q_type in ("mcq", "multi"):
-            options_raw = raw.get("options") or []
-            if isinstance(options_raw, str):
-                options = [line.strip() for line in options_raw.splitlines() if line.strip()]
-            else:
-                options = [(line or "").strip() for line in options_raw if (line or "").strip()]
+            options_raw = _first_present(raw, "options", "choices") or []
+            options, implied_correct = _extract_choice_options(options_raw)
             if len(options) < 2:
                 raise ValueError("Multiple-choice questions need at least two options.")
             normalized["options"] = options
-            normalized["shuffle"] = bool(raw.get("shuffle"))
-            correct_raw = raw.get("correct_indices") or []
-            correct_indices = []
-            if isinstance(correct_raw, str):
-                tokens = [tok.strip() for tok in correct_raw.replace(";", ",").split(",") if tok.strip()]
-                for tok in tokens:
+            normalized["shuffle"] = _coerce_bool(_first_present(raw, "shuffle", "shuffle_options"), False)
+            correct_raw = _first_present(raw, "correct_indices", "correct_option_indexes", "correct_indexes")
+            correct_indices = _coerce_int_list(correct_raw)
+            if not correct_indices and implied_correct:
+                correct_indices = implied_correct
+            if not correct_indices:
+                correct_labels = _coerce_token_list(_first_present(raw, "correct_options", "correct_answers"))
+                for label in correct_labels:
                     try:
-                        correct_indices.append(int(tok))
-                    except Exception:
+                        correct_indices.append(options.index(label))
+                    except ValueError:
                         continue
-            elif isinstance(correct_raw, list):
-                for tok in correct_raw:
-                    try:
-                        correct_indices.append(int(tok))
-                    except Exception:
-                        continue
+            correct_indices = [idx_val for idx_val in correct_indices if 0 <= idx_val < len(options)]
+            correct_indices = list(dict.fromkeys(correct_indices))
             if q_type == "mcq":
                 if len(correct_indices) != 1:
                     raise ValueError("Provide exactly one correct option index for MCQ questions.")
@@ -2217,77 +3557,73 @@ def _normalize_exam_questions(payload):
                     raise ValueError("Provide at least one correct option index for multi-select questions.")
             normalized["correct_indices"] = correct_indices
         elif q_type == "text":
-            normalized["placeholder"] = (raw.get("placeholder") or "").strip()
-            lines_raw = raw.get("lines") or raw.get("rows")
+            normalized["placeholder"] = _coerce_string(_first_present(raw, "placeholder", "answer_placeholder", "response_placeholder")).strip()
+            lines_raw = _first_present(raw, "lines", "rows", "answer_lines")
             try:
                 line_count = int(lines_raw) if lines_raw not in (None, "") else 4
             except Exception:
                 line_count = 4
             normalized["lines"] = max(1, min(line_count, 12))
         elif q_type == "tokens":
-            template = (raw.get("template") or "").strip()
+            template = _coerce_string(_first_present(raw, "template", "expression_template", "text_template")).strip()
             if "[[blank]]" not in template:
                 raise ValueError("Token questions require [[blank]] markers.")
             blank_count = template.count("[[blank]]")
-            correct_raw = raw.get("correct_tokens") or ""
-            if isinstance(correct_raw, str):
-                tokens = [t.strip() for t in correct_raw.replace("\n", ",").split(",") if t.strip()]
-            elif isinstance(correct_raw, list):
-                tokens = [str(t).strip() for t in correct_raw if str(t).strip()]
-            else:
-                tokens = []
+            correct_raw = _first_present(raw, "correct_tokens", "answers", "expected_tokens") or ""
+            tokens = _coerce_token_list(correct_raw)
             if len(tokens) != blank_count:
                 raise ValueError("Provide one correct token for each [[blank]].")
-            distractor_raw = raw.get("distractor_tokens") or ""
-            if isinstance(distractor_raw, str):
-                distractors = [t.strip() for t in distractor_raw.replace("\n", ",").split(",") if t.strip()]
-            elif isinstance(distractor_raw, list):
-                distractors = [str(t).strip() for t in distractor_raw if str(t).strip()]
-            else:
-                distractors = []
+            distractor_raw = _first_present(raw, "distractor_tokens", "distractors", "extra_tokens") or ""
+            distractors = _coerce_token_list(distractor_raw)
             normalized["template"] = template
             normalized["correct_tokens"] = tokens
             normalized["distractor_tokens"] = distractors
         elif q_type == "fill":
-            template = (raw.get("template") or "").strip()
+            template = _coerce_string(_first_present(raw, "template", "expression_template", "text_template")).strip()
             if "[[blank]]" not in template:
                 raise ValueError("Fill questions require [[blank]] markers.")
             blank_count = template.count("[[blank]]")
-            answers_raw = raw.get("answers") or ""
-            if isinstance(answers_raw, str):
-                answers = [a.strip() for a in answers_raw.replace("\n", ",").split(",") if a.strip()]
-            elif isinstance(answers_raw, list):
-                answers = [str(a).strip() for a in answers_raw if str(a).strip()]
-            else:
-                answers = []
+            answers_raw = _first_present(raw, "answers", "correct_answers", "expected_answers") or ""
+            answers = _coerce_token_list(answers_raw)
             if len(answers) != blank_count:
                 raise ValueError("Provide one answer per [[blank]].")
             normalized["template"] = template
             normalized["answers"] = answers
-            normalized["case_sensitive"] = bool(raw.get("case_sensitive"))
+            normalized["case_sensitive"] = _coerce_bool(_first_present(raw, "case_sensitive", "match_case"), False)
         elif q_type == "file":
-            accept = (raw.get("accept") or ".zip").strip() or ".zip"
+            accept_raw = _first_present(raw, "accept", "accepted_extensions")
+            if isinstance(accept_raw, list):
+                accept = ", ".join(_coerce_token_list(accept_raw)).strip() or ".zip"
+            else:
+                accept = _coerce_string(accept_raw).strip() or ".zip"
             try:
-                max_mb = int(raw.get("max_mb") or 5)
+                max_mb = int(_first_present(raw, "max_mb", "max_size_mb") or 5)
             except Exception:
                 max_mb = 5
             normalized["accept"] = accept
             normalized["max_mb"] = max(1, min(max_mb, UPLOAD_MAX_MB))
+        elif q_type == "plot":
+            statement = _coerce_string(_first_present(raw, "statement", "problem_statement", "description")).strip()
+            if not statement:
+                raise ValueError("Plot questions need a statement/description.")
+            normalized["statement"] = statement
+            normalized["starter"] = _coerce_string(_first_present(raw, "starter", "starter_code", "starter_template"))
+            normalized["language"] = "python"
         else:  # code
-            statement = (raw.get("statement") or "").strip()
+            statement = _coerce_string(_first_present(raw, "statement", "problem_statement", "description")).strip()
             if not statement:
                 raise ValueError("Code questions need a statement/description.")
             normalized["statement"] = statement
-            normalized["starter"] = raw.get("starter") or ""
+            normalized["starter"] = _coerce_string(_first_present(raw, "starter", "starter_code", "starter_template"))
             normalized["language"] = "python"
-            mode = (raw.get("mode") or "script").strip().lower()
-            if mode not in ("script", "function"):
+            mode = _normalize_code_mode_name(_first_present(raw, "mode", "code_mode") or "script")
+            if mode not in ("script", "function", "class"):
                 mode = "script"
             normalized["mode"] = mode
             samples_clean = []
-            samples_raw = raw.get("samples") or []
+            samples_raw = _first_present(raw, "samples", "tests", "test_cases") or []
             if mode == "function":
-                signature = (raw.get("function_signature") or "").strip()
+                signature = _coerce_string(_first_present(raw, "function_signature", "signature", "callable_signature")).strip()
                 if not signature.startswith("def"):
                     raise ValueError("Function questions need a signature like 'def foo(x):'.")
                 normalized["function_signature"] = signature
@@ -2295,31 +3631,82 @@ def _normalize_exam_questions(payload):
                     for s_idx, sample in enumerate(samples_raw):
                         if not isinstance(sample, dict):
                             continue
-                        call_expr = (sample.get("call") or sample.get("input") or "").strip()
+                        call_expr = _coerce_string(_first_present(sample, "call", "function_call", "expression", "input")).strip()
                         if not call_expr:
                             continue
-                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
-                        expected = (sample.get("expected") or sample.get("output") or "").strip()
-                        samples_clean.append({
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
+                        expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
+                        compare_mode, tolerance = _sample_compare_settings(sample, "callable")
+                        if compare_mode == "numeric_tolerance":
+                            try:
+                                _validate_numeric_tolerance_expected(expected)
+                            except ValueError as exc:
+                                raise ValueError(f"{name}: {exc}")
+                        sample_clean = {
                             "name": name,
                             "call": call_expr,
                             "expected": expected,
                             "input": call_expr,
-                            "hidden": bool(sample.get("hidden")),
-                        })
+                            "compare_mode": compare_mode,
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
+                        }
+                        if tolerance is not None:
+                            sample_clean["tolerance"] = tolerance
+                        samples_clean.append(sample_clean)
                 if not samples_clean:
                     raise ValueError("Function code questions need at least one sample call.")
+            elif mode == "class":
+                class_signature = _coerce_string(_first_present(raw, "class_signature", "signature")).strip()
+                if not class_signature.startswith("class"):
+                    raise ValueError("Class code questions need a signature like 'class Foo:'.")
+                class_init = _coerce_string(_first_present(raw, "class_init", "init_call", "constructor_call", "object_initializer")).strip()
+                if not class_init:
+                    raise ValueError("Class code questions need an __init__ call like 'Foo(1, 2)'.")
+                normalized["class_signature"] = class_signature
+                normalized["class_init"] = class_init
+                if isinstance(samples_raw, list):
+                    for s_idx, sample in enumerate(samples_raw):
+                        if not isinstance(sample, dict):
+                            continue
+                        call_expr = _coerce_string(_first_present(sample, "call", "method_call", "expression", "input")).strip()
+                        if not call_expr:
+                            continue
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Method test {s_idx+1}"
+                        expected = _coerce_code_expected(_first_present(sample, "expected", "expected_return", "expected_result", "output"))
+                        sample_init = _coerce_string(_first_present(sample, "init_call", "constructor_call", "object_initializer")).strip() or class_init
+                        compare_mode, tolerance = _sample_compare_settings(sample, "callable")
+                        if compare_mode == "numeric_tolerance":
+                            try:
+                                _validate_numeric_tolerance_expected(expected)
+                            except ValueError as exc:
+                                raise ValueError(f"{name}: {exc}")
+                        sample_clean = {
+                            "name": name,
+                            "call": call_expr,
+                            "expected": expected,
+                            "input": call_expr,
+                            "init_call": sample_init,
+                            "compare_mode": compare_mode,
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
+                        }
+                        if tolerance is not None:
+                            sample_clean["tolerance"] = tolerance
+                        samples_clean.append(sample_clean)
+                if not samples_clean:
+                    raise ValueError("Class code questions need at least one method call.")
             else:
                 if isinstance(samples_raw, list):
                     for s_idx, sample in enumerate(samples_raw):
                         if not isinstance(sample, dict):
                             continue
-                        name = (sample.get("name") or f"Sample {s_idx+1}").strip() or f"Sample {s_idx+1}"
+                        name = _coerce_string(_first_present(sample, "name", "label")).strip() or f"Sample {s_idx+1}"
+                        compare_mode, _ = _sample_compare_settings(sample, "script")
                         samples_clean.append({
                             "name": name,
-                            "input": sample.get("input") or "",
-                            "output": sample.get("output") or "",
-                            "hidden": bool(sample.get("hidden")),
+                            "input": _coerce_string(_first_present(sample, "input", "stdin")),
+                            "output": _coerce_string(_first_present(sample, "output", "expected_stdout", "expected")),
+                            "compare_mode": compare_mode,
+                            "hidden": _coerce_bool(_first_present(sample, "hidden", "is_hidden"), False),
                         })
             normalized["samples"] = samples_clean
 
@@ -2487,6 +3874,38 @@ def _project_completed(project, student):
             return True
     return False
 
+def _complete_tutorial_task(project, task, student):
+    if not project or not task or not student:
+        return None
+    now = datetime.utcnow()
+    submission = _project_task_submission(task, student)
+    if not submission:
+        submission = ProjectTaskSubmission(
+            task_id=task.id,
+            project_id=project.id,
+            student_id=student.id,
+            student_name=student.name,
+            answers_json={},
+            run_logs=[],
+            status="accepted",
+            score=0.0,
+            max_score=0.0,
+            started_at=now,
+            submitted_at=now,
+            last_activity_at=now,
+        )
+        db.session.add(submission)
+    else:
+        submission.answers_json = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+        submission.run_logs = submission.run_logs if isinstance(submission.run_logs, list) else []
+        submission.status = "accepted"
+        submission.score = 0.0
+        submission.max_score = 0.0
+        if not submission.submitted_at:
+            submission.submitted_at = now
+        submission.last_activity_at = now
+    return submission
+
 def _project_dependencies_met(project, student):
     deps = project.dependencies or []
     for dep in deps:
@@ -2520,6 +3939,78 @@ def _student_group_ids(student):
         return set()
     memberships = getattr(student, "group_memberships", [])
     return {m.group_id for m in memberships if m.group_id}
+
+def _mentor_group_ids(user):
+    if not user or getattr(user, "role", "") != "mentor":
+        return None
+    return {review.group_id for review in getattr(user, "group_reviews", []) if review.group_id}
+
+def _restricted_review_student_ids(user):
+    """Return the student ids a mentor may access; None means unrestricted."""
+    group_ids = _mentor_group_ids(user)
+    if group_ids is None:
+        return None
+    if not group_ids:
+        return set()
+    memberships = StudentGroupMembership.query.filter(StudentGroupMembership.group_id.in_(group_ids)).all()
+    return {membership.student_id for membership in memberships if membership.student_id}
+
+def _review_scope_limited(user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    return allowed_student_ids is not None
+
+def _apply_review_scope_to_submission_query(query, user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return query
+    if not allowed_student_ids:
+        return query.filter(ProjectTaskSubmission.id == -1)
+    return query.filter(ProjectTaskSubmission.student_id.in_(allowed_student_ids))
+
+def _apply_review_scope_to_student_query(query, user, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return query
+    if not allowed_student_ids:
+        return query.filter(Student.id == -1)
+    return query.filter(Student.id.in_(allowed_student_ids))
+
+def _can_user_review_student(user, student, allowed_student_ids=None):
+    if allowed_student_ids is None:
+        allowed_student_ids = _restricted_review_student_ids(user)
+    if allowed_student_ids is None:
+        return True
+    if not student or not student.id:
+        return False
+    return student.id in allowed_student_ids
+
+def _can_user_review_submission(user, submission, allowed_student_ids=None):
+    if not submission:
+        return False
+    return _can_user_review_student(user, submission.student, allowed_student_ids=allowed_student_ids)
+
+def _can_user_manage_private_note(user, note, allowed_student_ids=None):
+    if not user or not note:
+        return False
+    if not _can_user_review_student(user, note.student, allowed_student_ids=allowed_student_ids):
+        return False
+    if getattr(user, "role", "") == "mentor":
+        return note.author_user_id == user.id
+    return True
+
+def _visible_groups_for_student(user, student, mentor_group_ids=None):
+    groups = [group for group in getattr(student, "groups", []) if group] if student else []
+    if mentor_group_ids is None:
+        mentor_group_ids = _mentor_group_ids(user)
+    if mentor_group_ids is None:
+        return sorted(groups, key=lambda group: ((group.name or "").lower(), group.id))
+    return sorted(
+        [group for group in groups if group.id in mentor_group_ids],
+        key=lambda group: ((group.name or "").lower(), group.id),
+    )
 
 def _project_visible_to_student(project, student):
     assignments = project.group_assignments or []
@@ -2590,6 +4081,38 @@ def _format_duration(seconds):
     if total >= 3600:
         return f"{total / 3600:.2f} hr"
     return f"{total / 60:.1f} min"
+
+def _median(values):
+    cleaned = sorted(
+        float(value)
+        for value in (values or [])
+        if value is not None
+    )
+    if not cleaned:
+        return None
+    mid = len(cleaned) // 2
+    if len(cleaned) % 2 == 1:
+        return cleaned[mid]
+    return (cleaned[mid - 1] + cleaned[mid]) / 2.0
+
+def _review_wait_seconds(attempt):
+    if not attempt or not attempt.reviewed_at:
+        return None
+    submitted_at = getattr(attempt, "submitted_at", None)
+    if not submitted_at and getattr(attempt, "submission", None):
+        submitted_at = attempt.submission.submitted_at
+    if not submitted_at:
+        return None
+    return max(0.0, (attempt.reviewed_at - submitted_at).total_seconds())
+
+def _pending_review_age_seconds(submission, now=None):
+    if not submission:
+        return None
+    now = now or datetime.utcnow()
+    submitted_at = submission.submitted_at or submission.last_activity_at or submission.started_at
+    if not submitted_at:
+        return None
+    return max(0.0, (now - submitted_at).total_seconds())
 
 def _parse_iso_datetime(val):
     if not val:
@@ -2803,9 +4326,12 @@ def _paginate_posts(query, page, per_page=10):
     }
 
 def _import_project_tasks_from_config(project, config):
-    if not isinstance(config, dict):
-        raise ValueError("Config must be a JSON object.")
-    tasks_data = config.get("tasks")
+    if isinstance(config, list):
+        tasks_data = config
+    elif isinstance(config, dict):
+        tasks_data = _first_present(config, "tasks", "project_tasks", "items")
+    else:
+        raise ValueError("Config must be a JSON object or an array of tasks.")
     if not isinstance(tasks_data, list) or not tasks_data:
         raise ValueError("Config must include a non-empty 'tasks' array.")
     existing = ProjectTask.query.filter_by(project_id=project.id).count() or 0
@@ -2813,29 +4339,54 @@ def _import_project_tasks_from_config(project, config):
     for offset, entry in enumerate(tasks_data, start=1):
         if not isinstance(entry, dict):
             raise ValueError(f"Task #{offset} must be an object.")
-        title = (entry.get("title") or "").strip()
+        task_kind = _normalize_task_kind_name(_first_present(entry, "task_kind", "task_type", "mode", "kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            raise ValueError(f"Task #{offset} has unsupported task_kind '{task_kind}'.")
+        title = _coerce_string(_first_present(entry, "title", "name")).strip()
         if not title:
             raise ValueError(f"Task #{offset} is missing a title.")
-        questions_payload = entry.get("questions")
-        if not isinstance(questions_payload, list) or not questions_payload:
-            raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
-        try:
-            questions = _normalize_exam_questions(questions_payload)
-        except ValueError as exc:
-            raise ValueError(f"Task '{title}': {exc}")
-        except Exception:
-            raise ValueError(f"Task '{title}': unable to parse questions.")
-        description = (entry.get("description") or "").strip()
-        instructions = (entry.get("instructions") or "").strip()
+        description = _coerce_string(_first_present(entry, "description", "summary")).strip()
+        instructions = _coerce_string(
+            _first_present(
+                entry,
+                "instructions",
+                "student_instructions",
+                "tutorial_markdown",
+                "content_markdown",
+                "content",
+                "body",
+            )
+        ).strip()
+        questions = []
+        questions_payload = _first_present(entry, "questions", "items")
+        requires_review = False
+        auto_grade = False
+        if task_kind == "tutorial":
+            if isinstance(questions_payload, list) and questions_payload:
+                raise ValueError(f"Task '{title}': tutorial tasks cannot define questions.")
+            if not instructions:
+                raise ValueError(f"Task '{title}': tutorial tasks need markdown content in 'instructions' or 'tutorial_markdown'.")
+        else:
+            if not isinstance(questions_payload, list) or not questions_payload:
+                raise ValueError(f"Task '{title}' must include a non-empty 'questions' array.")
+            try:
+                questions = _normalize_exam_questions(questions_payload)
+            except ValueError as exc:
+                raise ValueError(f"Task '{title}': {exc}")
+            except Exception:
+                raise ValueError(f"Task '{title}': unable to parse questions.")
+            requires_review = _coerce_bool(_first_present(entry, "requires_review", "mentor_review", "manual_review"), False)
+            auto_grade = _coerce_bool(_first_present(entry, "auto_grade", "autograde", "automatic_grading"), True)
         task = ProjectTask(
             project_id=project.id,
+            task_kind=task_kind,
             title=title,
             description=description or None,
             instructions=instructions or None,
             questions_json=questions,
-            required=bool(entry.get("required", True)),
-            auto_grade=bool(entry.get("auto_grade", True)),
-            requires_review=bool(entry.get("requires_review", False)),
+            required=_coerce_bool(_first_present(entry, "required", "is_required"), True),
+            auto_grade=auto_grade,
+            requires_review=requires_review,
             order_index=existing + offset,
         )
         new_tasks.append(task)
@@ -2902,6 +4453,8 @@ def _grade_exam_submission(exam, answers):
             if matches and answers_expected:
                 res["earned"] = points
         elif qtype == "file":
+            res["manual_review"] = True
+        elif qtype == "plot":
             res["manual_review"] = True
         elif qtype == "code":
             samples = q.get("samples") or []
@@ -2995,8 +4548,8 @@ def _disallow_input(*args, **kwargs):
 
 SAFE_CODE_BUILTINS["input"] = _disallow_input
 
-# Allow limited imports for numerical methods / plotting
-ALLOWED_CODE_IMPORTS = {"numpy", "matplotlib", "math"}
+# Allow a small safe subset of imports used in coursework and plotting
+ALLOWED_CODE_IMPORTS = {"collections", "numpy", "matplotlib", "math"}
 
 def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     if level and level > 0:
@@ -3036,7 +4589,29 @@ def _collect_plot_images():
         for num in plt.get_fignums():
             fig = plt.figure(num)
             buf = io.BytesIO()
-            fig.savefig(buf, format="png", bbox_inches="tight")
+            original_size = None
+            try:
+                width, height = fig.get_size_inches()
+                if width > 0 and height > 0:
+                    scale = min(
+                        PLOT_EXPORT_MAX_WIDTH_IN / width,
+                        PLOT_EXPORT_MAX_HEIGHT_IN / height,
+                        1.0,
+                    )
+                    if scale < 1.0:
+                        original_size = (width, height)
+                        fig.set_size_inches(width * scale, height * scale, forward=False)
+            except Exception:
+                original_size = None
+            fig.savefig(
+                buf,
+                format="png",
+                bbox_inches="tight",
+                pad_inches=0.1,
+                dpi=PLOT_EXPORT_DPI,
+            )
+            if original_size:
+                fig.set_size_inches(*original_size, forward=False)
             images.append(base64.b64encode(buf.getvalue()).decode("ascii"))
         plt.close("all")
     except Exception:
@@ -3046,14 +4621,155 @@ def _collect_plot_images():
             pass
     return images
 
+def _values_match(actual, expected):
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+    if np is not None:
+        try:
+            if isinstance(actual, np.ndarray) or isinstance(expected, np.ndarray):
+                try:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected), equal_nan=True))
+                except TypeError:
+                    return bool(np.array_equal(np.asarray(actual), np.asarray(expected)))
+                except Exception:
+                    return False
+        except Exception:
+            pass
+    try:
+        comparison = actual == expected
+    except Exception:
+        return False
+    if np is not None:
+        try:
+            if isinstance(comparison, np.ndarray):
+                return bool(comparison.all())
+        except Exception:
+            pass
+    try:
+        return bool(comparison)
+    except Exception:
+        return False
+
+def _normalize_compare_text(value):
+    return " ".join(_coerce_string(value).split())
+
+def _text_matches(actual_text, expected_text, compare_mode):
+    actual = _coerce_string(actual_text)
+    expected = _coerce_string(expected_text)
+    if compare_mode == "exact":
+        return actual == expected
+    if compare_mode == "normalize_whitespace":
+        return _normalize_compare_text(actual) == _normalize_compare_text(expected)
+    if compare_mode == "contains":
+        return expected in actual
+    return actual.rstrip() == expected.rstrip()
+
+def _numeric_values_close(actual, expected, tolerance):
+    if isinstance(actual, (list, tuple)) and isinstance(expected, (list, tuple)):
+        if len(actual) != len(expected):
+            return False
+        return all(_numeric_values_close(a, b, tolerance) for a, b in zip(actual, expected))
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return False
+    if isinstance(actual, (str, bytes)) or isinstance(expected, (str, bytes)):
+        return False
+    try:
+        left = float(actual)
+        right = float(expected)
+    except Exception:
+        return False
+    if left != left and right != right:
+        return True
+    return abs(left - right) <= tolerance
+
+def _values_close(actual, expected, tolerance):
+    try:
+        tolerance = max(float(tolerance), 0.0)
+    except Exception:
+        tolerance = DEFAULT_NUMERIC_TOLERANCE
+    try:
+        import numpy as np
+    except Exception:
+        np = None
+    if np is not None:
+        try:
+            return bool(np.allclose(np.asarray(actual), np.asarray(expected), atol=tolerance, rtol=0.0, equal_nan=True))
+        except Exception:
+            pass
+    return _numeric_values_close(actual, expected, tolerance)
+
+def _effective_sample_compare_mode(sample, sample_kind):
+    try:
+        return _normalize_sample_compare_mode(
+            _first_present(sample, "compare_mode", "compare", "comparison", "match_mode", "matcher"),
+            sample_kind,
+        )
+    except Exception:
+        return DEFAULT_SCRIPT_SAMPLE_COMPARE_MODE if sample_kind == "script" else DEFAULT_CALLABLE_SAMPLE_COMPARE_MODE
+
+def _effective_sample_tolerance(sample):
+    try:
+        return _coerce_sample_tolerance(
+            _first_present(sample, "tolerance", "abs_tolerance", "atol", "epsilon"),
+        )
+    except Exception:
+        return DEFAULT_NUMERIC_TOLERANCE
+
+def _callable_result_matches(result_value, output_value, expected_text, compare_mode, expected_literal_defined, expected_literal, tolerance=None):
+    if compare_mode == "contains":
+        return _text_matches(output_value, expected_text, "contains"), ""
+    if compare_mode == "numeric_tolerance":
+        if not expected_literal_defined:
+            return False, "Numeric tolerance comparison requires a literal expected value."
+        return _values_close(result_value, expected_literal, tolerance), ""
+    if expected_literal_defined:
+        return _values_match(result_value, expected_literal), ""
+    return _text_matches(output_value.strip(), expected_text.strip(), "exact"), ""
+
+class CodeExecutionTimedOut(Exception):
+    pass
+
+def _run_with_code_timeout(seconds, callback):
+    if not seconds or seconds <= 0:
+        return callback()
+    if not hasattr(signal, "SIGALRM") or not hasattr(signal, "setitimer"):
+        return callback()
+
+    def _handle_timeout(signum, frame):
+        raise CodeExecutionTimedOut("Execution time limit exceeded.")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(signal.SIGALRM, _handle_timeout)
+    signal.setitimer(signal.ITIMER_REAL, float(seconds))
+    try:
+        return callback()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+def _code_batch_timeout_seconds(test_count, mode):
+    per_step_limit = max(float(CODE_RUN_TIME_LIMIT_SEC or 0), 0.1)
+    setup_steps = 1 if mode in ("function", "class") else 0
+    per_test_steps = 2 if mode == "class" else 1
+    return per_step_limit * (max(1, int(test_count or 0)) * per_test_steps + setup_steps) + 1.0
+
 def _run_code_tests_worker(code_text, tests, mode):
     results = []
     if not tests:
         return results
+    mode = (mode or "script").strip().lower()
+    if mode not in ("script", "function", "class"):
+        mode = "script"
     if not code_text:
         for idx, test in enumerate(tests):
             hidden = bool(test.get("hidden"))
             name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
+            sample_kind = "script" if mode == "script" else "callable"
+            compare_mode = _effective_sample_compare_mode(test, sample_kind)
+            tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
             results.append({
                 "name": name,
                 "status": "error",
@@ -3061,30 +4777,49 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": "",
                 "expected": test.get("expected") or test.get("output") or "",
                 "error": "No code submitted.",
+                "mode": mode,
+                "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
             })
         return results
-    mode = (mode or "script").strip().lower()
-    if mode not in ("script", "function"):
-        mode = "script"
     _init_plot_backend()
     env_base = None
-    if mode == "function":
+    setup_failure_status = "error"
+    setup_failure_message = ""
+    if mode in ("function", "class"):
         try:
             env_base = safe_env()
-            exec(code_text, env_base, env_base)
+            env_base["__name__"] = "__main__"
+            _run_with_code_timeout(
+                CODE_RUN_TIME_LIMIT_SEC,
+                lambda: exec(code_text, env_base, env_base),
+            )
+        except CodeExecutionTimedOut:
+            setup_failure_status = "timeout"
+            setup_failure_message = "Setup time limit exceeded."
         except Exception:
-            tb = traceback.format_exc()
+            setup_failure_status = "error"
+            setup_failure_message = traceback.format_exc()
+        if setup_failure_message:
             for idx, test in enumerate(tests):
                 hidden = bool(test.get("hidden"))
                 name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (test.get("init_call") or "").strip() if mode == "class" else ""
+                compare_mode = _effective_sample_compare_mode(test, "callable")
+                tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
                 results.append({
                     "name": name,
-                    "status": "error",
+                    "status": setup_failure_status,
                     "input": test.get("call") or test.get("input") or "",
                     "output": "",
                     "expected": test.get("expected") or test.get("output") or "",
-                    "error": tb,
+                    "error": setup_failure_message,
+                    "mode": mode,
+                    "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                     "plot_images": [],
                 })
@@ -3092,11 +4827,13 @@ def _run_code_tests_worker(code_text, tests, mode):
     for idx, test in enumerate(tests):
         hidden = bool(test.get("hidden"))
         name = test.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
-        if mode == "function":
+        if mode in ("function", "class"):
             call_expr = (test.get("call") or test.get("input") or "").strip()
             expected_output = (test.get("expected") or test.get("output") or "")
             expected_display = expected_output
             expected_trimmed = expected_output.strip()
+            compare_mode = _effective_sample_compare_mode(test, "callable")
+            tolerance = _effective_sample_tolerance(test) if compare_mode == "numeric_tolerance" else None
             expected_literal = None
             expected_literal_defined = False
             if expected_trimmed:
@@ -3109,6 +4846,7 @@ def _run_code_tests_worker(code_text, tests, mode):
             error_text = ""
             output_value = ""
             result_value = None
+            init_call = ""
             if not call_expr:
                 status = "error"
                 error_text = "Missing call expression."
@@ -3118,9 +4856,23 @@ def _run_code_tests_worker(code_text, tests, mode):
                 original_stdout = sys.stdout
                 sys.stdout = stdout
                 try:
-                    result = eval(call_expr, env, env)
+                    if mode == "class":
+                        init_call = (test.get("init_call") or "").strip()
+                        if not init_call:
+                            raise RuntimeError("Missing __init__ call.")
+                        env["obj"] = _run_with_code_timeout(
+                            CODE_RUN_TIME_LIMIT_SEC,
+                            lambda: eval(init_call, env, env),
+                        )
+                    result = _run_with_code_timeout(
+                        CODE_RUN_TIME_LIMIT_SEC,
+                        lambda: eval(call_expr, env, env),
+                    )
                     result_value = result
                     output_value = repr(result)
+                except CodeExecutionTimedOut:
+                    status = "timeout"
+                    error_text = "Execution time limit exceeded."
                 except Exception:
                     status = "error"
                     error_text = traceback.format_exc()
@@ -3128,12 +4880,20 @@ def _run_code_tests_worker(code_text, tests, mode):
                     sys.stdout = original_stdout
             plot_images = _collect_plot_images()
             if status == "passed" and expected_trimmed:
-                if expected_literal_defined:
-                    if result_value != expected_literal:
-                        status = "mismatch"
-                else:
-                    if output_value.strip() != expected_trimmed:
-                        status = "mismatch"
+                matched, compare_error = _callable_result_matches(
+                    result_value,
+                    output_value,
+                    expected_trimmed,
+                    compare_mode,
+                    expected_literal_defined,
+                    expected_literal,
+                    tolerance=tolerance,
+                )
+                if compare_error:
+                    status = "error"
+                    error_text = compare_error
+                elif not matched:
+                    status = "mismatch"
             results.append({
                 "name": name,
                 "status": status,
@@ -3141,12 +4901,17 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": output_value,
                 "expected": expected_display,
                 "error": error_text,
+                "mode": mode,
+                "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
         else:
             sample_input = test.get("input") or ""
             expected_output = (test.get("expected") or test.get("output") or "")
+            compare_mode = _effective_sample_compare_mode(test, "script")
             stdin_buffer = io.StringIO(sample_input)
             stdout_buffer = io.StringIO()
             status = "passed"
@@ -3163,16 +4928,23 @@ def _run_code_tests_worker(code_text, tests, mode):
                 original_stdout = sys.stdout
                 sys.stdout = stdout_buffer
                 try:
-                    exec(code_text, env, env)
+                    _run_with_code_timeout(
+                        CODE_RUN_TIME_LIMIT_SEC,
+                        lambda: exec(code_text, env, env),
+                    )
+                except CodeExecutionTimedOut:
+                    status = "timeout"
+                    error_text = "Execution time limit exceeded."
                 finally:
                     sys.stdout = original_stdout
             except Exception:
-                status = "error"
-                error_text = traceback.format_exc()
+                if status != "timeout":
+                    status = "error"
+                    error_text = traceback.format_exc()
             output_value = stdout_buffer.getvalue()
             plot_images = _collect_plot_images()
             if status == "passed" and expected_output.strip():
-                if output_value.rstrip() != expected_output.rstrip():
+                if not _text_matches(output_value, expected_output, compare_mode):
                     status = "mismatch"
                     error_text = ""
             results.append({
@@ -3182,6 +4954,10 @@ def _run_code_tests_worker(code_text, tests, mode):
                 "output": output_value,
                 "expected": expected_output,
                 "error": error_text,
+                "mode": "script",
+                "init_call": "",
+                "compare_mode": compare_mode,
+                "tolerance": None,
                 "hidden": hidden,
                 "plot_images": plot_images,
             })
@@ -3194,6 +4970,9 @@ def _run_code_tests_backend(code_text, tests, mode):
     """
     if not tests:
         return [], False
+    mode = (mode or "script").strip().lower()
+    if mode not in ("script", "function", "class"):
+        mode = "script"
 
     try:
         ctx = multiprocessing.get_context("fork")
@@ -3209,6 +4988,10 @@ def _run_code_tests_backend(code_text, tests, mode):
             for idx, t in enumerate(tests):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+                sample_kind = "script" if mode == "script" else "callable"
+                compare_mode = _effective_sample_compare_mode(t, sample_kind)
+                tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
                 res.append({
                     "name": name,
                     "status": "error",
@@ -3216,13 +4999,17 @@ def _run_code_tests_backend(code_text, tests, mode):
                     "output": "",
                     "expected": t.get("expected") or t.get("output") or "",
                     "error": repr(e),
+                    "mode": mode,
+                    "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                 })
         result_queue.put(res)
 
     proc = ctx.Process(target=_child)
     proc.start()
-    proc.join(CODE_RUN_TIME_LIMIT_SEC)
+    proc.join(_code_batch_timeout_seconds(len(tests), mode))
 
     timed_out = False
     results = []
@@ -3236,13 +5023,21 @@ def _run_code_tests_backend(code_text, tests, mode):
         for idx, t in enumerate(tests):
             hidden = bool(t.get("hidden"))
             name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+            init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+            sample_kind = "script" if mode == "script" else "callable"
+            compare_mode = _effective_sample_compare_mode(t, sample_kind)
+            tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
             results.append({
                 "name": name,
                 "status": "timeout",
-                "input": "",
+                "input": t.get("call") or t.get("input") or "",
                 "output": "",
-                "expected": "",
+                "expected": t.get("expected") or t.get("output") or "",
                 "error": "Time limit exceeded",
+                "mode": mode,
+                "init_call": init_call,
+                "compare_mode": compare_mode,
+                "tolerance": tolerance,
                 "hidden": hidden,
             })
     else:
@@ -3253,13 +5048,21 @@ def _run_code_tests_backend(code_text, tests, mode):
             for idx, t in enumerate(tests):
                 hidden = bool(t.get("hidden"))
                 name = t.get("name") or ("Hidden test" if hidden else f"Test {idx+1}")
+                init_call = (t.get("init_call") or "").strip() if mode == "class" else ""
+                sample_kind = "script" if mode == "script" else "callable"
+                compare_mode = _effective_sample_compare_mode(t, sample_kind)
+                tolerance = _effective_sample_tolerance(t) if compare_mode == "numeric_tolerance" else None
                 results.append({
                     "name": name,
                     "status": "error",
-                    "input": "",
+                    "input": t.get("call") or t.get("input") or "",
                     "output": "",
-                    "expected": "",
+                    "expected": t.get("expected") or t.get("output") or "",
                     "error": "No results from worker process",
+                    "mode": mode,
+                    "init_call": init_call,
+                    "compare_mode": compare_mode,
+                    "tolerance": tolerance,
                     "hidden": hidden,
                 })
 
@@ -3274,6 +5077,8 @@ def _split_visible_hidden_results(results):
             "name": res.get("name") or ("Hidden test" if is_hidden else "Test"),
             "status": res.get("status") or "error",
             "hidden": is_hidden,
+            "compare_mode": res.get("compare_mode") or "",
+            "tolerance": res.get("tolerance"),
         }
         if is_hidden:
             hidden.append(base)
@@ -3283,6 +5088,10 @@ def _split_visible_hidden_results(results):
                 "output": res.get("output") or "",
                 "expected": res.get("expected") or "",
                 "error": res.get("error") or "",
+                "mode": res.get("mode") or "script",
+                "init_call": res.get("init_call") or "",
+                "compare_mode": res.get("compare_mode") or "",
+                "tolerance": res.get("tolerance"),
             })
             visible.append(base)
     return visible, hidden
@@ -3580,6 +5389,7 @@ def exam_take(code):
     draft_answers = _get_exam_draft(exam.id) if student else {}
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
+    upload_error = None
 
     # ------------------------------------------------------------------
     # Timer + automatic submission on timeout
@@ -3648,9 +5458,15 @@ def exam_take(code):
             qid = current_question.get("id")
             if qid:
                 field = f"answer_{qid}"
-                if current_question.get("type") == "multi":
+                qtype = current_question.get("type")
+                if qtype == "multi":
                     vals = request.form.getlist(field)
                     val = "||".join(vals)
+                elif qtype == "plot":
+                    val = _preserve_plot_answer_metadata(
+                        request.form.get(field, ""),
+                        previous_answers.get(qid),
+                    )
                 else:
                     val = request.form.get(field, "")
                 draft_answers[qid] = val
@@ -3663,6 +5479,44 @@ def exam_take(code):
                 action = "submit"
             else:
                 action = "next"
+        if action != "submit":
+            combined_answers = dict(base_answers)
+            combined_answers.update(draft_answers)
+            plot_updates, upload_error = _collect_plot_submission_updates(
+                questions,
+                combined_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "exam",
+                    "exam_id": exam.id,
+                    "submission_id": submission.id if submission else None,
+                },
+                strict_code_match=False,
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=exam,
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=already_submitted,
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=time_remaining if time_remaining is not None else None,
+                    user=user,
+                    student_name=session.get("student_name"),
+                    submission_id=(submission.id if submission else None),
+                    upload_error=upload_error,
+                ), 400
+            if plot_updates:
+                draft_answers.update(plot_updates)
+                previous_answers.update(plot_updates)
+                _save_exam_draft(exam.id, draft_answers)
 
         if action == "submit":
             if not can_submit:
@@ -3687,6 +5541,37 @@ def exam_take(code):
 
             answers = dict(base_answers)
             answers.update(draft_answers)
+            answers, upload_error = _prepare_plot_answers_for_submit(
+                questions,
+                answers,
+                base_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "exam",
+                    "exam_id": exam.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=exam,
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=already_submitted,
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=time_remaining if time_remaining is not None else None,
+                    user=user,
+                    student_name=session.get("student_name"),
+                    submission_id=(submission.id if submission else None),
+                    upload_error=upload_error,
+                ), 400
             grade_score, grade_total, grade_details = _grade_exam_submission(exam, answers)
             submission.answers_json = answers
             submission.status = "submitted"
@@ -3747,9 +5632,14 @@ def exam_take(code):
         already_submitted=(submission and submission.status == "submitted"),
         previous_answers=previous_answers,
         time_remaining_seconds=time_remaining if time_remaining is not None else None,
+<<<<<<< HEAD
         run_log_url=run_log_url,
         telemetry_url=telemetry_url,
         telemetry_attempt_ref=telemetry_attempt_ref,
+=======
+        submission_id=(submission.id if submission else None),
+        upload_error=upload_error,
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
         user=user,
         student_name=session.get("student_name"),
     )
@@ -4143,6 +6033,104 @@ def attendance_list():
         student_name=session.get("student_name"),
     )
 
+@app.route("/announcements", methods=["GET", "POST"])
+@require_user()
+def announcements_admin():
+    user = current_user()
+    if not _is_staff(user):
+        abort(403)
+    groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    message = session.pop("announcements_status", None)
+    form_data = {
+        "title": request.form.get("title") or "",
+        "body": request.form.get("body") or "",
+        "group_id": request.form.get("group_id") or "all",
+    }
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        title = form_data["title"].strip()
+        body = form_data["body"].strip()
+        group_value = (form_data["group_id"] or "all").strip()
+        target_group = None
+        if not title:
+            error = "Announcement title is required."
+        elif not body:
+            error = "Announcement body is required."
+        if not error and group_value != "all":
+            try:
+                group_id = int(group_value)
+            except Exception:
+                group_id = 0
+            target_group = StudentGroup.query.get(group_id) if group_id else None
+            if not target_group:
+                error = "Selected group was not found."
+        student_ids = []
+        if not error:
+            if target_group:
+                memberships = StudentGroupMembership.query.filter_by(group_id=target_group.id).all()
+                student_ids = sorted({membership.student_id for membership in memberships if membership.student_id})
+            else:
+                student_ids = [
+                    row[0]
+                    for row in db.session.query(Student.id)
+                    .order_by(Student.name.asc(), Student.id.asc())
+                    .all()
+                ]
+            if not student_ids:
+                error = "No students matched the selected target."
+        if not error:
+            announcement = Announcement(
+                title=title,
+                body=body,
+                created_by_user_id=user.id if user else None,
+                target_group_id=(target_group.id if target_group else None),
+                target_group_name=(target_group.name if target_group else None),
+            )
+            db.session.add(announcement)
+            db.session.flush()
+            for student_id in student_ids:
+                db.session.add(AnnouncementDelivery(
+                    announcement_id=announcement.id,
+                    student_id=student_id,
+                ))
+            db.session.commit()
+            session["announcements_status"] = f"Announcement sent to {len(student_ids)} student(s)."
+            return redirect(url_for("announcements_admin"))
+    announcements = (
+        Announcement.query
+        .options(
+            subqueryload(Announcement.deliveries),
+            subqueryload(Announcement.creator),
+            subqueryload(Announcement.target_group),
+        )
+        .order_by(Announcement.created_at.desc(), Announcement.id.desc())
+        .all()
+    )
+    announcement_rows = []
+    for announcement in announcements:
+        deliveries = announcement.deliveries or []
+        seen_count = sum(1 for delivery in deliveries if delivery.seen_at)
+        total_count = len(deliveries)
+        announcement_rows.append({
+            "announcement": announcement,
+            "target_label": _announcement_target_label(announcement),
+            "total_count": total_count,
+            "seen_count": seen_count,
+            "unseen_count": max(0, total_count - seen_count),
+        })
+    return render_template(
+        "announcements_admin.html",
+        groups=groups,
+        announcement_rows=announcement_rows,
+        form_data=form_data,
+        message=message,
+        error=error,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
 @app.route("/attendance/new", methods=["GET", "POST"])
 @require_user()
 def attendance_new():
@@ -4478,6 +6466,7 @@ def projects_new():
         "collection": request.form.get("collection") or "comp101",
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
+        "deadline_at": request.form.get("deadline_at") or "",
         "required_task_count": request.form.get("required_task_count") or "",
         "points": request.form.get("points") or "",
         "retry_cooldown_minutes": request.form.get("retry_cooldown_minutes") or "",
@@ -4488,8 +6477,14 @@ def projects_new():
             abort(400, "bad csrf")
         title = form_data["title"].strip()
         collection = form_data["collection"].strip() or "comp101"
+        deadline_at = None
         if not title:
             error = "Project title is required."
+        deadline_raw = form_data["deadline_at"].strip()
+        if deadline_raw and not error:
+            deadline_at = parse_dt_local(deadline_raw)
+            if not deadline_at:
+                error = "Deadline must be a valid date and time."
         required_count = None
         rtc_raw = form_data["required_task_count"].strip()
         if rtc_raw:
@@ -4521,6 +6516,7 @@ def projects_new():
                 collection=collection,
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
+                deadline_at=deadline_at,
                 required_task_count=required_count,
                 is_active=False,
                 points=points_value,
@@ -4560,30 +6556,80 @@ def projects_show(code):
         student_name=session.get("student_name"),
     )
 
+@app.get("/projects/<code>/export")
+@require_user()
+def projects_export(code):
+    project = Project.query.filter_by(code=code).first_or_404()
+    tasks = ProjectTask.query.filter_by(project_id=project.id).order_by(
+        ProjectTask.order_index.asc(),
+        ProjectTask.id.asc(),
+    ).all()
+    dependencies = ProjectDependency.query.filter_by(project_id=project.id).all()
+    dependencies = sorted(
+        dependencies,
+        key=lambda dep: (
+            (dep.prerequisite.title or "").lower() if dep.prerequisite else "",
+            dep.prerequisite.code if dep.prerequisite else "",
+        ),
+    )
+    group_assignments = ProjectGroupAssignment.query.filter_by(project_id=project.id).order_by(
+        ProjectGroupAssignment.applies_to_all.desc(),
+        ProjectGroupAssignment.created_at.asc(),
+        ProjectGroupAssignment.id.asc(),
+    ).all()
+    payload = _serialize_project_export(
+        project,
+        tasks=tasks,
+        dependencies=dependencies,
+        group_assignments=group_assignments,
+    )
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    response = make_response(json.dumps(payload, indent=2, ensure_ascii=False))
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{project.code}_project_export_{timestamp}.json"'
+    )
+    return response
+
 @app.route("/projects/<code>/edit", methods=["GET", "POST"])
 @require_user()
 def projects_edit(code):
     project = Project.query.filter_by(code=code).first_or_404()
     error = None
+    form_data = {
+        "title": request.form.get("title") if request.method == "POST" else project.title,
+        "collection": request.form.get("collection") if request.method == "POST" else (project.collection or "comp101"),
+        "description": request.form.get("description") if request.method == "POST" else (project.description or ""),
+        "instructions": request.form.get("instructions") if request.method == "POST" else (project.instructions or ""),
+        "deadline_at": request.form.get("deadline_at") if request.method == "POST" else (project.deadline_at.strftime("%Y-%m-%dT%H:%M") if project.deadline_at else ""),
+        "required_task_count": request.form.get("required_task_count") if request.method == "POST" else (str(project.required_task_count) if project.required_task_count else ""),
+    }
     
     if request.method == "POST":
         if not verify_csrf():
             abort(400, "bad csrf")
         
-        title = (request.form.get("title") or "").strip()
-        collection = (request.form.get("collection") or "").strip()
-        description = (request.form.get("description") or "").strip()
-        instructions = (request.form.get("instructions") or "").strip()
-        required_task_count = (request.form.get("required_task_count") or "").strip()
+        title = (form_data["title"] or "").strip()
+        collection = (form_data["collection"] or "").strip()
+        description = (form_data["description"] or "").strip()
+        instructions = (form_data["instructions"] or "").strip()
+        deadline_raw = (form_data["deadline_at"] or "").strip()
+        required_task_count = (form_data["required_task_count"] or "").strip()
+        deadline_at = None
         
         if not title:
             error = "Project title is required."
+        if deadline_raw and not error:
+            deadline_at = parse_dt_local(deadline_raw)
+            if not deadline_at:
+                error = "Deadline must be a valid date and time."
         
         if not error:
             project.title = title
             project.collection = collection or "comp101"
             project.description = description or None
             project.instructions = instructions or None
+            project.deadline_at = deadline_at
             
             if required_task_count:
                 try:
@@ -4596,14 +6642,6 @@ def projects_edit(code):
             if not error:
                 db.session.commit()
                 return redirect(url_for("projects_show", code=project.code))
-    
-    form_data = {
-        "title": project.title,
-        "collection": project.collection or "comp101",
-        "description": project.description or "",
-        "instructions": project.instructions or "",
-        "required_task_count": str(project.required_task_count) if project.required_task_count else "",
-    }
     
     return render_template(
         "projects_edit.html",
@@ -4788,7 +6826,30 @@ def projects_remove_group_assignment(code, assignment_id):
 @app.route("/projects/tasks/schema")
 @require_user()
 def projects_tasks_schema():
-    return jsonify(PROJECT_TASKS_SCHEMA)
+    body = json.dumps(PROJECT_TASKS_SCHEMA, indent=2, ensure_ascii=False)
+    if request.args.get("download") == "1":
+        response = make_response(body)
+        response.mimetype = "application/json"
+        response.headers["Content-Disposition"] = 'attachment; filename="project_task_import_reference.json"'
+        return response
+    return Response(body, mimetype="application/json")
+
+@app.route("/projects/tasks/examples/<example_name>")
+@require_user()
+def projects_tasks_example_download(example_name):
+    schema_key = PROJECT_TASKS_EXAMPLE_DOWNLOADS.get(example_name)
+    if not schema_key:
+        abort(404)
+    payload = PROJECT_TASKS_SCHEMA.get("example_payloads", {}).get(schema_key)
+    if payload is None:
+        abort(404)
+    body = json.dumps(payload, indent=2, ensure_ascii=False)
+    response = make_response(body)
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="project_task_{secure_filename(example_name) or "example"}.json"'
+    )
+    return response
 
 @app.route("/projects/<code>/tasks/new", methods=["GET", "POST"])
 @require_user()
@@ -4802,6 +6863,7 @@ def projects_task_new(code):
         "title": request.form.get("title") or "",
         "description": request.form.get("description") or "",
         "instructions": request.form.get("instructions") or "",
+        "task_kind": request.form.get("task_kind") or "assessment",
         "questions_payload": request.form.get("questions_payload") or "[]",
         "required": True if request.method != "POST" and req_flag is None else bool(req_flag),
         "auto_grade": True if request.method != "POST" and not auto_flag_vals else ("1" in auto_flag_vals),
@@ -4815,8 +6877,14 @@ def projects_task_new(code):
         title = form_data["title"].strip()
         if not title:
             error = "Task title is required."
+        task_kind = _normalize_task_kind_name(form_data.get("task_kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            error = "Task kind must be assessment or tutorial."
         questions = []
-        if not error:
+        if not error and task_kind == "tutorial":
+            if not form_data["instructions"].strip():
+                error = "Tutorial tasks need markdown content in the task instructions."
+        if not error and task_kind == "assessment":
             try:
                 payload = json.loads(form_data["questions_payload"] or "[]")
                 questions = _normalize_exam_questions(payload)
@@ -4824,19 +6892,20 @@ def projects_task_new(code):
                 error = str(exc)
             except Exception:
                 error = "Unable to parse task questions."
-        if not questions and not error:
+        if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
         if not error:
             order_index = (ProjectTask.query.filter_by(project_id=project.id).count() or 0) + 1
             task = ProjectTask(
                 project_id=project.id,
+                task_kind=task_kind,
                 title=title,
                 description=form_data["description"].strip() or None,
                 instructions=form_data["instructions"].strip() or None,
                 questions_json=questions,
                 required=form_data["required"],
-                auto_grade=form_data["auto_grade"],
-                requires_review=form_data["requires_review"],
+                auto_grade=(form_data["auto_grade"] if task_kind == "assessment" else False),
+                requires_review=(form_data["requires_review"] if task_kind == "assessment" else False),
                 order_index=order_index,
             )
             db.session.add(task)
@@ -4886,12 +6955,21 @@ def projects_task_import(code):
             except Exception:
                 db.session.rollback()
                 error = "Unable to import tasks. Please review your JSON."
-    schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2)
+    schema_json = json.dumps(PROJECT_TASKS_SCHEMA, indent=2, ensure_ascii=False)
+    starter_payloads = {
+        "minimal": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["minimal_payload"], indent=2, ensure_ascii=False),
+        "tutorial": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["tutorial_payload"], indent=2, ensure_ascii=False),
+        "class_code": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["class_code_payload"], indent=2, ensure_ascii=False),
+        "plot": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["plot_payload"], indent=2, ensure_ascii=False),
+        "formatting": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["formatting_payload"], indent=2, ensure_ascii=False),
+        "comparison": json.dumps(PROJECT_TASKS_SCHEMA["example_payloads"]["comparison_payload"], indent=2, ensure_ascii=False),
+    }
     return render_template(
         "projects_task_import.html",
         project=project,
         payload=payload,
         schema_json=schema_json,
+        starter_payloads=starter_payloads,
         error=error,
         user=current_user(),
         student_name=session.get("student_name"),
@@ -4911,6 +6989,7 @@ def projects_task_edit(code, task_id):
             "title": request.form.get("title") or "",
             "description": request.form.get("description") or "",
             "instructions": request.form.get("instructions") or "",
+            "task_kind": request.form.get("task_kind") or "assessment",
             "questions_payload": request.form.get("questions_payload") or "[]",
             "required": bool(req_flag),
             "auto_grade": ("1" in auto_flag_vals),
@@ -4926,6 +7005,7 @@ def projects_task_edit(code, task_id):
             "title": task.title or "",
             "description": task.description or "",
             "instructions": task.instructions or "",
+            "task_kind": _task_kind_value(task),
             "questions_payload": payload,
             "required": bool(task.required),
             "auto_grade": bool(task.auto_grade),
@@ -4939,8 +7019,14 @@ def projects_task_edit(code, task_id):
         title = form_data["title"].strip()
         if not title:
             error = "Task title is required."
+        task_kind = _normalize_task_kind_name(form_data.get("task_kind"))
+        if task_kind not in ("assessment", "tutorial"):
+            error = "Task kind must be assessment or tutorial."
         questions = []
-        if not error:
+        if not error and task_kind == "tutorial":
+            if not form_data["instructions"].strip():
+                error = "Tutorial tasks need markdown content in the task instructions."
+        if not error and task_kind == "assessment":
             try:
                 payload = json.loads(form_data["questions_payload"] or "[]")
                 questions = _normalize_exam_questions(payload)
@@ -4948,16 +7034,17 @@ def projects_task_edit(code, task_id):
                 error = str(exc)
             except Exception:
                 error = "Unable to parse task questions."
-        if not questions and not error:
+        if task_kind == "assessment" and not questions and not error:
             error = "Add at least one question for the task."
         if not error:
+            task.task_kind = task_kind
             task.title = title
             task.description = form_data["description"].strip() or None
             task.instructions = form_data["instructions"].strip() or None
             task.questions_json = questions
             task.required = form_data["required"]
-            task.auto_grade = form_data["auto_grade"]
-            task.requires_review = form_data["requires_review"]
+            task.auto_grade = form_data["auto_grade"] if task_kind == "assessment" else False
+            task.requires_review = form_data["requires_review"] if task_kind == "assessment" else False
             if resource_upload and resource_upload.filename:
                 existing_info = _extract_file_info(task.resource_file)
                 file_info, upload_error = _save_task_resource(task, resource_upload, existing_info)
@@ -5144,6 +7231,7 @@ def _task_exam_view(project, task):
         "title": f"{project.title} — {task.title}",
         "description": task.description,
         "instructions": task.instructions,
+        "task_kind": _task_kind_value(task),
         "starts_at": None,
         "ends_at": None,
         "duration_minutes": None,
@@ -5165,6 +7253,20 @@ def project_task_take(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    if _is_tutorial_task(task):
+        submission = _complete_tutorial_task(project, task, student)
+        db.session.flush()
+        if _project_completed(project, student):
+            _award_project_points_if_needed(project, student)
+        db.session.commit()
+        return render_template(
+            "projects_tutorial_take.html",
+            project=project,
+            task=task,
+            submission=submission,
+            user=current_user(),
+            student_name=student.name,
+        )
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(
@@ -5240,6 +7342,11 @@ def project_task_take(code, task_id):
                             val = file_info
                     else:
                         val = existing_info or ""
+                elif qtype == "plot":
+                    val = _preserve_plot_answer_metadata(
+                        request.form.get(field, ""),
+                        previous_answers.get(qid),
+                    )
                 else:
                     val = request.form.get(field, "")
                 if upload_error:
@@ -5263,6 +7370,7 @@ def project_task_take(code, task_id):
                         telemetry_attempt_ref=telemetry_attempt_ref,
                         cooldown_seconds_remaining=cooldown_seconds_remaining,
                         submission_id=submission.id,
+                        persisted_answers=base_answers,
                         upload_error=upload_error,
                     ), 400
                 draft_answers[qid] = val
@@ -5274,6 +7382,48 @@ def project_task_take(code, task_id):
                 action = "submit"
             else:
                 action = "next"
+        if action != "submit":
+            combined_answers = dict(base_answers)
+            combined_answers.update(draft_answers)
+            plot_updates, upload_error = _collect_plot_submission_updates(
+                questions,
+                combined_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "project_task",
+                    "project_id": project.id,
+                    "task_id": task.id,
+                    "submission_id": submission.id if submission else None,
+                },
+                strict_code_match=False,
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
+                    persisted_answers=base_answers,
+                    upload_error=upload_error,
+                ), 400
+            if plot_updates:
+                draft_answers.update(plot_updates)
+                previous_answers.update(plot_updates)
+                _save_task_draft(task.id, draft_answers)
         if action == "save":
             answers = dict(base_answers)
             answers.update(draft_answers)
@@ -5303,9 +7453,45 @@ def project_task_take(code, task_id):
                     telemetry_attempt_ref=telemetry_attempt_ref,
                     cooldown_seconds_remaining=cooldown_seconds_remaining,
                     submission_id=submission.id,
+                    persisted_answers=base_answers,
                 ), 403
             answers = dict(base_answers)
             answers.update(draft_answers)
+            answers, upload_error = _prepare_plot_answers_for_submit(
+                questions,
+                answers,
+                base_answers,
+                request.files,
+                request.form,
+                {
+                    "kind": "project_task",
+                    "project_id": project.id,
+                    "task_id": task.id,
+                    "submission_id": submission.id if submission else None,
+                },
+            )
+            if upload_error:
+                return render_template(
+                    "exams_take.html",
+                    exam=_task_exam_view(project, task),
+                    question=current_question,
+                    total_questions=total_questions,
+                    current_index=q_index,
+                    has_prev=(q_index > 0),
+                    has_next=(q_index + 1 < total_questions),
+                    can_submit=can_submit,
+                    preview=preview,
+                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
+                    previous_answers=previous_answers,
+                    time_remaining_seconds=None,
+                    user=current_user(),
+                    student_name=student.name,
+                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
+                    cooldown_seconds_remaining=cooldown_seconds_remaining,
+                    submission_id=submission.id,
+                    persisted_answers=base_answers,
+                    upload_error=upload_error,
+                ), 400
             grade_score = 0
             grade_total = 0
             grade_details = []
@@ -5331,11 +7517,11 @@ def project_task_take(code, task_id):
             submission.max_score = grade_total
             submission.last_activity_at = now
             submission.submitted_at = now
-            if task.requires_review:
+            has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
+            if task.requires_review or has_manual_review:
                 submission.status = "pending_review"
             else:
-                has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
-                if task.auto_grade and not has_manual_review and grade_total > 0:
+                if task.auto_grade and grade_total > 0:
                     if grade_score >= grade_total:
                         submission.status = "accepted"
                     else:
@@ -5411,6 +7597,8 @@ def project_task_take(code, task_id):
         telemetry_attempt_ref=telemetry_attempt_ref,
         cooldown_seconds_remaining=cooldown_seconds_remaining,
         submission_id=submission.id,
+        persisted_answers=base_answers,
+        upload_error=None,
     )
 
 @app.route("/student/projects/<code>/tasks/<int:task_id>/submission")
@@ -5421,6 +7609,8 @@ def project_task_submission_self_view(code, task_id):
     if not _project_visible_to_student(project, student):
         abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    if _is_tutorial_task(task):
+        return redirect(url_for("project_task_take", code=project.code, task_id=task.id))
     submission = ProjectTaskSubmission.query.filter_by(
         project_id=project.id,
         task_id=task.id,
@@ -5461,6 +7651,51 @@ def project_task_submission_self_view(code, task_id):
         student_name=student.name,
     )
 
+@app.route("/projects/<code>/tasks/<int:task_id>/export")
+@require_user()
+def projects_task_export(code, task_id):
+    project = Project.query.filter_by(code=code).first_or_404()
+    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
+    payload = {
+        "schema_name": "project_task_export",
+        "schema_version": 1,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "project": {
+            "code": project.code,
+            "title": project.title,
+        },
+        "task": _serialize_project_task_export(task),
+    }
+    response = make_response(json.dumps(payload, indent=2, ensure_ascii=False))
+    response.mimetype = "application/json"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{_project_task_download_basename(project, task)}.json"'
+    )
+    return response
+
+@app.route("/projects/tasks/<int:task_id>/tutorial.md")
+def project_task_tutorial_download(task_id):
+    task = ProjectTask.query.get_or_404(task_id)
+    if not _is_tutorial_task(task):
+        abort(404)
+    project = task.project
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if not _project_visible_to_student(project, student):
+            abort(403)
+        if not _project_dependencies_met(project, student):
+            abort(403)
+    body = _project_task_tutorial_markdown(project, task)
+    response = make_response(body)
+    response.mimetype = "text/markdown"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{_project_task_download_basename(project, task)}.md"'
+    )
+    return response
+
 @app.route("/projects/tasks/<int:task_id>/resource")
 def project_task_resource_download(task_id):
     task = ProjectTask.query.get_or_404(task_id)
@@ -5495,6 +7730,10 @@ def project_task_file_download(submission_id, question_id):
             abort(403)
         if submission.project and not _project_visible_to_student(submission.project, student):
             abort(403)
+    if user:
+        allowed_student_ids = _restricted_review_student_ids(user)
+        if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+            abort(403)
     attempt_id = request.args.get("attempt_id")
     attempt = None
     if attempt_id:
@@ -5521,13 +7760,66 @@ def project_task_file_download(submission_id, question_id):
     download_name = secure_filename(file_info.get("original_name") or file_info.get("stored_name") or "submission.zip") or "submission.zip"
     return send_file(full_path, as_attachment=True, download_name=download_name)
 
+@app.route("/projects/submissions/<int:submission_id>/plots/<question_id>")
+def project_task_plot_download(submission_id, question_id):
+    submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    user = current_user()
+    student = current_student()
+    if not user and not student:
+        return redirect(url_for("login", next=request.path))
+    if student:
+        if submission.student_id != student.id:
+            abort(403)
+        if submission.project and not _project_visible_to_student(submission.project, student):
+            abort(403)
+    if user:
+        allowed_student_ids = _restricted_review_student_ids(user)
+        if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+            abort(403)
+    attempt_id = request.args.get("attempt_id")
+    attempt = None
+    if attempt_id:
+        try:
+            attempt_id = int(attempt_id)
+        except Exception:
+            attempt_id = None
+    if attempt_id:
+        attempt = ProjectTaskAttempt.query.filter_by(id=attempt_id, submission_id=submission.id).first()
+    questions = submission.task.questions_json if submission.task and isinstance(submission.task.questions_json, list) else []
+    question = next((q for q in questions if str(q.get("id")) == str(question_id)), None)
+    if not question or question.get("type") != "plot":
+        abort(404)
+    if attempt and isinstance(attempt.answers_json, dict):
+        answers = attempt.answers_json
+    else:
+        answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    answer = answers.get(str(question_id))
+    artifact = _plot_answer_artifact(answer)
+    if not artifact:
+        abort(404)
+    full_path = _safe_upload_path(artifact.get("path"))
+    if not full_path or not os.path.isfile(full_path):
+        abort(404)
+    download = _coerce_bool(request.args.get("download"), False)
+    download_name = secure_filename(artifact.get("original_name") or artifact.get("stored_name") or "plot.png") or "plot.png"
+    return send_file(
+        full_path,
+        mimetype=artifact.get("content_type") or "image/png",
+        as_attachment=download,
+        download_name=download_name,
+    )
+
 @app.post("/projects/<code>/students/<int:student_id>/reset")
 @require_user()
 def project_reset_student_progress(code, student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     # delete all task submissions for this student/project
     subs = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student.id).all()
     for sub in subs:
@@ -5543,8 +7835,12 @@ def project_reset_student_progress(code, student_id):
 def projects_submission_task_validate(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "accepted"
@@ -5562,8 +7858,12 @@ def projects_submission_task_validate(code, student_id, task_id):
 def projects_submission_task_need_rework(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first_or_404()
     submission.status = "rejected"
@@ -5577,8 +7877,12 @@ def projects_submission_task_need_rework(code, student_id, task_id):
 def projects_submission_task_reset(code, student_id, task_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student.id).first()
     if submission:
@@ -5656,9 +7960,15 @@ def projects_task_log_telemetry(code, task_id):
 @app.route("/projects/<code>/submissions")
 @require_user()
 def projects_submissions_overview(code):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     tasks = project.tasks or []
-    submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id).order_by(ProjectTaskSubmission.last_activity_at.desc()).all()
+    submissions = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(project_id=project.id),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).order_by(ProjectTaskSubmission.last_activity_at.desc()).all()
     grouped = {}
     for sub in submissions:
         sid = sub.student_id
@@ -5700,15 +8010,20 @@ def projects_submissions_overview(code):
         "projects_submissions_overview.html",
         project=project,
         student_rows=student_rows,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
 @app.route("/projects/<code>/submissions/<int:student_id>")
 @require_user()
 def projects_student_submissions(code, student_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     tasks = project.tasks or []
     submissions = ProjectTaskSubmission.query.filter_by(project_id=project.id, student_id=student_id).all()
     submissions_map = {sub.task_id: sub for sub in submissions}
@@ -5718,15 +8033,20 @@ def projects_student_submissions(code, student_id):
         student=student,
         tasks=tasks,
         submissions_map=submissions_map,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
 @app.route("/projects/<code>/submissions/<int:student_id>/tasks/<int:task_id>")
 @require_user()
 def projects_submission_task_detail(code, student_id, task_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     project = Project.query.filter_by(code=code).first_or_404()
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
     submission = ProjectTaskSubmission.query.filter_by(project_id=project.id, task_id=task.id, student_id=student_id).first_or_404()
     questions = task.questions_json if isinstance(task.questions_json, list) else []
@@ -5775,7 +8095,7 @@ def projects_submission_task_detail(code, student_id, task_id):
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
         latest_attempt=latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5783,7 +8103,10 @@ def projects_submission_task_detail(code, student_id, task_id):
 @require_user()
 def projects_reviews():
     user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    mentor_group_ids = _mentor_group_ids(user)
     sort_mode = request.args.get("sort", "newest")
+    collection_filter = (request.args.get("collection") or "").strip()
     project_filter = request.args.get("project_id")
     warning_filter = request.args.get("warning_filter", "all")  # all, flagged, warned, clean
     
@@ -5792,10 +8115,19 @@ def projects_reviews():
     except ValueError:
         project_filter_id = None
     
-    query = ProjectTaskSubmission.query.filter_by(status="pending_review")
+    query = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review"),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+
+    if collection_filter:
+        query = query.join(Project, ProjectTaskSubmission.project_id == Project.id).filter(
+            Project.collection == collection_filter
+        )
     
     if project_filter_id:
-        query = query.filter_by(project_id=project_filter_id)
+        query = query.filter(ProjectTaskSubmission.project_id == project_filter_id)
     
     # Apply warning filter
     if warning_filter == "flagged":
@@ -5833,24 +8165,48 @@ def projects_reviews():
     # Add warning information for each submission
     for sub in submissions:
         sub.has_warnings_for_this_task = _submission_has_warnings(sub.student, sub) if sub.student else False
+        sub.visible_groups = _visible_groups_for_student(user, sub.student, mentor_group_ids=mentor_group_ids) if sub.student else []
     
     # Get warning counts for statistics
-    flagged_count = Student.query.filter_by(is_flagged=True).count()
-    warned_students = Student.query.filter(Student.warnings_json != None).all()
+    students_query = _apply_review_scope_to_student_query(
+        Student.query,
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+    flagged_count = students_query.filter_by(is_flagged=True).count()
+    warned_students = students_query.filter(Student.warnings_json != None).all()
     warned_count = sum(1 for s in warned_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0)
-    
-    # Mentors can see all pending reviews, regardless of group assignments.
-    projects = Project.query.order_by(Project.title.asc()).all()
+
+    projects_query = _apply_review_scope_to_submission_query(
+        Project.query.join(ProjectTaskSubmission, ProjectTaskSubmission.project_id == Project.id).filter(
+            ProjectTaskSubmission.status == "pending_review"
+        ),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+    collections = sorted(
+        {
+            (project.collection or "comp101").strip() or "comp101"
+            for project in projects_query.distinct().all()
+        },
+        key=lambda name: name.lower(),
+    )
+    if collection_filter:
+        projects_query = projects_query.filter(Project.collection == collection_filter)
+    projects = projects_query.distinct().order_by(Project.title.asc()).all()
     return render_template(
         "projects_reviews.html",
         submissions=submissions,
+        collections=collections,
+        filter_collection=collection_filter,
         filter_sort=sort_mode,
         filter_project_id=project_filter_id,
         filter_warning=warning_filter,
         flagged_count=flagged_count,
         warned_count=warned_count,
         projects=projects,
-        user=current_user(),
+        review_scope_limited=(allowed_student_ids is not None),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5858,13 +8214,20 @@ def projects_reviews():
 @require_user()
 def projects_reviews_mine():
     user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     attempts = ProjectTaskAttempt.query.filter(
         ProjectTaskAttempt.reviewed_by_user_id == user.id,
         ProjectTaskAttempt.reviewed_at != None,
     ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
+    if allowed_student_ids is not None:
+        attempts = [
+            attempt for attempt in attempts
+            if attempt.submission and attempt.submission.student_id in allowed_student_ids
+        ]
     return render_template(
         "projects_reviews_mine.html",
         attempts=attempts,
+        review_scope_limited=(allowed_student_ids is not None),
         user=current_user(),
         student_name=session.get("student_name"),
     )
@@ -5872,7 +8235,11 @@ def projects_reviews_mine():
 @app.route("/projects/reviews/<int:submission_id>")
 @require_user()
 def projects_review_detail(submission_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+        abort(403)
     task = submission.task
     project = submission.project
     questions = task.questions_json if task and isinstance(task.questions_json, list) else []
@@ -5925,7 +8292,7 @@ def projects_review_detail(submission_id):
         active_attempt=active_attempt,
         is_latest_attempt=is_latest_attempt,
         code_runs_enabled=ENABLE_BACKEND_CODE_RUNS,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -5934,11 +8301,15 @@ def projects_review_detail(submission_id):
 def projects_review_decision(submission_id):
     if not verify_csrf():
         abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     submission = ProjectTaskSubmission.query.get_or_404(submission_id)
+    if not _can_user_review_submission(user, submission, allowed_student_ids=allowed_student_ids):
+        abort(403)
     action = request.form.get("action")
     notes = (request.form.get("review_notes") or "").strip()
     attempt_id = request.form.get("attempt_id")
-    reviewer = current_user()
+    reviewer = user
     reviewed_status = None
     if action == "accept":
         reviewed_status = "accepted"
@@ -5989,6 +8360,520 @@ def projects_review_decision(submission_id):
     if review_attempt:
         return redirect(url_for("projects_reviews_mine"))
     return redirect(url_for("projects_reviews"))
+
+@app.route("/mentor/dashboard")
+@require_user()
+def mentor_dashboard():
+    user = current_user()
+    if not user or getattr(user, "role", "") != "mentor":
+        return redirect(url_for("dashboard_for_role"))
+
+    group_ids = _mentor_group_ids(user) or set()
+    groups = []
+    memberships = []
+    if group_ids:
+        groups = StudentGroup.query.filter(StudentGroup.id.in_(group_ids)).order_by(StudentGroup.name.asc()).all()
+        memberships = StudentGroupMembership.query.filter(
+            StudentGroupMembership.group_id.in_(group_ids)
+        ).options(subqueryload(StudentGroupMembership.student)).all()
+
+    allowed_student_ids = _restricted_review_student_ids(user)
+    pending_reviews = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review"),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).order_by(ProjectTaskSubmission.submitted_at.asc()).all()
+    for submission in pending_reviews:
+        submission.has_warnings_for_this_task = _submission_has_warnings(submission.student, submission) if submission.student else False
+        submission.visible_groups = _visible_groups_for_student(user, submission.student, mentor_group_ids=group_ids) if submission.student else []
+
+    pending_by_student = defaultdict(list)
+    pending_count_by_student = defaultdict(int)
+    for submission in pending_reviews:
+        if submission.student_id:
+            pending_by_student[submission.student_id].append(submission)
+            pending_count_by_student[submission.student_id] += 1
+
+    notes = []
+    if allowed_student_ids:
+        notes = StudentPrivateNote.query.filter(
+            StudentPrivateNote.student_id.in_(allowed_student_ids)
+        ).order_by(StudentPrivateNote.created_at.desc()).all()
+    note_count_by_student = defaultdict(int)
+    latest_note_by_student = {}
+    for note in notes:
+        if note.student_id:
+            note_count_by_student[note.student_id] += 1
+            latest_note_by_student.setdefault(note.student_id, note)
+
+    students_by_group = defaultdict(list)
+    distinct_student_ids = set()
+    for membership in memberships:
+        if not membership.student or not membership.student_id:
+            continue
+        students_by_group[membership.group_id].append(membership.student)
+        distinct_student_ids.add(membership.student_id)
+
+    group_rows = []
+    for group in groups:
+        student_rows = []
+        for student in sorted(students_by_group.get(group.id, []), key=lambda s: ((s.name or "").lower(), s.id)):
+            student_rows.append({
+                "student": student,
+                "pending_count": pending_count_by_student.get(student.id, 0),
+                "note_count": note_count_by_student.get(student.id, 0),
+                "latest_note": latest_note_by_student.get(student.id),
+                "latest_pending": pending_by_student.get(student.id, [None])[0],
+            })
+        group_rows.append({
+            "group": group,
+            "student_rows": student_rows,
+            "student_count": len(student_rows),
+            "pending_count": sum(row["pending_count"] for row in student_rows),
+            "notes_count": sum(row["note_count"] for row in student_rows),
+        })
+
+    return render_template(
+        "mentor_dashboard.html",
+        group_rows=group_rows,
+        pending_reviews=pending_reviews[:12],
+        recent_notes=notes[:8],
+        total_group_count=len(group_rows),
+        total_student_count=len(distinct_student_ids),
+        total_pending_count=len(pending_reviews),
+        total_note_count=len(notes),
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/admin/reviews/dashboard")
+@require_user()
+def admin_review_dashboard():
+    user = current_user()
+    if not user or getattr(user, "role", "") == "mentor":
+        abort(403)
+
+    allowed_student_ids = _restricted_review_student_ids(user)
+    now = datetime.utcnow()
+    last_7_days = now - timedelta(days=7)
+    last_30_days = now - timedelta(days=30)
+
+    pending_query = _apply_review_scope_to_submission_query(
+        ProjectTaskSubmission.query.filter_by(status="pending_review").options(
+            subqueryload(ProjectTaskSubmission.project),
+            subqueryload(ProjectTaskSubmission.task),
+            subqueryload(ProjectTaskSubmission.student)
+                .subqueryload(Student.group_memberships)
+                .subqueryload(StudentGroupMembership.group),
+        ),
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
+    pending_submissions = pending_query.order_by(ProjectTaskSubmission.submitted_at.asc()).all()
+
+    reviewed_attempts = []
+    reviewed_query = ProjectTaskAttempt.query.filter(
+        ProjectTaskAttempt.reviewed_at != None
+    ).join(
+        ProjectTaskSubmission,
+        ProjectTaskAttempt.submission_id == ProjectTaskSubmission.id,
+    )
+    if allowed_student_ids is not None:
+        if allowed_student_ids:
+            reviewed_query = reviewed_query.filter(ProjectTaskSubmission.student_id.in_(allowed_student_ids))
+        else:
+            reviewed_query = None
+    if reviewed_query is not None:
+        reviewed_attempts = reviewed_query.options(
+            subqueryload(ProjectTaskAttempt.reviewer),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.project),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.task),
+            subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.student)
+                .subqueryload(Student.group_memberships)
+                .subqueryload(StudentGroupMembership.group),
+        ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
+
+    student_groups_cache = {}
+
+    def student_groups_label(student):
+        if not student or not student.id:
+            return "—"
+        cached = student_groups_cache.get(student.id)
+        if cached is not None:
+            return cached
+        groups = _visible_groups_for_student(user, student)
+        label = ", ".join(group.name for group in groups) if groups else "—"
+        student_groups_cache[student.id] = label
+        return label
+
+    reviewer_stats = {}
+    project_stats = {}
+    student_stats = {}
+    reviewed_waits = []
+    reviewed_student_ids = set()
+    reviewed_project_ids = set()
+    accepted_review_count = 0
+    rejected_review_count = 0
+    reviews_last_7_days = 0
+    reviews_last_30_days = 0
+    recent_review_rows = []
+
+    for attempt in reviewed_attempts:
+        submission = attempt.submission
+        student = submission.student if submission else None
+        project = submission.project if submission else None
+        task = submission.task if submission else None
+        reviewer = attempt.reviewer
+        wait_seconds = _review_wait_seconds(attempt)
+        if wait_seconds is not None:
+            reviewed_waits.append(wait_seconds)
+        if student and student.id:
+            reviewed_student_ids.add(student.id)
+        if project and project.id:
+            reviewed_project_ids.add(project.id)
+        if attempt.status == "accepted":
+            accepted_review_count += 1
+        elif attempt.status == "rejected":
+            rejected_review_count += 1
+        if attempt.reviewed_at and attempt.reviewed_at >= last_7_days:
+            reviews_last_7_days += 1
+        if attempt.reviewed_at and attempt.reviewed_at >= last_30_days:
+            reviews_last_30_days += 1
+
+        reviewer_key = reviewer.id if reviewer and reviewer.id else 0
+        reviewer_row = reviewer_stats.setdefault(reviewer_key, {
+            "reviewer_name": reviewer.name if reviewer else "Unknown reviewer",
+            "role_label": (getattr(reviewer, "role", "") or "staff").replace("_", " ").title() if reviewer else "Unknown",
+            "total_reviews": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "recent_7d": 0,
+            "last_reviewed_at": None,
+            "student_ids": set(),
+            "project_ids": set(),
+        })
+        reviewer_row["total_reviews"] += 1
+        if attempt.status == "accepted":
+            reviewer_row["accepted_count"] += 1
+        elif attempt.status == "rejected":
+            reviewer_row["rejected_count"] += 1
+        if wait_seconds is not None:
+            reviewer_row["wait_values"].append(wait_seconds)
+        if attempt.reviewed_at and attempt.reviewed_at >= last_7_days:
+            reviewer_row["recent_7d"] += 1
+        if attempt.reviewed_at and (
+            reviewer_row["last_reviewed_at"] is None or attempt.reviewed_at > reviewer_row["last_reviewed_at"]
+        ):
+            reviewer_row["last_reviewed_at"] = attempt.reviewed_at
+        if student and student.id:
+            reviewer_row["student_ids"].add(student.id)
+        if project and project.id:
+            reviewer_row["project_ids"].add(project.id)
+
+        project_key = project.id if project and project.id else 0
+        project_row = project_stats.setdefault(project_key, {
+            "project_title": project.title if project else "Unknown project",
+            "pending_count": 0,
+            "reviewed_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "student_ids": set(),
+            "last_reviewed_at": None,
+            "oldest_pending_seconds": None,
+        })
+        project_row["reviewed_count"] += 1
+        if attempt.status == "accepted":
+            project_row["accepted_count"] += 1
+        elif attempt.status == "rejected":
+            project_row["rejected_count"] += 1
+        if wait_seconds is not None:
+            project_row["wait_values"].append(wait_seconds)
+        if student and student.id:
+            project_row["student_ids"].add(student.id)
+        if attempt.reviewed_at and (
+            project_row["last_reviewed_at"] is None or attempt.reviewed_at > project_row["last_reviewed_at"]
+        ):
+            project_row["last_reviewed_at"] = attempt.reviewed_at
+
+        if student and student.id:
+            student_row = student_stats.setdefault(student.id, {
+                "student_name": student.name,
+                "student_email": student.email,
+                "groups_label": student_groups_label(student),
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "wait_values": [],
+                "last_reviewed_at": None,
+                "last_status": None,
+            })
+            student_row["reviewed_count"] += 1
+            if attempt.status == "accepted":
+                student_row["accepted_count"] += 1
+            elif attempt.status == "rejected":
+                student_row["rejected_count"] += 1
+            if wait_seconds is not None:
+                student_row["wait_values"].append(wait_seconds)
+            if attempt.reviewed_at and (
+                student_row["last_reviewed_at"] is None or attempt.reviewed_at > student_row["last_reviewed_at"]
+            ):
+                student_row["last_reviewed_at"] = attempt.reviewed_at
+                student_row["last_status"] = attempt.status
+
+        if len(recent_review_rows) < 24:
+            review_notes = (attempt.review_notes or (submission.review_notes if submission else "") or "").strip()
+            if len(review_notes) > 140:
+                review_notes = review_notes[:137].rstrip() + "..."
+            recent_review_rows.append({
+                "reviewed_at": attempt.reviewed_at,
+                "reviewer_name": reviewer.name if reviewer else "Unknown reviewer",
+                "student_name": submission.student_name if submission and submission.student_name else "Unknown",
+                "student_groups": student_groups_label(student),
+                "project_title": project.title if project else "—",
+                "task_title": task.title if task else "—",
+                "attempt_number": attempt.attempt_number,
+                "status": attempt.status or "reviewed",
+                "wait_display": _format_duration(wait_seconds) if wait_seconds is not None else "—",
+                "review_notes": review_notes,
+                "submission_id": submission.id if submission else None,
+            })
+
+    pending_queue_rows = []
+    queue_waits = []
+    pending_student_ids = set()
+    pending_project_ids = set()
+    pending_24h_count = 0
+    pending_72h_count = 0
+    oldest_pending_seconds = None
+
+    for submission in pending_submissions:
+        student = submission.student
+        project = submission.project
+        task = submission.task
+        wait_seconds = _pending_review_age_seconds(submission, now=now)
+        if wait_seconds is not None:
+            queue_waits.append(wait_seconds)
+            if wait_seconds >= 24 * 3600:
+                pending_24h_count += 1
+            if wait_seconds >= 72 * 3600:
+                pending_72h_count += 1
+            oldest_pending_seconds = max(oldest_pending_seconds or 0, wait_seconds)
+        if student and student.id:
+            pending_student_ids.add(student.id)
+        if project and project.id:
+            pending_project_ids.add(project.id)
+
+        project_key = project.id if project and project.id else 0
+        project_row = project_stats.setdefault(project_key, {
+            "project_title": project.title if project else "Unknown project",
+            "pending_count": 0,
+            "reviewed_count": 0,
+            "accepted_count": 0,
+            "rejected_count": 0,
+            "wait_values": [],
+            "student_ids": set(),
+            "last_reviewed_at": None,
+            "oldest_pending_seconds": None,
+        })
+        project_row["pending_count"] += 1
+        if student and student.id:
+            project_row["student_ids"].add(student.id)
+        if wait_seconds is not None:
+            project_row["oldest_pending_seconds"] = max(project_row["oldest_pending_seconds"] or 0, wait_seconds)
+
+        if student and student.id:
+            student_row = student_stats.setdefault(student.id, {
+                "student_name": student.name,
+                "student_email": student.email,
+                "groups_label": student_groups_label(student),
+                "pending_count": 0,
+                "reviewed_count": 0,
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "wait_values": [],
+                "last_reviewed_at": None,
+                "last_status": None,
+            })
+            student_row["pending_count"] += 1
+
+        if len(pending_queue_rows) < 18:
+            pending_queue_rows.append({
+                "submitted_at": submission.submitted_at,
+                "student_name": submission.student_name or "Unknown",
+                "student_groups": student_groups_label(student),
+                "project_title": project.title if project else "—",
+                "task_title": task.title if task else "—",
+                "waiting_display": _format_duration(wait_seconds) if wait_seconds is not None else "—",
+                "submission_id": submission.id,
+            })
+
+    total_reviews = len(reviewed_attempts)
+    avg_wait_seconds = (sum(reviewed_waits) / len(reviewed_waits)) if reviewed_waits else None
+    median_wait_seconds = _median(reviewed_waits)
+    avg_pending_seconds = (sum(queue_waits) / len(queue_waits)) if queue_waits else None
+    daily_review_rate = reviews_last_7_days / 7.0 if reviews_last_7_days else 0.0
+    backlog_days = (len(pending_submissions) / daily_review_rate) if daily_review_rate > 0 else None
+
+    reviewer_rows = []
+    max_reviewer_total = max((row["total_reviews"] for row in reviewer_stats.values()), default=0)
+    for row in reviewer_stats.values():
+        wait_values = row.pop("wait_values")
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["median_wait_display"] = _format_duration(_median(wait_values)) if wait_values else "—"
+        row["student_count"] = len(row.pop("student_ids"))
+        row["project_count"] = len(row.pop("project_ids"))
+        row["acceptance_rate"] = (row["accepted_count"] / row["total_reviews"] * 100.0) if row["total_reviews"] else 0.0
+        row["share_pct"] = (row["total_reviews"] / max_reviewer_total * 100.0) if max_reviewer_total else 0.0
+        reviewer_rows.append(row)
+    reviewer_rows.sort(
+        key=lambda row: (
+            -row["total_reviews"],
+            -row["recent_7d"],
+            (row["reviewer_name"] or "").lower(),
+        )
+    )
+
+    project_rows = []
+    max_project_load = max(
+        (row["pending_count"] + row["reviewed_count"] for row in project_stats.values()),
+        default=0,
+    )
+    for row in project_stats.values():
+        wait_values = row.pop("wait_values")
+        total_project_activity = row["pending_count"] + row["reviewed_count"]
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["student_count"] = len(row.pop("student_ids"))
+        row["acceptance_rate"] = (row["accepted_count"] / row["reviewed_count"] * 100.0) if row["reviewed_count"] else 0.0
+        row["share_pct"] = (total_project_activity / max_project_load * 100.0) if max_project_load else 0.0
+        row["oldest_pending_display"] = _format_duration(row["oldest_pending_seconds"]) if row["oldest_pending_seconds"] is not None else "—"
+        row["activity_total"] = total_project_activity
+        project_rows.append(row)
+    project_rows.sort(
+        key=lambda row: (
+            -row["pending_count"],
+            -row["reviewed_count"],
+            (row["project_title"] or "").lower(),
+        )
+    )
+
+    student_rows = []
+    max_student_load = max(
+        (row["pending_count"] + row["reviewed_count"] for row in student_stats.values()),
+        default=0,
+    )
+    for row in student_stats.values():
+        wait_values = row.pop("wait_values")
+        total_student_activity = row["pending_count"] + row["reviewed_count"]
+        avg_row_wait = (sum(wait_values) / len(wait_values)) if wait_values else None
+        row["avg_wait_display"] = _format_duration(avg_row_wait) if avg_row_wait is not None else "—"
+        row["share_pct"] = (total_student_activity / max_student_load * 100.0) if max_student_load else 0.0
+        row["activity_total"] = total_student_activity
+        student_rows.append(row)
+    student_rows.sort(
+        key=lambda row: (
+            -row["pending_count"],
+            -row["reviewed_count"],
+            (row["student_name"] or "").lower(),
+        )
+    )
+
+    return render_template(
+        "admin_review_dashboard.html",
+        total_pending_count=len(pending_submissions),
+        total_reviewed_count=total_reviews,
+        unique_reviewer_count=sum(1 for row in reviewer_rows if row["reviewer_name"] != "Unknown reviewer"),
+        unique_student_count=len(reviewed_student_ids),
+        reviewed_project_count=len(reviewed_project_ids),
+        queue_student_count=len(pending_student_ids),
+        queue_project_count=len(pending_project_ids),
+        accepted_review_count=accepted_review_count,
+        rejected_review_count=rejected_review_count,
+        acceptance_rate=((accepted_review_count / total_reviews) * 100.0) if total_reviews else 0.0,
+        avg_wait_display=_format_duration(avg_wait_seconds) if avg_wait_seconds is not None else "—",
+        median_wait_display=_format_duration(median_wait_seconds) if median_wait_seconds is not None else "—",
+        avg_pending_display=_format_duration(avg_pending_seconds) if avg_pending_seconds is not None else "—",
+        oldest_pending_display=_format_duration(oldest_pending_seconds) if oldest_pending_seconds is not None else "—",
+        pending_24h_count=pending_24h_count,
+        pending_72h_count=pending_72h_count,
+        reviews_last_7_days=reviews_last_7_days,
+        reviews_last_30_days=reviews_last_30_days,
+        backlog_days=backlog_days,
+        reviewer_rows=reviewer_rows[:10],
+        project_rows=project_rows[:10],
+        student_rows=student_rows[:12],
+        pending_queue_rows=pending_queue_rows,
+        recent_review_rows=recent_review_rows,
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.route("/students/<int:student_id>/notes", methods=["GET", "POST"])
+@require_user()
+def student_private_notes(student_id):
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    mentor_group_ids = _mentor_group_ids(user)
+    student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+
+    error = None
+    if request.method == "POST":
+        if not verify_csrf():
+            abort(400, "bad csrf")
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            error = "Note text is required."
+        else:
+            db.session.add(StudentPrivateNote(
+                student_id=student.id,
+                author_user_id=(user.id if user else None),
+                body=body,
+            ))
+            db.session.commit()
+            return redirect(url_for("student_private_notes", student_id=student.id))
+
+    notes = StudentPrivateNote.query.filter_by(student_id=student.id).order_by(StudentPrivateNote.created_at.desc()).all()
+    pending_reviews = ProjectTaskSubmission.query.filter_by(
+        student_id=student.id,
+        status="pending_review",
+    ).order_by(ProjectTaskSubmission.submitted_at.desc()).all()
+    groups = _visible_groups_for_student(user, student, mentor_group_ids=mentor_group_ids)
+
+    return render_template(
+        "student_private_notes.html",
+        student=student,
+        notes=notes,
+        pending_reviews=pending_reviews,
+        groups=groups,
+        error=error,
+        current_user_id=(user.id if user else None),
+        unrestricted_note_delete=(getattr(user, "role", "") != "mentor"),
+        user=user,
+        student_name=session.get("student_name"),
+    )
+
+@app.post("/students/<int:student_id>/notes/<int:note_id>/delete")
+@require_user()
+def student_private_note_delete(student_id, note_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    note = StudentPrivateNote.query.filter_by(id=note_id, student_id=student.id).first_or_404()
+    if not _can_user_manage_private_note(user, note, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    db.session.delete(note)
+    db.session.commit()
+    return redirect(url_for("student_private_notes", student_id=student.id))
 
 # --------------------------------------------------------------------
 # Gradebook
@@ -6203,18 +9088,26 @@ def student_grades():
 @require_user()
 def warnings_list():
     """View all students with warnings or flags."""
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    students_query = _apply_review_scope_to_student_query(
+        Student.query,
+        user,
+        allowed_student_ids=allowed_student_ids,
+    )
     # Get all flagged students
-    flagged = Student.query.filter_by(is_flagged=True).order_by(Student.name.asc()).all()
+    flagged = students_query.filter_by(is_flagged=True).order_by(Student.name.asc()).all()
     
     # Get students with warnings but not flagged
-    all_students = Student.query.filter(Student.warnings_json != None).order_by(Student.name.asc()).all()
+    all_students = students_query.filter(Student.warnings_json != None).order_by(Student.name.asc()).all()
     warned = [s for s in all_students if not s.is_flagged and s.warnings_json and len(s.warnings_json) > 0]
     
     return render_template(
         "warnings_list.html",
         flagged_students=flagged,
         warned_students=warned,
-        user=current_user(),
+        review_scope_limited=_review_scope_limited(user, allowed_student_ids=allowed_student_ids),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -6222,7 +9115,11 @@ def warnings_list():
 @require_user()
 def warnings_student_detail(student_id):
     """View detailed warnings for a specific student."""
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     warnings = student.warnings_json if isinstance(student.warnings_json, list) else []
     
     # Get student's submissions for context
@@ -6235,7 +9132,7 @@ def warnings_student_detail(student_id):
         warnings=warnings,
         exam_submissions=exam_submissions,
         task_submissions=task_submissions,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -6246,7 +9143,11 @@ def warnings_flag_student(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     notes = (request.form.get("notes") or "").strip()
     
     student.is_flagged = True
@@ -6262,7 +9163,11 @@ def warnings_unflag_student(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     student.is_flagged = False
     student.flag_notes = None
     db.session.commit()
@@ -6276,7 +9181,11 @@ def warnings_add_manual(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     warning_type = (request.form.get("type") or "manual").strip()
     description = (request.form.get("description") or "").strip()
     severity = (request.form.get("severity") or "medium").strip()
@@ -6296,7 +9205,11 @@ def warnings_clear_all(student_id):
     if not verify_csrf():
         abort(400, "bad csrf")
     
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
     student = Student.query.get_or_404(student_id)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
     student.warnings_json = []
     student.is_flagged = False
     student.flag_notes = None
@@ -6311,6 +9224,11 @@ def thanks():
 @app.route("/dashboard")
 @require_user()
 def dashboard_for_role():
+    user = current_user()
+    if user and getattr(user, "role", "") == "mentor":
+        return redirect(url_for("mentor_dashboard"))
+    if user and getattr(user, "role", "") == "admin":
+        return redirect(url_for("admin_review_dashboard"))
     return redirect(url_for("index"))
 
 @app.route("/student")

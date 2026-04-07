@@ -9,6 +9,11 @@
       {% set qid = (q.id|string) if q.id is defined else (q.get("id")|string) %}
       {% set answer = answers.get(qid) if answers else "" %}
       {% set answer_val = "" if answer is none else (answer|string) %}
+      {% set plot_answer = answer if answer is mapping else None %}
+      {% set plot_code = plot_answer.code if plot_answer and plot_answer.code is defined else answer_val %}
+      {% set plot_artifact = plot_answer.artifact if plot_answer and plot_answer.artifact is defined and plot_answer.artifact is mapping else None %}
+      {% set plot_artifact_status = plot_answer.artifact_status if plot_answer and plot_answer.artifact_status is defined else '' %}
+      {% set plot_artifact_size = plot_answer.artifact_size if plot_answer and plot_answer.artifact_size is defined else 0 %}
       {% set qtype = q.type or q.get("type") %}
       {% set qlogs = logs_by_question.get(qid, []) %}
       {% set grading = grading_by_question.get(qid) if grading_by_question else None %}
@@ -42,17 +47,31 @@
         {% if q.code_snippet %}
           <pre style="margin-top:10px; white-space:pre-wrap; background:#0f172a; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ q.code_snippet }}</pre>
         {% endif %}
-        {% if qtype == "code" %}
+        {% if qtype in ("code", "plot") %}
           {% if q.statement %}
             <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px dashed #334155;">
-              <strong>Problem statement</strong>
+              <strong>{{ "Plot instructions" if qtype == "plot" else "Problem statement" }}</strong>
               <div class="markdown-block muted" style="margin:6px 0 0 0;">{{ q.statement|markdown }}</div>
             </div>
           {% endif %}
+        {% endif %}
+        {% if qtype == "code" %}
           {% if q.mode == "function" and q.function_signature %}
             <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
               <div class="muted">Signature</div>
               <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ q.function_signature }}</pre>
+            </div>
+          {% endif %}
+          {% if q.mode == "class" and q.class_signature %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
+              <div class="muted">Class</div>
+              <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ q.class_signature }}</pre>
+            </div>
+          {% endif %}
+          {% if q.mode == "class" and q.class_init %}
+            <div style="margin-top:10px; padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0f172a;">
+              <div class="muted">Init</div>
+              <pre style="margin:6px 0 0 0; background:#0b1220; padding:8px; border-radius:8px; border:1px solid #1f2937;">obj = {{ q.class_init }}</pre>
             </div>
           {% endif %}
         {% endif %}
@@ -90,6 +109,48 @@
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "—" }}</pre>
           {% elif qtype == "code" %}
             <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ answer_val or "# no submission" }}</pre>
+          {% elif qtype == "plot" %}
+            <pre style="margin-top:6px; white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ plot_code or "# no submission" }}</pre>
+            {% if plot_artifact and submission_id %}
+              <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+                <div class="muted" style="font-size:0.9rem;">Submitted plot</div>
+                <img src="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id) }}" alt="Submitted plot" style="display:block; max-width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="gap:8px; flex-wrap:wrap; align-items:center;">
+                  {% if plot_artifact.width and plot_artifact.height %}
+                    <span class="muted" style="font-size:0.9rem;">{{ plot_artifact.width }}×{{ plot_artifact.height }}</span>
+                  {% endif %}
+                  {% if plot_artifact.size %}
+                    <span class="muted" style="font-size:0.9rem;">{{ (plot_artifact.size // 1024) }} KB</span>
+                  {% endif %}
+                  {% if plot_artifact.uploaded_at %}
+                    <span class="muted" style="font-size:0.9rem;">{{ plot_artifact.uploaded_at }}</span>
+                  {% endif %}
+                  <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=qid, attempt_id=attempt_id, download=1) }}">Download PNG</a>
+                </div>
+              </div>
+            {% elif plot_artifact_status == "too_large" %}
+              <div style="margin-top:10px; display:flex; flex-direction:column; gap:6px;">
+                <div class="muted" style="font-size:0.9rem;">No stored PNG</div>
+                <p class="muted" style="margin:0;">The generated PNG exceeded {{ plot_artifact_max_mb }} MB and was not stored. Review this submission from the code only.</p>
+                {% if plot_artifact_size %}
+                  <div class="muted" style="font-size:0.9rem;">Generated PNG size: {{ (plot_artifact_size // 1024) }} KB</div>
+                {% endif %}
+              </div>
+            {% else %}
+              <p class="muted" style="margin-top:8px;">No plot artifact submitted.</p>
+            {% endif %}
+            {% if plot_answer and plot_answer.stdout is defined and plot_answer.stdout %}
+              <div style="margin-top:10px;">
+                <div class="muted">Stdout</div>
+                <pre style="white-space:pre-wrap; background:#0b1220; padding:10px; border-radius:10px; border:1px solid #1f2937;">{{ plot_answer.stdout }}</pre>
+              </div>
+            {% endif %}
+            {% if plot_answer and plot_answer.error is defined and plot_answer.error %}
+              <div style="margin-top:10px;">
+                <div class="muted">Runner message</div>
+                <pre style="white-space:pre-wrap; background:#1f2937; padding:10px; border-radius:10px; border:1px solid #334155;">{{ plot_answer.error }}</pre>
+              </div>
+            {% endif %}
           {% elif qtype == "file" %}
             {% set file_info = answer if answer is mapping else None %}
             {% if file_info %}
@@ -189,6 +250,8 @@
               {% else %}
                 <p class="muted" style="margin:6px 0 0 0;">No tests configured for this code question.</p>
               {% endif %}
+            {% elif qtype == "plot" %}
+              <p class="muted" style="margin:6px 0 0 0;">Manual review. Check the submitted code and PNG against the plotting instructions.</p>
             {% elif qtype == "file" %}
               <p class="muted" style="margin:6px 0 0 0;">Upload a {{ q.accept or ".zip" }} file (max {{ q.max_mb or 5 }} MB).</p>
             {% else %}
@@ -217,7 +280,9 @@
               <div class="muted" style="margin-top:8px; font-size:0.9rem;">
                 Samples: {{ visible_passed }}/{{ visible_cases|length }} passed • Hidden: {{ hidden_passed }}/{{ hidden_cases|length }} passed
               </div>
-              {% set input_label = "Call" if q.mode == "function" else "Input" %}
+              {% set input_label = "Method call" if q.mode == "class" else ("Call" if q.mode == "function" else "Input") %}
+              {% set output_label = "Result" if q.mode in ("function", "class") else "Output" %}
+              {% set expected_label = "Expected result" if q.mode in ("function", "class") else "Expected" %}
               {% if visible_cases %}
                 <div style="margin-top:10px;">
                   <div class="muted" style="font-size:0.85rem;">Sample tests</div>
@@ -236,17 +301,45 @@
                         <strong>{{ case.name or "Sample" }}</strong>
                         <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
                       </div>
+                      {% if case.init_call %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Init</div>
+                          <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.init_call }}</pre>
+                        </div>
+                      {% endif %}
                       <div style="margin-top:8px;">
                         <div class="muted">{{ input_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Output</div>
+                        <div class="muted">{{ output_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Expected</div>
+                        <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
+                      </div>
+                      {% set compare_mode = case.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
+                      <div class="muted" style="margin-top:8px;">
+                        {% if q.mode in ("function", "class") %}
+                          {% if compare_mode == "numeric_tolerance" %}
+                            Comparison: numeric tolerance ({{ case.tolerance or "1e-6" }})
+                          {% elif compare_mode == "contains" %}
+                            Comparison: result text contains
+                          {% else %}
+                            Comparison: exact result
+                          {% endif %}
+                        {% else %}
+                          {% if compare_mode == "exact" %}
+                            Comparison: exact text
+                          {% elif compare_mode == "normalize_whitespace" %}
+                            Comparison: normalized whitespace
+                          {% elif compare_mode == "contains" %}
+                            Comparison: contains text
+                          {% else %}
+                            Comparison: ignore trailing whitespace
+                          {% endif %}
+                        {% endif %}
                       </div>
                       {% if case.plot_images %}
                         <div style="margin-top:8px;">
@@ -284,17 +377,45 @@
                         <strong>{{ case.name or "Hidden test" }}</strong>
                         <span style="font-size:0.85rem; padding:4px 10px; border-radius:20px; border:1px solid {{ status_color }}; color:{{ status_color }};">{{ status }}</span>
                       </div>
+                      {% if case.init_call %}
+                        <div style="margin-top:8px;">
+                          <div class="muted">Init</div>
+                          <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.init_call }}</pre>
+                        </div>
+                      {% endif %}
                       <div style="margin-top:8px;">
                         <div class="muted">{{ input_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.input or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Output</div>
+                        <div class="muted">{{ output_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.output or "" }}</pre>
                       </div>
                       <div style="margin-top:8px;">
-                        <div class="muted">Expected</div>
+                        <div class="muted">{{ expected_label }}</div>
                         <pre style="white-space:pre-wrap; background:#0f172a; padding:8px; border-radius:8px; border:1px solid #1f2937;">{{ case.expected or "" }}</pre>
+                      </div>
+                      {% set compare_mode = case.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
+                      <div class="muted" style="margin-top:8px;">
+                        {% if q.mode in ("function", "class") %}
+                          {% if compare_mode == "numeric_tolerance" %}
+                            Comparison: numeric tolerance ({{ case.tolerance or "1e-6" }})
+                          {% elif compare_mode == "contains" %}
+                            Comparison: result text contains
+                          {% else %}
+                            Comparison: exact result
+                          {% endif %}
+                        {% else %}
+                          {% if compare_mode == "exact" %}
+                            Comparison: exact text
+                          {% elif compare_mode == "normalize_whitespace" %}
+                            Comparison: normalized whitespace
+                          {% elif compare_mode == "contains" %}
+                            Comparison: contains text
+                          {% else %}
+                            Comparison: ignore trailing whitespace
+                          {% endif %}
+                        {% endif %}
                       </div>
                       {% if case.plot_images %}
                         <div style="margin-top:8px;">

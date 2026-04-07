@@ -8,11 +8,14 @@
       <h1 style="margin: 0;">{{ student.name }}</h1>
       <p style="margin: 5px 0 0; color: #94a3b8;">{{ student.email }}</p>
     </div>
-    {% if student.is_flagged %}
-    <span style="background: #637FBE; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
-      🚩 FLAGGED
-    </span>
-    {% endif %}
+    <div class="row" style="gap:8px;">
+      <a class="btn" href="{{ url_for('student_private_notes', student_id=student.id) }}">Private notes</a>
+      {% if student.is_flagged %}
+      <span style="background: #637FBE; color: white; padding: 8px 16px; border-radius: 6px; font-weight: bold;">
+        🚩 FLAGGED
+      </span>
+      {% endif %}
+    </div>
   </div>
 
   <!-- Flag Actions -->

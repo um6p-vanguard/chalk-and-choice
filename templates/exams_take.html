@@ -34,6 +34,7 @@
   {% endif %}
 </div>
 <div class="sp"></div>
+<<<<<<< HEAD
 <div class="card"
      data-exam-take
      data-run-log-url="{{ log_url or '' }}"
@@ -43,6 +44,9 @@
      data-current-question="{{ question.id if question else '' }}"
      data-current-question-type="{{ question.type if question else '' }}"
      data-current-question-index="{{ (current_index + 1) if question else '' }}">
+=======
+<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}" data-artifact-namespace="{{ exam.kind }}:{{ exam.code }}:{{ submission_id if submission_id is defined and submission_id else 'draft' }}" data-plot-artifact-max-bytes="{{ plot_artifact_max_bytes }}" data-plot-artifact-max-mb="{{ plot_artifact_max_mb }}">
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
@@ -71,6 +75,7 @@
     <input type="hidden" name="csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="q_index" value="{{ current_index }}">
     <input type="hidden" name="nav_action_auto" value="">
+    <button type="submit" name="nav_action" value="submit" data-auto-submit style="display:none;" aria-hidden="true" tabindex="-1">Auto submit</button>
     {% if question %}
       {% set q = question %}
       <div style="border:1px solid #1f2937; border-radius:10px; padding:16px; margin-bottom:16px;">
@@ -133,11 +138,14 @@
         {% elif q.type == "code" %}
           {% set raw_samples = q.samples or [] %}
           {% set public_samples = raw_samples | selectattr('hidden','ne', True) | list %}
+          {% set current_starter = q.starter or "" %}
           {% set prior_code = previous_answers.get(q.id) %}
-          {% set starter = prior_code if prior_code else (q.starter or "") %}
-          <div class="code-question-shell" style="display:flex; flex-direction:column; gap:12px;">
-            <div class="code-question-main" style="display:flex; flex-wrap:wrap; gap:12px;">
-              <div class="code-question-description" style="flex:1 1 280px; min-width:260px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+          {% set has_saved_code = prior_code not in (None, "") %}
+          {% set editor_code = prior_code if has_saved_code else current_starter %}
+          {% set saved_code_differs = has_saved_code and editor_code != current_starter %}
+          <div class="code-question-shell">
+            <div class="code-question-main">
+              <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 {% if q.statement %}
                   <div style="margin-bottom:10px;">
                     <strong>Problem statement</strong>
@@ -150,13 +158,28 @@
                     <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.function_signature }}</pre>
                   </div>
                 {% endif %}
+                {% if q.mode == "class" and q.class_signature %}
+                  <div style="margin-bottom:10px; padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                    <strong>Implement</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">{{ q.class_signature }}</pre>
+                  </div>
+                {% endif %}
+                {% if q.mode == "class" and q.class_init %}
+                  <div style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0f172a;">
+                    <strong>Before each test</strong>
+                    <pre style="margin-top:6px; background:#0b1220; padding:8px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">obj = {{ q.class_init }}</pre>
+                  </div>
+                {% endif %}
               </div>
-              <div class="code-question-editor" style="flex:1 1 360px; min-width:320px; padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+              <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
-                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ starter|e }}">Reset code</button>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
                 </div>
-                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ starter }}</textarea>
+                {% if saved_code_differs %}
+                  <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
+                {% endif %}
+                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
               </div>
             </div>
 
@@ -168,22 +191,49 @@
                     <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-sample-summary="{{ q.id }}">Not run</span>
                   </div>
                   {% if public_samples %}
-                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
+                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
                   {% endif %}
                 </div>
                 {% if public_samples %}
                   <ul style="list-style:none; padding:0; margin:10px 0; display:grid; gap:8px;">
                     {% for sample in public_samples %}
                       <li style="border:1px dashed #334155; border-radius:8px; padding:8px;">
+                        {% set compare_mode = sample.compare_mode or ('exact' if q.mode in ('function', 'class') else 'rstrip') %}
                         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
                           <div><strong>{{ sample.name or ('Sample ' ~ loop.index) }}</strong></div>
                           {% if q.mode == "function" %}
                             <span class="muted" style="font-size:0.85rem;">Call: <code>{{ sample.call or sample.input }}</code></span>
+                          {% elif q.mode == "class" %}
+                            <span class="muted" style="font-size:0.85rem;">Method call: <code>{{ sample.call or sample.input }}</code></span>
                           {% else %}
                             <span class="muted" style="font-size:0.85rem;">Std in</span>
                           {% endif %}
                         </div>
-                        {% if q.mode != "function" and sample.input %}
+                        {% if q.mode == "class" and (sample.init_call or q.class_init) %}
+                          <div class="muted" style="margin-top:6px; font-size:0.85rem;">Init: <code>{{ sample.init_call or q.class_init }}</code></div>
+                        {% endif %}
+                        <div class="muted" style="margin-top:6px; font-size:0.85rem;">
+                          {% if q.mode in ("function", "class") %}
+                            {% if compare_mode == "numeric_tolerance" %}
+                              Comparison: numeric tolerance ({{ sample.tolerance or "1e-6" }})
+                            {% elif compare_mode == "contains" %}
+                              Comparison: result text contains
+                            {% else %}
+                              Comparison: exact result
+                            {% endif %}
+                          {% else %}
+                            {% if compare_mode == "exact" %}
+                              Comparison: exact text
+                            {% elif compare_mode == "normalize_whitespace" %}
+                              Comparison: normalized whitespace
+                            {% elif compare_mode == "contains" %}
+                              Comparison: contains text
+                            {% else %}
+                              Comparison: ignore trailing whitespace
+                            {% endif %}
+                          {% endif %}
+                        </div>
+                        {% if q.mode not in ("function", "class") and sample.input %}
                           <pre style="margin-top:6px; background:#0b1220; padding:6px; border-radius:6px; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; white-space:pre-wrap;">{{ sample.input }}</pre>
                         {% endif %}
                       </li>
@@ -203,15 +253,117 @@
                 {% if q.mode == "function" %}
                   <label style="display:block; margin-top:6px;">Function call</label>
                   <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                {% elif q.mode == "class" %}
+                  <label style="display:block; margin-top:6px;">Method call / expression</label>
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="obj.my_method(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                  {% if q.class_init %}
+                    <div class="muted" style="margin-top:6px;">A fresh object is created before each run: <code>obj = {{ q.class_init }}</code></div>
+                  {% endif %}
                 {% else %}
                   <label style="display:block; margin-top:6px;">Standard input</label>
                   <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
                 {% endif %}
-                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
                 <div data-custom-results="{{ q.id }}" class="code-custom-results" style="margin-top:8px; font-size:0.95rem;"></div>
               </div>
             </div>
           </div>
+        {% elif q.type == "plot" %}
+          {% set prior_plot = previous_answers.get(q.id) %}
+          {% set prior_plot_data = prior_plot if prior_plot is mapping else None %}
+          {% set persisted_plot = (persisted_answers.get(q.id) if persisted_answers is defined and persisted_answers else None) %}
+          {% set persisted_plot_data = persisted_plot if persisted_plot is mapping else None %}
+          {% set current_starter = q.starter or "" %}
+          {% set plot_code = (prior_plot_data.code if prior_plot_data and prior_plot_data.code is defined else prior_plot) or "" %}
+          {% set has_saved_plot_code = plot_code not in (None, "") %}
+          {% set editor_code = plot_code if has_saved_plot_code else current_starter %}
+          {% set saved_plot_differs = has_saved_plot_code and editor_code != current_starter %}
+          {% set plot_artifact = persisted_plot_data.artifact if persisted_plot_data and persisted_plot_data.artifact is defined and persisted_plot_data.artifact is mapping else None %}
+          {% set plot_artifact_status = persisted_plot_data.artifact_status if persisted_plot_data and persisted_plot_data.artifact_status is defined else '' %}
+          {% set plot_artifact_size = persisted_plot_data.artifact_size if persisted_plot_data and persisted_plot_data.artifact_size is defined else 0 %}
+          {% set plot_preview_url = None %}
+          {% if exam.kind == "project_task" and plot_artifact and submission_id is defined and submission_id %}
+            {% set plot_preview_url = url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id) %}
+          {% endif %}
+          <div class="code-question-shell">
+            <div class="code-question-main">
+              <div class="code-question-description" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                {% if q.statement %}
+                  <div style="margin-bottom:10px;">
+                    <strong>Plot instructions</strong>
+                    <div class="markdown-block muted" style="margin:6px 0 0 0;" data-markdown-statement="{{ q.id }}">{{ q.statement }}</div>
+                  </div>
+                {% endif %}
+                <div style="padding:10px; border:1px dashed #334155; border-radius:8px; background:#0f172a;">
+                  <div class="muted" style="font-size:0.9rem;">Manual review task</div>
+                  <p class="muted" style="margin:6px 0 0 0;">Run the code to refresh the latest PNG preview. The current preview is uploaded only when you submit. If the PNG exceeds {{ plot_artifact_max_mb }} MB, only the code is saved.</p>
+                </div>
+              </div>
+              <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
+                <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <div class="muted" style="font-size:0.9rem;">Language: Python</div>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
+                </div>
+                {% if saved_plot_differs %}
+                  <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
+                {% endif %}
+                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
+              </div>
+            </div>
+
+            <div class="code-custom-run" style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+              <div class="row" style="justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <strong>Plot preview</strong>
+                  <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-plot-summary="{{ q.id }}">
+                    {% if plot_preview_url %}Ready{% elif plot_artifact_status == "too_large" %}Code only{% else %}Not run{% endif %}
+                  </span>
+                </div>
+                <div class="row" style="gap:8px; align-items:center; flex-wrap:wrap;">
+                  {% if plot_preview_url %}
+                    <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id, download=1) }}">Download PNG</a>
+                  {% endif %}
+                  <button type="button" class="btn btn-primary" data-run-plot data-question="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>Run plot</button>
+                </div>
+              </div>
+              <div
+                data-plot-preview="{{ q.id }}"
+                {% if plot_preview_url %}
+                  data-existing-url="{{ plot_preview_url }}"
+                {% endif %}
+                data-existing-updated-at="{{ (persisted_plot_data.updated_at if persisted_plot_data and persisted_plot_data.updated_at is defined else (plot_artifact.uploaded_at if plot_artifact and plot_artifact.uploaded_at is defined else ''))|e }}"
+                data-existing-plot-count="{{ (persisted_plot_data.plot_count if persisted_plot_data and persisted_plot_data.plot_count is defined else 1)|e }}"
+                data-existing-stdout="{{ (persisted_plot_data.stdout if persisted_plot_data and persisted_plot_data.stdout is defined else '')|e }}"
+                data-existing-error="{{ (persisted_plot_data.error if persisted_plot_data and persisted_plot_data.error is defined else '')|e }}"
+                data-existing-artifact-status="{{ plot_artifact_status|e }}"
+                data-existing-artifact-size="{{ plot_artifact_size|e }}"
+                style="margin-top:10px;"
+              >
+                {% if plot_preview_url %}
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <img src="{{ plot_preview_url }}" alt="Submitted plot preview" style="display:block; width:100%; max-height:520px; object-fit:contain; border:1px solid #1f2937; border-radius:10px; background:#0f172a;">
+                    <div class="muted" style="font-size:0.85rem;">
+                      Latest saved preview
+                      {% if plot_artifact and plot_artifact.width and plot_artifact.height %}
+                        • {{ plot_artifact.width }}×{{ plot_artifact.height }}
+                      {% endif %}
+                      {% if persisted_plot_data and persisted_plot_data.updated_at is defined and persisted_plot_data.updated_at %}
+                        • {{ persisted_plot_data.updated_at }}
+                      {% endif %}
+                    </div>
+                  </div>
+                {% elif plot_artifact_status == "too_large" %}
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <p class="muted" style="margin:0;">Latest run PNG exceeded {{ plot_artifact_max_mb }} MB and was not stored. The code was saved without an image.</p>
+                    {% if plot_artifact_size %}
+                      <div class="muted" style="font-size:0.85rem;">Generated PNG size: {{ (plot_artifact_size // 1024) }} KB</div>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  <p class="muted" style="margin:0;">Run the code to generate a preview. The latest PNG will be uploaded only when you submit.</p>
+                {% endif %}
+              </div>
+            </div>
         {% elif q.type == "tokens" %}
           {% set tpl = q.template or "" %}
           {% set segments = tpl.split('[[blank]]') %}
@@ -296,7 +448,7 @@
 {% endblock %}
 {% block scripts %}
 <script defer src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
-<script defer src="{{ url_for('static', filename='exams.js') }}"></script>
+<script defer src="{{ url_for('static', filename='exams.js', v='20260329-plot-sync') }}"></script>
 {% if time_remaining_seconds is not none and not preview %}
 <script>
 (function(){
@@ -321,10 +473,18 @@
     submitted = true;
     if (warningEl) warningEl.style.display = "block";
     if (autoInput) autoInput.value = "submit";
+<<<<<<< HEAD
     if (typeof form.requestSubmit === "function") {
       form.requestSubmit();
     } else {
       form.submit();
+=======
+    const submitBtn = form.querySelector("[data-auto-submit]");
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit(submitBtn || undefined);
+    } else if (submitBtn) {
+      submitBtn.click();
+>>>>>>> bd9600552d74174405d10fcd5adfea722a0be92b
     }
   };
 

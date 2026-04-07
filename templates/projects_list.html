@@ -12,6 +12,7 @@
           <th>Code</th>
           <th>Title</th>
           <th>Collection</th>
+          <th>Deadline</th>
           <th>Tasks</th>
           <th>Required</th>
           <th>Published</th>
@@ -24,6 +25,7 @@
           <td><code>{{ project.code }}</code></td>
           <td>{{ project.title }}</td>
           <td>{{ project.collection or "comp101" }}</td>
+          <td>{{ project.deadline_at.strftime("%b %d %H:%M UTC") if project.deadline_at else "—" }}</td>
           <td>{{ project.tasks|length }}</td>
           <td>
             {% if project.required_task_count %}
