@@ -140,33 +140,480 @@
     mj.typesetPromise(nodes).catch(() => {});
   };
 
-  function disableClipboardOnInput(element) {
-    if (!element || element.dataset.clipboardGuard === "1") return;
-    element.dataset.clipboardGuard = "1";
-    const blockEvent = (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-      evt.returnValue = false;
-      if (typeof evt.stopImmediatePropagation === "function") {
-        evt.stopImmediatePropagation();
-      }
-      return false;
+  const diffText = (before, after) => {
+    const oldText = before || "";
+    const newText = after || "";
+    let start = 0;
+    while (start < oldText.length && start < newText.length && oldText[start] === newText[start]) {
+      start += 1;
+    }
+    let oldEnd = oldText.length;
+    let newEnd = newText.length;
+    while (oldEnd > start && newEnd > start && oldText[oldEnd - 1] === newText[newEnd - 1]) {
+      oldEnd -= 1;
+      newEnd -= 1;
+    }
+    return {
+      start,
+      deleted: oldText.slice(start, oldEnd),
+      inserted: newText.slice(start, newEnd),
     };
-    const keyHandler = (evt) => {
-      const ctrlOrCmd = evt.ctrlKey || evt.metaKey;
-      const key = (evt.key || "").toLowerCase();
-      const ctrlAction = ctrlOrCmd && ["c", "x", "v"].includes(key);
-      const shiftInsert = evt.shiftKey && key === "insert";
-      const ctrlInsert = ctrlOrCmd && key === "insert";
-      const shiftDelete = evt.shiftKey && key === "delete";
-      if (ctrlAction || shiftInsert || ctrlInsert || shiftDelete) {
-        blockEvent(evt);
+  };
+
+  const serializeRange = (range) => {
+    if (!range) return null;
+    return {
+      startLineNumber: range.startLineNumber,
+      startColumn: range.startColumn,
+      endLineNumber: range.endLineNumber,
+      endColumn: range.endColumn,
+    };
+  };
+
+  const selectionFromTextarea = (area) => {
+    if (!area) return { start: 0, end: 0, text: "" };
+    const start = Math.max(0, area.selectionStart || 0);
+    const end = Math.max(start, area.selectionEnd || 0);
+    return {
+      start,
+      end,
+      text: (area.value || "").slice(start, end),
+    };
+  };
+
+  const selectionFromEditor = (editor) => {
+    const model = editor && editor.getModel ? editor.getModel() : null;
+    const selection = editor && editor.getSelection ? editor.getSelection() : null;
+    if (!model || !selection) {
+      return { range: null, text: "" };
+    }
+    return {
+      range: serializeRange(selection),
+      text: model.getValueInRange(selection) || "",
+    };
+  };
+
+  function getTelemetryController() {
+    const root = document.querySelector("[data-exam-take]");
+    if (!root) return null;
+    if (root._telemetryController) return root._telemetryController;
+
+    const telemetryUrl = root.dataset.telemetryUrl || "";
+    const csrf = root.dataset.csrf || "";
+    const attemptRef = root.dataset.telemetryAttemptRef || "";
+    const currentQuestionId = root.dataset.currentQuestion || "";
+    const currentQuestionType = root.dataset.currentQuestionType || "";
+    const currentQuestionIndex = parseInt(root.dataset.currentQuestionIndex || "0", 10) || 0;
+    const enabled = Boolean(telemetryUrl && csrf);
+    const sessionKey = [attemptRef || "attempt", Date.now().toString(36), Math.random().toString(36).slice(2, 10)].join(":");
+    let flushTimer = null;
+    let flushChain = Promise.resolve();
+    let lastFlushMark = Date.now();
+    let activeMs = 0;
+    let activeSince = (!document.hidden && document.hasFocus()) ? lastFlushMark : null;
+    let editorFocusQuestionId = null;
+    let editorMs = 0;
+    let editorSince = null;
+    let submitBypass = false;
+    const queue = [];
+
+    const isPageActive = () => !document.hidden && document.hasFocus();
+
+    const syncActivity = () => {
+      const now = Date.now();
+      const shouldBeActive = isPageActive();
+      if (shouldBeActive && activeSince === null) {
+        activeSince = now;
+      } else if (!shouldBeActive && activeSince !== null) {
+        activeMs += now - activeSince;
+        activeSince = null;
+      }
+      if (editorFocusQuestionId) {
+        if (shouldBeActive && editorSince === null) {
+          editorSince = now;
+        } else if (!shouldBeActive && editorSince !== null) {
+          editorMs += now - editorSince;
+          editorSince = null;
+        }
       }
     };
-    element.addEventListener("keydown", keyHandler);
-    ["copy", "cut", "paste", "drop", "contextmenu"].forEach((type) => {
-      element.addEventListener(type, blockEvent);
-    });
+
+    const buildTimeEvent = (reason) => {
+      if (!enabled) return null;
+      syncActivity();
+      const now = Date.now();
+      const pageMs = Math.max(0, now - lastFlushMark);
+      if (!pageMs && !activeMs && !editorMs) {
+        return null;
+      }
+      const payload = {
+        reason,
+        page_ms: pageMs,
+        active_ms: activeMs,
+        editor_ms: editorMs,
+        visible: !document.hidden,
+        focused: document.hasFocus(),
+      };
+      lastFlushMark = now;
+      activeMs = 0;
+      editorMs = 0;
+      if (activeSince !== null) activeSince = now;
+      if (editorSince !== null) editorSince = now;
+      return {
+        type: "time_spent",
+        question_id: currentQuestionId || editorFocusQuestionId || null,
+        attempt_ref: attemptRef || null,
+        session_key: sessionKey,
+        client_ts: new Date().toISOString(),
+        payload,
+      };
+    };
+
+    const enqueue = (event, shouldSchedule = true) => {
+      if (!enabled || !event) return;
+      queue.push(event);
+      if (queue.length >= 20) {
+        void controller.flush("batch");
+        return;
+      }
+      if (shouldSchedule && !flushTimer) {
+        flushTimer = window.setTimeout(() => {
+          flushTimer = null;
+          void controller.flush("timer");
+        }, 1500);
+      }
+    };
+
+    const sendBatch = async (events, options = {}) => {
+      const body = JSON.stringify({ csrf, events });
+      if (options.beacon && navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        const ok = navigator.sendBeacon(telemetryUrl, blob);
+        if (ok) return;
+      }
+      const response = await fetch(telemetryUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF": csrf,
+        },
+        body,
+        credentials: "same-origin",
+        keepalive: !!options.keepalive || !!options.beacon,
+      });
+      if (!response.ok) {
+        throw new Error(`Telemetry request failed (${response.status})`);
+      }
+    };
+
+    const controller = {
+      enabled,
+      record(type, questionId, payload = {}) {
+        if (!enabled) return;
+        enqueue({
+          type,
+          question_id: questionId || currentQuestionId || null,
+          attempt_ref: attemptRef || null,
+          session_key: sessionKey,
+          client_ts: new Date().toISOString(),
+          payload,
+        });
+      },
+      recordCodeAction(type, questionId, code, extra = {}) {
+        const text = typeof code === "string" ? code : "";
+        controller.record(type, questionId, {
+          ...extra,
+          code: text,
+          code_length: text.length,
+        });
+      },
+      setEditorFocused(questionId, focused) {
+        if (!enabled) return;
+        syncActivity();
+        const now = Date.now();
+        const qid = questionId || currentQuestionId || null;
+        if (focused) {
+          editorFocusQuestionId = qid;
+          editorSince = isPageActive() ? now : null;
+        } else if (!qid || editorFocusQuestionId === qid) {
+          if (editorSince !== null) {
+            editorMs += now - editorSince;
+          }
+          editorFocusQuestionId = null;
+          editorSince = null;
+        }
+      },
+      async flush(reason, options = {}) {
+        if (flushTimer) {
+          window.clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        const timeEvent = buildTimeEvent(reason);
+        if (timeEvent) {
+          queue.push(timeEvent);
+        }
+        if (!enabled || !queue.length) return;
+        flushChain = flushChain.then(async () => {
+          while (queue.length) {
+            const batch = queue.splice(0, 50);
+            try {
+              await sendBatch(batch, options);
+            } catch (err) {
+              queue.unshift(...batch);
+              throw err;
+            }
+          }
+        }).catch((err) => {
+          console.warn("Unable to send telemetry", err);
+        });
+        return flushChain;
+      },
+      bindPage() {
+        if (!enabled || root.dataset.telemetryPageBound === "1") return;
+        root.dataset.telemetryPageBound = "1";
+        controller.record("question_view", currentQuestionId || null, {
+          question_type: currentQuestionType || "",
+          question_index: currentQuestionIndex || null,
+        });
+        const onStateChange = () => {
+          syncActivity();
+          if (document.hidden) {
+            void controller.flush("hidden", { beacon: true });
+          }
+        };
+        document.addEventListener("visibilitychange", onStateChange);
+        window.addEventListener("focus", syncActivity);
+        window.addEventListener("blur", () => {
+          syncActivity();
+          void controller.flush("window-blur", { beacon: true });
+        });
+        window.addEventListener("pagehide", () => {
+          syncActivity();
+          void controller.flush("pagehide", { beacon: true });
+        });
+        window.addEventListener("beforeunload", () => {
+          syncActivity();
+          void controller.flush("beforeunload", { beacon: true });
+        });
+        root._telemetryHeartbeat = window.setInterval(() => {
+          if (!document.hidden) {
+            void controller.flush("heartbeat", { keepalive: true });
+          }
+        }, 15000);
+      },
+      bindForm() {
+        if (!enabled) return;
+        const form = document.querySelector("[data-exam-form]");
+        if (!form || form.dataset.telemetryFormBound === "1") return;
+        form.dataset.telemetryFormBound = "1";
+        form.addEventListener("submit", (event) => {
+          if (submitBypass) return;
+          event.preventDefault();
+          const submitter = event.submitter || null;
+          const autoInput = form.querySelector('input[name="nav_action_auto"]');
+          const action = (submitter && submitter.value) || (autoInput && autoInput.value) || "submit";
+          document.querySelectorAll("textarea[data-code-input]").forEach((area) => {
+            const qid = area.dataset.codeInput || currentQuestionId || null;
+            controller.recordCodeAction("editor_submit", qid, area.value || "", { action });
+          });
+          controller.record("form_submit", currentQuestionId || null, {
+            action,
+            question_type: currentQuestionType || "",
+          });
+          const timeout = new Promise((resolve) => window.setTimeout(resolve, 1500));
+          Promise.race([controller.flush("form-submit", { keepalive: true }), timeout])
+            .catch(() => {})
+            .finally(() => {
+              submitBypass = true;
+              if (submitter && typeof form.requestSubmit === "function") {
+                form.requestSubmit(submitter);
+              } else {
+                form.submit();
+              }
+            });
+        });
+      },
+      registerTextarea(area) {
+        if (!enabled || !area || area.dataset.telemetryBound === "1") return;
+        area.dataset.telemetryBound = "1";
+        const qid = area.dataset.codeInput || currentQuestionId || null;
+        let lastValue = area.value || "";
+        controller.recordCodeAction("editor_init", qid, lastValue, {
+          source: "textarea",
+          language: area.dataset.codeLanguage || "",
+        });
+        area.addEventListener("focus", () => {
+          controller.setEditorFocused(qid, true);
+          controller.record("editor_focus", qid, { source: "textarea", value_length: (area.value || "").length });
+        });
+        area.addEventListener("blur", () => {
+          controller.setEditorFocused(qid, false);
+          controller.record("editor_blur", qid, { source: "textarea", value_length: (area.value || "").length });
+          void controller.flush("editor-blur");
+        });
+        area.addEventListener("copy", () => {
+          const selection = selectionFromTextarea(area);
+          controller.record("editor_copy", qid, {
+            source: "textarea",
+            text: selection.text,
+            text_length: selection.text.length,
+            selection_start: selection.start,
+            selection_end: selection.end,
+          });
+        });
+        area.addEventListener("cut", () => {
+          const selection = selectionFromTextarea(area);
+          controller.record("editor_cut", qid, {
+            source: "textarea",
+            text: selection.text,
+            text_length: selection.text.length,
+            selection_start: selection.start,
+            selection_end: selection.end,
+          });
+        });
+        area.addEventListener("paste", (event) => {
+          const text = event.clipboardData ? (event.clipboardData.getData("text/plain") || "") : "";
+          controller.record("editor_paste", qid, {
+            source: "textarea",
+            text,
+            text_length: text.length,
+          });
+        });
+        area.addEventListener("drop", (event) => {
+          const text = event.dataTransfer ? (event.dataTransfer.getData("text/plain") || "") : "";
+          controller.record("editor_drop", qid, {
+            source: "textarea",
+            text,
+            text_length: text.length,
+          });
+        });
+        area.addEventListener("input", (event) => {
+          const nextValue = area.value || "";
+          const change = diffText(lastValue, nextValue);
+          const inputType = event && event.inputType ? event.inputType : "";
+          controller.record("editor_change", qid, {
+            source: "textarea",
+            input_type: inputType,
+            change_count: 1,
+            previous_length: lastValue.length,
+            value_length: nextValue.length,
+            is_undoing: inputType === "historyUndo",
+            is_redoing: inputType === "historyRedo",
+            changes: [{
+              range_offset: change.start,
+              range_length: change.deleted.length,
+              deleted_text: change.deleted,
+              deleted_text_length: change.deleted.length,
+              text: change.inserted,
+              text_length: change.inserted.length,
+            }],
+          });
+          lastValue = nextValue;
+        });
+      },
+      registerMonaco(area, editor) {
+        if (!enabled || !area || !editor || area.dataset.monacoTelemetryBound === "1") return;
+        area.dataset.monacoTelemetryBound = "1";
+        const qid = area.dataset.codeInput || currentQuestionId || null;
+        const model = editor.getModel();
+        let lastValue = editor.getValue();
+        controller.recordCodeAction("editor_init", qid, lastValue, {
+          source: "monaco",
+          language: area.dataset.codeLanguage || (model && model.getLanguageId ? model.getLanguageId() : ""),
+        });
+
+        editor.onDidFocusEditorText(() => {
+          controller.setEditorFocused(qid, true);
+          controller.record("editor_focus", qid, {
+            source: "monaco",
+            value_length: editor.getValue().length,
+            version_id: model && model.getVersionId ? model.getVersionId() : null,
+          });
+        });
+        editor.onDidBlurEditorText(() => {
+          controller.setEditorFocused(qid, false);
+          controller.record("editor_blur", qid, {
+            source: "monaco",
+            value_length: editor.getValue().length,
+            version_id: model && model.getVersionId ? model.getVersionId() : null,
+          });
+          void controller.flush("editor-blur");
+        });
+
+        const domNode = editor.getDomNode();
+        if (domNode) {
+          domNode.addEventListener("copy", () => {
+            const selection = selectionFromEditor(editor);
+            controller.record("editor_copy", qid, {
+              source: "monaco",
+              text: selection.text,
+              text_length: selection.text.length,
+              range: selection.range,
+            });
+          }, true);
+          domNode.addEventListener("cut", () => {
+            const selection = selectionFromEditor(editor);
+            controller.record("editor_cut", qid, {
+              source: "monaco",
+              text: selection.text,
+              text_length: selection.text.length,
+              range: selection.range,
+            });
+          }, true);
+          domNode.addEventListener("paste", (event) => {
+            const text = event.clipboardData ? (event.clipboardData.getData("text/plain") || "") : "";
+            controller.record("editor_paste", qid, {
+              source: "monaco",
+              text,
+              text_length: text.length,
+              range: serializeRange(editor.getSelection()),
+            });
+          }, true);
+          domNode.addEventListener("drop", (event) => {
+            const text = event.dataTransfer ? (event.dataTransfer.getData("text/plain") || "") : "";
+            controller.record("editor_drop", qid, {
+              source: "monaco",
+              text,
+              text_length: text.length,
+              range: serializeRange(editor.getSelection()),
+            });
+          }, true);
+        }
+
+        editor.onDidChangeModelContent((event) => {
+          const nextValue = editor.getValue();
+          const changes = (event.changes || []).map((change) => {
+            const deletedText = lastValue.slice(change.rangeOffset, change.rangeOffset + change.rangeLength);
+            return {
+              range: serializeRange(change.range),
+              range_offset: change.rangeOffset,
+              range_length: change.rangeLength,
+              deleted_text: deletedText,
+              deleted_text_length: deletedText.length,
+              text: change.text,
+              text_length: (change.text || "").length,
+            };
+          });
+          controller.record("editor_change", qid, {
+            source: "monaco",
+            version_id: event.versionId,
+            previous_length: lastValue.length,
+            value_length: nextValue.length,
+            change_count: changes.length,
+            is_undoing: !!event.isUndoing,
+            is_redoing: !!event.isRedoing,
+            is_flush: !!event.isFlush,
+            changes,
+          });
+          lastValue = nextValue;
+        });
+      },
+    };
+
+    root._telemetryController = controller;
+    controller.bindPage();
+    controller.bindForm();
+    return controller;
   }
 
   function setupExamBuilder() {
@@ -258,6 +705,10 @@
     } else {
       addQuestion("mcq");
     }
+  }
+
+  function setupExamTelemetry() {
+    getTelemetryController();
   }
 
   function buildQuestionCard(type, data = {}) {
@@ -811,6 +1262,7 @@
   function setupExamRunner() {
     const root = document.querySelector("[data-exam-take]");
     if (!root) return;
+    const telemetry = getTelemetryController();
     const buttons = root.querySelectorAll("[data-run-samples]");
     const customButtons = root.querySelectorAll("[data-run-custom]");
     if (!buttons.length && !customButtons.length) return;
@@ -1310,10 +1762,26 @@ json.dumps(results)
             const { plot_images, ...rest } = entry;
             return rest;
           });
+          if (telemetry) {
+            const passedCount = sanitized.filter((entry) => entry && entry.status === "passed").length;
+            telemetry.recordCodeAction("code_run_samples", questionId, codeArea.value || "", {
+              mode: btn.getAttribute("data-mode") || "script",
+              sample_count: samples.length,
+              result_count: sanitized.length,
+              passed_count: passedCount,
+            });
+            void telemetry.flush("code-run");
+          }
           postLog(questionId, sanitized);
         } catch (err) {
           console.error(err);
           resultsContainer.textContent = `Unable to run samples: ${err.message || err}`;
+          if (telemetry) {
+            telemetry.record("code_run_error", questionId, {
+              mode: btn.getAttribute("data-mode") || "script",
+              message: err && err.message ? err.message : String(err),
+            });
+          }
           if (summaryEl) {
             summaryEl.textContent = "Run failed";
             summaryEl.style.color = "#f87171";
@@ -1351,8 +1819,24 @@ json.dumps(results)
         try {
           const results = await executeSamples(btn, samples, mode, codeArea ? codeArea.value : undefined);
           renderResults(container, results, summaryEl);
+          if (telemetry) {
+            const passedCount = results.filter((entry) => entry && entry.status === "passed").length;
+            telemetry.recordCodeAction("code_run_custom", questionId, codeArea ? (codeArea.value || "") : "", {
+              mode,
+              result_count: results.length,
+              passed_count: passedCount,
+              custom_input: mode === "function" ? (samples[0] && samples[0].input) || "" : (samples[0] && samples[0].input) || "",
+            });
+            void telemetry.flush("code-run");
+          }
         } catch (err) {
           container.textContent = `Unable to run: ${err.message || err}`;
+          if (telemetry) {
+            telemetry.record("code_run_error", questionId, {
+              mode,
+              message: err && err.message ? err.message : String(err),
+            });
+          }
           if (summaryEl) {
             summaryEl.textContent = "Run failed";
             summaryEl.style.color = "#f87171";
@@ -1365,6 +1849,10 @@ json.dumps(results)
   function setupCodeEditors() {
     const codeAreas = Array.from(document.querySelectorAll("textarea[data-code-input]"));
     if (!codeAreas.length) return;
+    const telemetry = getTelemetryController();
+    if (telemetry) {
+      codeAreas.forEach((area) => telemetry.registerTextarea(area));
+    }
     const MONACO_BASE = "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs";
     const MONACO_LOADER = `${MONACO_BASE}/loader.min.js`;
 
@@ -1412,43 +1900,6 @@ json.dumps(results)
       return monacoReadyPromise;
     };
 
-    const disablePaste = (editor, monaco) => {
-      let lastValue = editor.getValue();
-      const blockEvent = (evt) => {
-        evt.preventDefault();
-        evt.stopPropagation();
-        return false;
-      };
-      editor.onKeyDown((evt) => {
-        const key = evt.keyCode;
-        if ((evt.ctrlKey || evt.metaKey) && key === monaco.KeyCode.KEY_V) {
-          blockEvent(evt);
-        }
-        if (evt.shiftKey && key === monaco.KeyCode.Insert) {
-          blockEvent(evt);
-        }
-      });
-      const domNode = editor.getDomNode();
-      const targets = [domNode, document, window].filter(Boolean);
-      targets.forEach((t) => {
-        ["paste", "drop", "contextmenu"].forEach((type) => t.addEventListener(type, blockEvent, true));
-      });
-      editor.onContextMenu((evt) => blockEvent(evt.event));
-      editor.updateOptions({ contextmenu: false });
-      editor.onDidChangeModelContent(() => {
-        lastValue = editor.getValue();
-      });
-      editor.onDidPaste(() => {
-        editor.setValue(lastValue);
-      });
-      ["editor.action.clipboardPasteAction", "editor.action.clipboardCopyAction", "editor.action.clipboardCutAction"].forEach((id) => {
-        const action = editor.getAction(id);
-        if (action && action.dispose) {
-          action.dispose();
-        }
-      });
-    };
-
     ensureMonaco()
       .then((monaco) => {
         codeAreas.forEach((area) => {
@@ -1476,12 +1927,14 @@ json.dumps(results)
             scrollBeyondLastLine: false,
           });
           area._monacoEditor = editor;
-          disablePaste(editor, monaco);
           const syncValue = () => {
             area.value = editor.getValue();
           };
           editor.onDidChangeModelContent(syncValue);
           syncValue();
+          if (telemetry) {
+            telemetry.registerMonaco(area, editor);
+          }
           area.style.display = "none";
         });
       })
@@ -1624,7 +2077,6 @@ json.dumps(results)
       typesetMath(preview);
     };
     areas.forEach((area) => {
-      disableClipboardOnInput(area);
       render(area);
       area.addEventListener("input", () => render(area));
       area.addEventListener("change", () => render(area));
@@ -1651,12 +2103,14 @@ json.dumps(results)
   function setupCodeReset() {
     const buttons = Array.from(document.querySelectorAll("[data-code-reset]"));
     if (!buttons.length) return;
+    const telemetry = getTelemetryController();
     buttons.forEach((btn) => {
       btn.addEventListener("click", () => {
         const target = btn.dataset.target;
         const area = document.querySelector(`textarea[data-code-input="${target}"]`);
         if (!area) return;
         const initial = area.dataset.codeInitial !== undefined ? area.dataset.codeInitial : (btn.dataset.initial || "");
+        const beforeValue = area._monacoEditor ? area._monacoEditor.getValue() : (area.value || "");
         area.value = initial;
         if (area._monacoEditor) {
           area._monacoEditor.setValue(initial);
@@ -1664,10 +2118,19 @@ json.dumps(results)
           const ev = new Event("input", { bubbles: true });
           area.dispatchEvent(ev);
         }
+        if (telemetry) {
+          telemetry.recordCodeAction("code_reset", target, initial, {
+            before_code: beforeValue,
+            before_length: beforeValue.length,
+            after_length: initial.length,
+          });
+          void telemetry.flush("code-reset");
+        }
       });
     });
   }
 
+  setupExamTelemetry();
   setupExamBuilder();
   setupCodeEditors();
   setupCodeReset();

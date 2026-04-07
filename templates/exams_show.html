@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_telemetry_panel.html" as telemetry_panel %}
 {% block content %}
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
@@ -73,6 +74,7 @@
           <th>Started</th>
           <th>Last activity</th>
           <th>Code runs</th>
+          <th>Telemetry</th>
           <th>Download</th>
         </tr>
       </thead>
@@ -119,6 +121,10 @@
             {% else %}
               <span class="muted">No runs</span>
             {% endif %}
+          </td>
+          <td>
+            {% set telemetry_summary = telemetry_summary_map.get(sub.id) if telemetry_summary_map else None %}
+            {{ telemetry_panel.render(telemetry_summary, title="", compact=True) }}
           </td>
           <td>
             <a class="btn" href="{{ url_for('exams_download_submission', code=exam.code, submission_id=sub.id) }}">Download JSON</a>

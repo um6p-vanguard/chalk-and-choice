@@ -2,7 +2,8 @@
 {% block content %}
 {% set is_task = exam.kind == 'project_task' %}
 {% set submit_label = "Submit task" if is_task else "Submit exam" %}
-{% set log_url = run_log_url if run_log_url is defined and run_log_url else url_for('exams_log_run', code=exam.code) %}
+{% set log_url = run_log_url if run_log_url is defined else url_for('exams_log_run', code=exam.code) %}
+{% set telemetry_endpoint = telemetry_url if telemetry_url is defined else url_for('exams_log_telemetry', code=exam.code) %}
 <div class="card">
   <h3 style="margin:0;" data-markdown-inline>{{ exam.title }}</h3>
   {% if exam.description %}
@@ -33,7 +34,15 @@
   {% endif %}
 </div>
 <div class="sp"></div>
-<div class="card" data-exam-take data-run-log-url="{{ log_url }}" data-csrf="{{ csrf_token() }}">
+<div class="card"
+     data-exam-take
+     data-run-log-url="{{ log_url or '' }}"
+     data-telemetry-url="{{ telemetry_endpoint or '' }}"
+     data-telemetry-attempt-ref="{{ telemetry_attempt_ref or '' }}"
+     data-csrf="{{ csrf_token() }}"
+     data-current-question="{{ question.id if question else '' }}"
+     data-current-question-type="{{ question.type if question else '' }}"
+     data-current-question-index="{{ (current_index + 1) if question else '' }}">
   {% if preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
@@ -312,7 +321,11 @@
     submitted = true;
     if (warningEl) warningEl.style.display = "block";
     if (autoInput) autoInput.value = "submit";
-    form.submit();
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else {
+      form.submit();
+    }
   };
 
   const tick = () => {
@@ -326,27 +339,6 @@
   };
 
   tick();
-})();
-</script>
-{% endif %}
-{% if is_task %}
-<script>
-(function(){
-  const preventCopy = (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ["c","v","x"].includes(ev.key.toLowerCase())) {
-      ev.preventDefault();
-    }
-  };
-  const block = (ev) => ev.preventDefault();
-  document.addEventListener("DOMContentLoaded", () => {
-    document.querySelectorAll("[data-code-input]").forEach((el) => {
-      el.addEventListener("copy", block);
-      el.addEventListener("cut", block);
-      el.addEventListener("paste", block);
-      el.addEventListener("contextmenu", block);
-      el.addEventListener("keydown", preventCopy);
-    });
-  });
 })();
 </script>
 {% endif %}

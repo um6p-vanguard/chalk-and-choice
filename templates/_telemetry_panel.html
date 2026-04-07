@@ -1,0 +1,71 @@
+{% macro render(summary, title="Telemetry", compact=False) %}
+  {% if summary and summary.total_events %}
+    <div style="display:flex; flex-direction:column; gap:10px; {% if not compact %}margin-top:12px;{% endif %}">
+      {% if title %}
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <strong>{{ title }}</strong>
+          <span class="muted" style="font-size:0.9rem;">{{ summary.total_events }} events</span>
+        </div>
+      {% endif %}
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Active {{ summary.active_time_label }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Editor {{ summary.editor_time_label }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Page {{ summary.page_time_label }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Paste {{ summary.paste_count }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Copy {{ summary.copy_count }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Cut {{ summary.cut_count }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Runs {{ summary.run_count }}</span>
+      </div>
+      {% if summary.question_rows %}
+        <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+          <summary style="cursor:pointer; user-select:none;">By question</summary>
+          <table style="margin-top:10px;">
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Active</th>
+                <th>Editor</th>
+                <th>Page</th>
+                <th>Edits</th>
+                <th>Paste</th>
+                <th>Copy</th>
+                <th>Cut</th>
+                <th>Runs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in summary.question_rows %}
+                <tr>
+                  <td>{{ row.label }}</td>
+                  <td>{{ row.active_label }}</td>
+                  <td>{{ row.editor_label }}</td>
+                  <td>{{ row.page_label }}</td>
+                  <td>{{ row.change_count }}</td>
+                  <td>{{ row.paste_count }}</td>
+                  <td>{{ row.copy_count }}</td>
+                  <td>{{ row.cut_count }}</td>
+                  <td>{{ row.run_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </details>
+      {% endif %}
+      {% if summary.recent_events %}
+        <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+          <summary style="cursor:pointer; user-select:none;">Recent events</summary>
+          <ul style="margin:10px 0 0 16px; padding:0; display:flex; flex-direction:column; gap:8px;">
+            {% for event in summary.recent_events %}
+              <li>
+                <div><strong>{{ event.ts }}</strong> • {{ event.question_label }}</div>
+                <div class="muted" style="font-size:0.9rem;">{{ event.description }}</div>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+    </div>
+  {% else %}
+    <span class="muted">No telemetry captured.</span>
+  {% endif %}
+{% endmacro %}

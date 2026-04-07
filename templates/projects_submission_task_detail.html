@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "_task_answers.html" as task_answers %}
+{% import "_telemetry_panel.html" as telemetry_panel %}
 {% block content %}
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
@@ -69,6 +70,10 @@
   <h3 style="margin-top:0;">Student responses</h3>
   {{ task_answers.render(questions, answers, logs_by_question, grading_by_question=grading_by_question, show_meta=(user is not none), task_auto_grade=(task.auto_grade if task else True), code_runs_enabled=code_runs_enabled, submission_id=submission.id, attempt_id=latest_attempt_id) }}
 </div>
+<div class="sp"></div>
+<div class="card">
+  {{ telemetry_panel.render(telemetry_summary, title="Task telemetry") }}
+</div>
 {% if user and attempt_rows %}
 <div class="sp"></div>
 <div class="card">
@@ -99,6 +104,9 @@
         {% endif %}
         <div style="margin-top:12px;">
           {{ task_answers.render(questions, row.answers, row.logs_by_question, grading_by_question=row.grading_by_question, show_meta=True, task_auto_grade=(task.auto_grade if task else True), code_runs_enabled=code_runs_enabled, submission_id=submission.id, attempt_id=attempt.id) }}
+        </div>
+        <div style="margin-top:12px;">
+          {{ telemetry_panel.render(row.telemetry_summary, title="Attempt telemetry", compact=True) }}
         </div>
       </details>
     {% endfor %}

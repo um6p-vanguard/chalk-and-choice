@@ -230,6 +230,28 @@ class ExamSubmission(db.Model):
         UniqueConstraint('exam_id', 'student_id', name='uq_exam_submission_student'),
     )
 
+class SubmissionTelemetryEvent(db.Model):
+    __tablename__ = "submission_telemetry_events"
+    id = db.Column(db.Integer, primary_key=True)
+    exam_submission_id = db.Column(db.Integer, db.ForeignKey('exam_submissions.id', ondelete="CASCADE"), index=True, nullable=True)
+    project_task_submission_id = db.Column(db.Integer, db.ForeignKey('project_task_submissions.id', ondelete="CASCADE"), index=True, nullable=True)
+    question_id = db.Column(db.String(64), nullable=True)
+    attempt_ref = db.Column(db.String(80), index=True, nullable=True)
+    session_key = db.Column(db.String(80), index=True, nullable=True)
+    client_ts = db.Column(db.String(48), nullable=True)
+    event_type = db.Column(db.String(48), index=True, nullable=False)
+    event_ts = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    payload_json = db.Column(JSONText, nullable=True, default=dict)
+
+    exam_submission = db.relationship(
+        'ExamSubmission',
+        backref=db.backref('telemetry_events', cascade="all,delete-orphan", order_by="SubmissionTelemetryEvent.event_ts"),
+    )
+    project_task_submission = db.relationship(
+        'ProjectTaskSubmission',
+        backref=db.backref('telemetry_events', cascade="all,delete-orphan", order_by="SubmissionTelemetryEvent.event_ts"),
+    )
+
 class StudentStats(db.Model):
     __tablename__ = "student_stats"
     student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), primary_key=True)
