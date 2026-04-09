@@ -1,5 +1,6 @@
 {% macro render(summary, title="Telemetry", compact=False) %}
   {% if summary and summary.total_events %}
+    {% set paste_total = (summary.paste_count or 0) + (summary.drop_count or 0) %}
     <div style="display:flex; flex-direction:column; gap:10px; {% if not compact %}margin-top:12px;{% endif %}">
       {% if title %}
         <div class="row" style="justify-content:space-between; align-items:center;">
@@ -7,62 +8,165 @@
           <span class="muted" style="font-size:0.9rem;">{{ summary.total_events }} events</span>
         </div>
       {% endif %}
+
+      {% if summary.headline %}
+        <div class="muted" style="font-size:0.95rem; line-height:1.5;">{{ summary.headline }}</div>
+      {% endif %}
+
       <div style="display:flex; flex-wrap:wrap; gap:8px;">
         <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Active {{ summary.active_time_label }}</span>
         <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Editor {{ summary.editor_time_label }}</span>
-        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Page {{ summary.page_time_label }}</span>
-        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Paste {{ summary.paste_count }}</span>
-        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Copy {{ summary.copy_count }}</span>
-        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Cut {{ summary.cut_count }}</span>
+        {% if not compact %}
+          <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Page {{ summary.page_time_label }}</span>
+        {% endif %}
         <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Runs {{ summary.run_count }}</span>
+        <span style="font-size:0.85rem; padding:4px 10px; border-radius:999px; border:1px solid #334155; background:#0b1220;">Paste/Drop {{ paste_total }}</span>
       </div>
-      {% if summary.question_rows %}
-        <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
-          <summary style="cursor:pointer; user-select:none;">By question</summary>
-          <table style="margin-top:10px;">
-            <thead>
-              <tr>
-                <th>Question</th>
-                <th>Active</th>
-                <th>Editor</th>
-                <th>Page</th>
-                <th>Edits</th>
-                <th>Paste</th>
-                <th>Copy</th>
-                <th>Cut</th>
-                <th>Runs</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for row in summary.question_rows %}
-                <tr>
-                  <td>{{ row.label }}</td>
-                  <td>{{ row.active_label }}</td>
-                  <td>{{ row.editor_label }}</td>
-                  <td>{{ row.page_label }}</td>
-                  <td>{{ row.change_count }}</td>
-                  <td>{{ row.paste_count }}</td>
-                  <td>{{ row.copy_count }}</td>
-                  <td>{{ row.cut_count }}</td>
-                  <td>{{ row.run_count }}</td>
-                </tr>
+
+      {% if compact %}
+        {% if summary.top_signal %}
+          <div style="padding:10px; border-radius:10px; border:1px solid {% if summary.top_signal.level == 'warn' %}#7f1d1d{% else %}#1d4ed8{% endif %}; background:{% if summary.top_signal.level == 'warn' %}#220f14{% else %}#0f172a{% endif %};">
+            <div style="font-weight:600; font-size:0.92rem;">{{ summary.top_signal.title }}</div>
+            <div class="muted" style="font-size:0.88rem; margin-top:4px; line-height:1.45;">{{ summary.top_signal.description }}</div>
+          </div>
+        {% endif %}
+
+        {% if summary.last_meaningful_event %}
+          <div style="padding:10px; border-radius:10px; border:1px solid #1f2937; background:#0b1220;">
+            <div style="font-size:0.9rem;"><strong>{{ summary.last_meaningful_event.ts }}</strong> • {{ summary.last_meaningful_event.question_label }}</div>
+            <div class="muted" style="font-size:0.88rem; margin-top:4px;">{{ summary.last_meaningful_event.description }}</div>
+          </div>
+        {% endif %}
+
+        {% if summary.timeline_events %}
+          <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+            <summary style="cursor:pointer; user-select:none;">Milestones</summary>
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+              {% for event in summary.timeline_events[-4:] %}
+                <div style="border-left:3px solid {% if event.tone == 'warn' %}#dc2626{% elif event.tone == 'quiet' %}#475569{% else %}#0ea5e9{% endif %}; padding-left:10px;">
+                  <div style="font-size:0.9rem;"><strong>{{ event.ts }}</strong> • {{ event.question_label }}</div>
+                  <div style="font-size:0.9rem; margin-top:2px;">{{ event.title }}</div>
+                  <div class="muted" style="font-size:0.86rem; margin-top:2px;">{{ event.description }}</div>
+                </div>
               {% endfor %}
-            </tbody>
-          </table>
-        </details>
-      {% endif %}
-      {% if summary.recent_events %}
-        <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
-          <summary style="cursor:pointer; user-select:none;">Recent events</summary>
-          <ul style="margin:10px 0 0 16px; padding:0; display:flex; flex-direction:column; gap:8px;">
-            {% for event in summary.recent_events %}
-              <li>
-                <div><strong>{{ event.ts }}</strong> • {{ event.question_label }}</div>
-                <div class="muted" style="font-size:0.9rem;">{{ event.description }}</div>
-              </li>
+            </div>
+          </details>
+        {% endif %}
+      {% else %}
+        {% if summary.signals %}
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            <strong style="font-size:0.95rem;">Highlights</strong>
+            {% for signal in summary.signals %}
+              <div style="padding:10px 12px; border-radius:10px; border:1px solid {% if signal.level == 'warn' %}#7f1d1d{% else %}#1e3a8a{% endif %}; background:{% if signal.level == 'warn' %}#220f14{% else %}#0f172a{% endif %};">
+                <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
+                  <div>
+                    <div style="font-weight:600;">{{ signal.title }}</div>
+                    <div class="muted" style="margin-top:4px; line-height:1.45;">{{ signal.description }}</div>
+                  </div>
+                  <div class="muted" style="white-space:nowrap; font-size:0.85rem;">{{ signal.ts }}</div>
+                </div>
+              </div>
             {% endfor %}
-          </ul>
-        </details>
+          </div>
+        {% endif %}
+
+        {% if summary.timeline_events %}
+          <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;" open>
+            <summary style="cursor:pointer; user-select:none;">Attempt timeline</summary>
+            {% if summary.timeline_omitted_count %}
+              <div class="muted" style="margin-top:10px; font-size:0.9rem;">Showing the first and last milestones. {{ summary.timeline_omitted_count }} middle events were omitted.</div>
+            {% endif %}
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;">
+              {% for event in summary.timeline_events %}
+                <div style="border-left:3px solid {% if event.tone == 'warn' %}#dc2626{% elif event.tone == 'quiet' %}#475569{% else %}#0ea5e9{% endif %}; padding-left:12px;">
+                  <div style="font-size:0.92rem;"><strong>{{ event.ts }}</strong> • {{ event.question_label }}</div>
+                  <div style="margin-top:2px; font-weight:600;">{{ event.title }}</div>
+                  <div class="muted" style="margin-top:2px; line-height:1.45;">{{ event.description }}</div>
+                </div>
+              {% endfor %}
+            </div>
+          </details>
+        {% endif %}
+
+        {% if summary.question_rows %}
+          <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;" open>
+            <summary style="cursor:pointer; user-select:none;">By question</summary>
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;">
+              {% for row in summary.question_rows %}
+                <div style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0f172a;">
+                  <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
+                    <div>
+                      <strong>{{ row.label }}</strong>
+                      <div class="muted" style="margin-top:4px; line-height:1.45;">{{ row.summary_text }}</div>
+                    </div>
+                    <div class="muted" style="white-space:nowrap; font-size:0.85rem;">Last activity {{ row.last_ts_label }}</div>
+                  </div>
+                  <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;">
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Edits {{ row.change_count }}</span>
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Paste {{ row.paste_count }}</span>
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Copy {{ row.copy_count }}</span>
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Cut {{ row.cut_count }}</span>
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Runs {{ row.run_count }}</span>
+                    <span style="font-size:0.82rem; padding:3px 8px; border-radius:999px; border:1px solid #334155;">Largest paste {{ row.largest_paste_label }}</span>
+                  </div>
+                  {% if row.flag_texts %}
+                    <ul style="margin:10px 0 0 18px; padding:0; display:flex; flex-direction:column; gap:5px;">
+                      {% for flag in row.flag_texts %}
+                        <li class="muted" style="line-height:1.4;">{{ flag }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          </details>
+        {% endif %}
+
+        {% if summary.checkpoint_groups %}
+          <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+            <summary style="cursor:pointer; user-select:none;">Code checkpoints</summary>
+            <div style="margin-top:10px; display:flex; flex-direction:column; gap:12px;">
+              {% for group in summary.checkpoint_groups %}
+                <div style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0f172a;">
+                  <strong>{{ group.question_label }}</strong>
+                  {% if group.overview %}
+                    <div class="muted" style="margin-top:4px; line-height:1.45;">{{ group.overview }}</div>
+                  {% endif %}
+                  <div style="margin-top:10px; display:flex; flex-direction:column; gap:10px;">
+                    {% for checkpoint in group.checkpoints %}
+                      <div style="border:1px solid #334155; border-radius:8px; padding:10px; background:#020617;">
+                        <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
+                          <div>
+                            <div style="font-weight:600;">{{ checkpoint.title }}</div>
+                            <div class="muted" style="margin-top:2px; font-size:0.88rem;">{{ checkpoint.code_length }} chars • {{ checkpoint.delta_label }}</div>
+                          </div>
+                          <div class="muted" style="white-space:nowrap; font-size:0.85rem;">{{ checkpoint.ts }}</div>
+                        </div>
+                        {% if checkpoint.preview %}
+                          <pre style="margin:10px 0 0 0; padding:10px; border-radius:8px; background:#0b1220; overflow:auto; white-space:pre-wrap; font-size:0.84rem; line-height:1.4;">{{ checkpoint.preview }}</pre>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </details>
+        {% endif %}
+
+        {% if summary.recent_events %}
+          <details style="border:1px solid #1f2937; border-radius:10px; padding:10px; background:#0b1220;">
+            <summary style="cursor:pointer; user-select:none;">Raw recent events</summary>
+            <ul style="margin:10px 0 0 16px; padding:0; display:flex; flex-direction:column; gap:8px;">
+              {% for event in summary.recent_events %}
+                <li>
+                  <div><strong>{{ event.ts }}</strong> • {{ event.question_label }}</div>
+                  <div class="muted" style="font-size:0.9rem;">{{ event.description }}</div>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
       {% endif %}
     </div>
   {% else %}
