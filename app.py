@@ -1698,8 +1698,8 @@ def _summarize_telemetry_events(events, questions=None):
         elif event.event_type == "editor_change":
             stats = _telemetry_change_stats(payload)
             row["change_count"] += stats["edit_count"]
-            row["largest_insert_chars"] = max(row["largest_insert_chars"], stats["inserted"], stats["largest_insert_chars"])
-            row["largest_delete_chars"] = max(row["largest_delete_chars"], stats["deleted"], row["largest_delete_chars"])
+            row["largest_insert_chars"] = max(row["largest_insert_chars"], stats["inserted"])
+            row["largest_delete_chars"] = max(row["largest_delete_chars"], stats["deleted"])
             if event_ts and not row["first_edit_ts"]:
                 row["first_edit_ts"] = event_ts
             if event_ts:
