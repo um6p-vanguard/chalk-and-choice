@@ -3,10 +3,19 @@
 <div class="card">
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
-      <h3 style="margin:0;">My reviews</h3>
-      <p class="muted" style="margin-top:6px;">History of task reviews you've completed.</p>
+      <h3 style="margin:0;">{{ 'All reviews' if show_all_reviews else 'My reviews' }}</h3>
+      <p class="muted" style="margin-top:6px;">
+        {% if show_all_reviews %}
+          History of task reviews completed across all reviewers.
+        {% else %}
+          History of task reviews you've completed.
+        {% endif %}
+      </p>
     </div>
     <div class="row" style="gap:8px;">
+      {% if user and user.role == 'admin' %}
+        <a class="btn" href="{{ url_for('admin_review_dashboard') }}">Review dashboard</a>
+      {% endif %}
       <a class="btn" href="{{ url_for('projects_reviews') }}">Pending reviews</a>
     </div>
   </div>
@@ -18,6 +27,9 @@
       <thead>
         <tr>
           <th>Reviewed</th>
+          {% if show_all_reviews %}
+            <th>Reviewer</th>
+          {% endif %}
           <th>Student</th>
           <th>Project</th>
           <th>Task</th>
@@ -32,6 +44,9 @@
           {% set sub = attempt.submission %}
           <tr>
             <td>{{ attempt.reviewed_at.strftime("%b %d %H:%M") if attempt.reviewed_at else "—" }}</td>
+            {% if show_all_reviews %}
+              <td>{{ attempt.reviewer.name if attempt.reviewer else "Unknown reviewer" }}</td>
+            {% endif %}
             <td>
               <div><strong>{{ sub.student_name if sub else "Unknown" }}</strong></div>
               <div class="muted" style="font-size:0.9rem;">{{ sub.student.email if sub and sub.student else "—" }}</div>

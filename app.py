@@ -8663,9 +8663,17 @@ def projects_reviews():
 def projects_reviews_mine():
     user = current_user()
     allowed_student_ids = _restricted_review_student_ids(user)
-    attempts = ProjectTaskAttempt.query.filter(
-        ProjectTaskAttempt.reviewed_by_user_id == user.id,
+    show_all_reviews = bool(user and getattr(user, "role", "") == "admin")
+    attempts_query = ProjectTaskAttempt.query.filter(
         ProjectTaskAttempt.reviewed_at != None,
+    )
+    if not show_all_reviews:
+        attempts_query = attempts_query.filter(ProjectTaskAttempt.reviewed_by_user_id == user.id)
+    attempts = attempts_query.options(
+        subqueryload(ProjectTaskAttempt.reviewer),
+        subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.project),
+        subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.task),
+        subqueryload(ProjectTaskAttempt.submission).subqueryload(ProjectTaskSubmission.student),
     ).order_by(ProjectTaskAttempt.reviewed_at.desc()).all()
     if allowed_student_ids is not None:
         attempts = [
@@ -8675,8 +8683,9 @@ def projects_reviews_mine():
     return render_template(
         "projects_reviews_mine.html",
         attempts=attempts,
+        show_all_reviews=show_all_reviews,
         review_scope_limited=(allowed_student_ids is not None),
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
