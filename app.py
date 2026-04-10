@@ -4357,6 +4357,12 @@ def _complete_tutorial_task(project, task, student):
         submission.last_activity_at = now
     return submission
 
+def _project_deadline_passed(project, now=None):
+    if not project or not project.deadline_at:
+        return False
+    current_time = now or datetime.utcnow()
+    return project.deadline_at <= current_time
+
 def _project_dependencies_met(project, student):
     deps = project.dependencies or []
     for dep in deps:
@@ -7537,6 +7543,7 @@ def student_projects():
     for project in projects:
         if not _project_visible_to_student(project, student):
             continue
+        deadline_passed = _project_deadline_passed(project)
         unlocked = _project_dependencies_met(project, student)
         completed = _project_completed(project, student) if unlocked else False
         tasks = []
@@ -7576,6 +7583,7 @@ def student_projects():
                 "reviewer_name": reviewer_name,
                 "can_retry_now": can_retry_now,
                 "cooldown_seconds_remaining": cooldown_seconds,
+                "deadline_passed": deadline_passed,
             })
         row = {
             "project": project,
@@ -7586,6 +7594,7 @@ def student_projects():
             "total_tasks": len(tasks),
             "required": _project_required_for_student(project, student),
             "dependencies": [dep.prerequisite.title for dep in (project.dependencies or []) if dep.prerequisite],
+            "deadline_passed": deadline_passed,
         }
         if completed:
             completed_rows.append(row)
@@ -7630,6 +7639,7 @@ def student_project_detail(code):
     if not _project_visible_to_student(project, student):
         abort(403)
     unlocked = _project_dependencies_met(project, student)
+    deadline_passed = _project_deadline_passed(project)
     tasks = []
     for task in project.tasks:
         submission = _project_task_submission(task, student)
@@ -7664,11 +7674,13 @@ def student_project_detail(code):
             "reviewer_name": reviewer_name,
             "can_retry_now": can_retry_now,
             "cooldown_seconds_remaining": cooldown_seconds,
+            "deadline_passed": deadline_passed,
         })
     return render_template(
         "projects_student_detail.html",
         project=project,
         unlocked=unlocked,
+        deadline_passed=deadline_passed,
         tasks=tasks,
         user=current_user(),
         student_name=student.name,
@@ -7701,22 +7713,26 @@ def project_task_take(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    deadline_passed = _project_deadline_passed(project)
+    submission = _project_task_submission(task, student)
+
     if _is_tutorial_task(task):
-        submission = _complete_tutorial_task(project, task, student)
-        db.session.flush()
-        if _project_completed(project, student):
-            _award_project_points_if_needed(project, student)
-        db.session.commit()
+        if not deadline_passed:
+            submission = _complete_tutorial_task(project, task, student)
+            db.session.flush()
+            if _project_completed(project, student):
+                _award_project_points_if_needed(project, student)
+            db.session.commit()
         return render_template(
             "projects_tutorial_take.html",
             project=project,
             task=task,
             submission=submission,
+            deadline_passed=deadline_passed,
             user=current_user(),
             student_name=student.name,
         )
-    submission = _project_task_submission(task, student)
-    if not submission:
+    if not submission and not deadline_passed:
         submission = ProjectTaskSubmission(
             task_id=task.id,
             project_id=project.id,
@@ -7727,16 +7743,17 @@ def project_task_take(code, task_id):
         )
         db.session.add(submission)
         db.session.commit()
+
     questions = task.questions_json if isinstance(task.questions_json, list) else []
     total_questions = len(questions)
-    now = datetime.utcnow()
     cooldown_minutes = project.retry_cooldown_minutes or 0
     cooldown_seconds_remaining = 0
     status = submission.status if submission and submission.status else "in_progress"
-    can_submit = status not in ("submitted", "pending_review", "accepted")
+    read_only = deadline_passed
+    can_submit = (not read_only) and status not in ("submitted", "pending_review", "accepted")
     if can_submit and cooldown_minutes > 0 and status == "rejected":
         if submission.submitted_at:
-            elapsed = (now - submission.submitted_at).total_seconds()
+            elapsed = (datetime.utcnow() - submission.submitted_at).total_seconds()
             wait_seconds = int(cooldown_minutes * 60 - elapsed)
             if wait_seconds > 0:
                 can_submit = False
@@ -7754,21 +7771,60 @@ def project_task_take(code, task_id):
     requested_q = request.args.get("q", "0")
     q_index = clamp_q(requested_q)
     draft_answers = _get_task_draft(task.id)
-    base_answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
+    base_answers = submission.answers_json if submission and isinstance(submission.answers_json, dict) else {}
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
-    run_log_url = url_for("projects_task_log_run", code=project.code, task_id=task.id)
-    telemetry_url = url_for("projects_task_log_telemetry", code=project.code, task_id=task.id)
-    telemetry_attempt_ref = _telemetry_attempt_ref_for_submission(submission)
-
+    run_log_url = "" if read_only else url_for("projects_task_log_run", code=project.code, task_id=task.id)
+    telemetry_url = "" if read_only else url_for("projects_task_log_telemetry", code=project.code, task_id=task.id)
+    telemetry_attempt_ref = _telemetry_attempt_ref_for_submission(submission) if submission else None
     preview = False
+    read_only_message = None
+    if read_only:
+        if previous_answers:
+            read_only_message = "This project's deadline has passed. Your saved work is shown below, but you cannot make further changes."
+        else:
+            read_only_message = "This project's deadline has passed. This task is now read-only."
+
+    def render_task_page(current_question, status_code=200, upload_error=None, can_submit_override=None, already_submitted_override=None):
+        already_submitted = already_submitted_override
+        if already_submitted is None:
+            already_submitted = bool(submission and submission.status in ("submitted", "pending_review", "accepted", "rejected"))
+        return render_template(
+            "exams_take.html",
+            exam=_task_exam_view(project, task),
+            question=current_question,
+            total_questions=total_questions,
+            current_index=q_index,
+            has_prev=(q_index > 0),
+            has_next=(q_index + 1 < total_questions),
+            can_submit=(can_submit if can_submit_override is None else can_submit_override),
+            preview=preview,
+            read_only=read_only,
+            read_only_message=read_only_message,
+            already_submitted=already_submitted,
+            previous_answers=previous_answers,
+            time_remaining_seconds=None,
+            user=current_user(),
+            student_name=student.name,
+            run_log_url=run_log_url,
+            telemetry_url=telemetry_url,
+            telemetry_attempt_ref=telemetry_attempt_ref,
+            cooldown_seconds_remaining=cooldown_seconds_remaining,
+            submission_id=(submission.id if submission else None),
+            persisted_answers=base_answers,
+            upload_error=upload_error,
+            nav_prev_url=(url_for("project_task_take", code=project.code, task_id=task.id, q=q_index - 1) if q_index > 0 else None),
+            nav_next_url=(url_for("project_task_take", code=project.code, task_id=task.id, q=q_index + 1) if q_index + 1 < total_questions else None),
+        ), status_code
 
     if request.method == "POST":
-        if not verify_csrf():
-            abort(400, "bad csrf")
         post_q_index = clamp_q(request.form.get("q_index", q_index))
         q_index = post_q_index
         current_question = questions[q_index] if total_questions else None
+        if read_only:
+            return render_task_page(current_question, status_code=403, can_submit_override=False)
+        if not verify_csrf():
+            abort(400, "bad csrf")
         upload_error = None
         if current_question:
             qid = current_question.get("id")
@@ -7798,29 +7854,7 @@ def project_task_take(code, task_id):
                 else:
                     val = request.form.get(field, "")
                 if upload_error:
-                    return render_template(
-                        "exams_take.html",
-                        exam=_task_exam_view(project, task),
-                        question=current_question,
-                        total_questions=total_questions,
-                        current_index=q_index,
-                        has_prev=(q_index > 0),
-                        has_next=(q_index + 1 < total_questions),
-                        can_submit=can_submit,
-                        preview=preview,
-                        already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
-                        previous_answers=previous_answers,
-                        time_remaining_seconds=None,
-                        user=current_user(),
-                        student_name=student.name,
-                        run_log_url=run_log_url,
-                        telemetry_url=telemetry_url,
-                        telemetry_attempt_ref=telemetry_attempt_ref,
-                        cooldown_seconds_remaining=cooldown_seconds_remaining,
-                        submission_id=submission.id,
-                        persisted_answers=base_answers,
-                        upload_error=upload_error,
-                    ), 400
+                    return render_task_page(current_question, status_code=400, upload_error=upload_error)
                 draft_answers[qid] = val
                 previous_answers[qid] = val
                 _save_task_draft(task.id, draft_answers)
@@ -7847,27 +7881,7 @@ def project_task_take(code, task_id):
                 strict_code_match=False,
             )
             if upload_error:
-                return render_template(
-                    "exams_take.html",
-                    exam=_task_exam_view(project, task),
-                    question=current_question,
-                    total_questions=total_questions,
-                    current_index=q_index,
-                    has_prev=(q_index > 0),
-                    has_next=(q_index + 1 < total_questions),
-                    can_submit=can_submit,
-                    preview=preview,
-                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
-                    previous_answers=previous_answers,
-                    time_remaining_seconds=None,
-                    user=current_user(),
-                    student_name=student.name,
-                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
-                    cooldown_seconds_remaining=cooldown_seconds_remaining,
-                    submission_id=submission.id,
-                    persisted_answers=base_answers,
-                    upload_error=upload_error,
-                ), 400
+                return render_task_page(current_question, status_code=400, upload_error=upload_error)
             if plot_updates:
                 draft_answers.update(plot_updates)
                 previous_answers.update(plot_updates)
@@ -7881,28 +7895,7 @@ def project_task_take(code, task_id):
             return redirect(url_for("student_projects"))
         if action == "submit":
             if not can_submit:
-                return render_template(
-                    "exams_take.html",
-                    exam=_task_exam_view(project, task),
-                    question=current_question,
-                    total_questions=total_questions,
-                    current_index=q_index,
-                    has_prev=(q_index > 0),
-                    has_next=(q_index + 1 < total_questions),
-                    can_submit=False,
-                    preview=preview,
-                    already_submitted=True,
-                    previous_answers=previous_answers,
-                    time_remaining_seconds=None,
-                    user=current_user(),
-                    student_name=student.name,
-                    run_log_url=run_log_url,
-                    telemetry_url=telemetry_url,
-                    telemetry_attempt_ref=telemetry_attempt_ref,
-                    cooldown_seconds_remaining=cooldown_seconds_remaining,
-                    submission_id=submission.id,
-                    persisted_answers=base_answers,
-                ), 403
+                return render_task_page(current_question, status_code=403, can_submit_override=False, already_submitted_override=True)
             answers = dict(base_answers)
             answers.update(draft_answers)
             answers, upload_error = _prepare_plot_answers_for_submit(
@@ -7919,27 +7912,8 @@ def project_task_take(code, task_id):
                 },
             )
             if upload_error:
-                return render_template(
-                    "exams_take.html",
-                    exam=_task_exam_view(project, task),
-                    question=current_question,
-                    total_questions=total_questions,
-                    current_index=q_index,
-                    has_prev=(q_index > 0),
-                    has_next=(q_index + 1 < total_questions),
-                    can_submit=can_submit,
-                    preview=preview,
-                    already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
-                    previous_answers=previous_answers,
-                    time_remaining_seconds=None,
-                    user=current_user(),
-                    student_name=student.name,
-                    run_log_url=url_for("projects_task_log_run", code=project.code, task_id=task.id),
-                    cooldown_seconds_remaining=cooldown_seconds_remaining,
-                    submission_id=submission.id,
-                    persisted_answers=base_answers,
-                    upload_error=upload_error,
-                ), 400
+                return render_task_page(current_question, status_code=400, upload_error=upload_error)
+            submitted_at = datetime.utcnow()
             grade_score = 0
             grade_total = 0
             grade_details = []
@@ -7963,8 +7937,8 @@ def project_task_take(code, task_id):
             submission.answers_json = answers
             submission.score = grade_score
             submission.max_score = grade_total
-            submission.last_activity_at = now
-            submission.submitted_at = now
+            submission.last_activity_at = submitted_at
+            submission.submitted_at = submitted_at
             has_manual_review = any(d.get("manual_review") for d in (grade_details or []))
             if task.requires_review or has_manual_review:
                 submission.status = "pending_review"
@@ -7993,7 +7967,7 @@ def project_task_take(code, task_id):
                 score=grade_score,
                 max_score=grade_total,
                 grading_json=grade_details_for_history or None,
-                submitted_at=now,
+                submitted_at=submitted_at,
             )
             db.session.add(attempt)
             # Run cheating detection
@@ -8024,30 +7998,7 @@ def project_task_take(code, task_id):
             return redirect(url_for("project_task_take", code=project.code, task_id=task.id, q=target))
 
     current_question = dict(questions[q_index]) if total_questions else None
-    exam_view = _task_exam_view(project, task)
-    return render_template(
-        "exams_take.html",
-        exam=exam_view,
-        question=current_question,
-        total_questions=total_questions,
-        current_index=q_index,
-        has_prev=(q_index > 0),
-        has_next=(q_index + 1 < total_questions),
-        can_submit=can_submit,
-        preview=preview,
-        already_submitted=(submission.status in ("submitted", "pending_review", "accepted", "rejected")),
-        previous_answers=previous_answers,
-        time_remaining_seconds=None,
-        user=current_user(),
-        student_name=student.name,
-        run_log_url=run_log_url,
-        telemetry_url=telemetry_url,
-        telemetry_attempt_ref=telemetry_attempt_ref,
-        cooldown_seconds_remaining=cooldown_seconds_remaining,
-        submission_id=submission.id,
-        persisted_answers=base_answers,
-        upload_error=None,
-    )
+    return render_task_page(current_question)
 
 @app.route("/student/projects/<code>/tasks/<int:task_id>/submission")
 @require_student()
@@ -8347,6 +8298,12 @@ def projects_task_log_run(code, task_id):
     student = current_student()
     if not student:
         abort(401)
+    if not _project_visible_to_student(project, student):
+        abort(403)
+    if not _project_dependencies_met(project, student):
+        abort(403)
+    if _project_deadline_passed(project):
+        return jsonify({"ok": False, "error": "deadline_passed"}), 403
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(
@@ -8385,6 +8342,8 @@ def projects_task_log_telemetry(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    if _project_deadline_passed(project):
+        return jsonify({"ok": False, "error": "deadline_passed"}), 403
     submission = _project_task_submission(task, student)
     if not submission:
         submission = ProjectTaskSubmission(

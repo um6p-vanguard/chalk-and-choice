@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
 {% set is_task = exam.kind == 'project_task' %}
+{% set read_only = read_only|default(false) %}
+{% set nav_prev_url = nav_prev_url|default(None) %}
+{% set nav_next_url = nav_next_url|default(None) %}
+{% set inputs_locked = read_only or not can_submit %}
 {% set submit_label = "Submit task" if is_task else "Submit exam" %}
 {% set log_url = run_log_url if run_log_url is defined else url_for('exams_log_run', code=exam.code) %}
 {% set telemetry_endpoint = telemetry_url if telemetry_url is defined else url_for('exams_log_telemetry', code=exam.code) %}
@@ -46,7 +50,9 @@
      data-current-question="{{ question.id if question else '' }}"
      data-current-question-type="{{ question.type if question else '' }}"
      data-current-question-index="{{ (current_index + 1) if question else '' }}">
-  {% if preview %}
+  {% if read_only %}
+    <p class="text-danger">{{ read_only_message or ("This task is read-only." if is_task else "This exam is read-only.") }}</p>
+  {% elif preview %}
     <p class="muted">Preview mode — inputs are read-only and submissions are disabled.</p>
   {% elif already_submitted %}
     <p class="muted">You already submitted this exam. Your responses are shown below.</p>
@@ -56,7 +62,7 @@
   {% if upload_error %}
     <p class="text-danger" style="margin-top:6px;">{{ upload_error }}</p>
   {% endif %}
-  {% if cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and exam.kind == "project_task" and not can_submit %}
+  {% if cooldown_seconds_remaining and cooldown_seconds_remaining > 0 and exam.kind == "project_task" and not can_submit and not read_only %}
     {% set hrs = cooldown_seconds_remaining // 3600 %}
     {% set mins = (cooldown_seconds_remaining % 3600) // 60 %}
     <p class="text-danger" style="margin-top:6px;">You can try this task again in approximately {{ hrs }}h {{ mins }}m.</p>
@@ -95,9 +101,9 @@
               {% set opt_value = loop.index0 ~ '' %}
               <label class="choice-option">
                 {% if q.type == "multi" %}
-                  <input type="checkbox" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                  <input type="checkbox" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if inputs_locked %}disabled{% endif %}>
                 {% else %}
-                  <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if not can_submit %}disabled{% endif %}>
+                  <input type="radio" name="answer_{{ q.id }}" value="{{ opt_value }}" {% if opt_value in selected %}checked{% endif %} {% if inputs_locked %}disabled{% endif %}>
                 {% endif %}
                 <div class="choice-option-text" data-markdown-block>{{ option }}</div>
               </label>
@@ -105,7 +111,7 @@
           </div>
         {% elif q.type == "text" %}
           <div class="text-answer-shell" data-markdown-shell="{{ q.id }}" style="display:flex; flex-direction:column; gap:8px;">
-            <textarea name="answer_{{ q.id }}" data-markdown-answer="{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" style="width:100%; min-height:120px; max-height:240px;" {% if not can_submit %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
+            <textarea name="answer_{{ q.id }}" data-markdown-answer="{{ q.id }}" rows="{{ q.lines or 4 }}" placeholder="{{ q.placeholder }}" style="width:100%; min-height:120px; max-height:240px;" {% if inputs_locked %}disabled{% endif %}>{{ previous_answers.get(q.id, "") }}</textarea>
             <div class="markdown-preview-header muted" style="font-size:0.9rem;">Preview (Markdown)</div>
             <div class="markdown-preview-body" data-markdown-preview="{{ q.id }}" style="white-space:pre-wrap; min-height:60px; padding:8px; border:1px solid #1f2937; border-radius:8px; background:#0b1220;"></div>
           </div>
@@ -114,7 +120,7 @@
           {% set has_file = existing_file is mapping %}
           <div style="display:flex; flex-direction:column; gap:10px;">
             <div>
-              <input type="file" name="answer_{{ q.id }}" accept="{{ q.accept or '.zip' }}" {% if not can_submit %}disabled{% endif %}>
+              <input type="file" name="answer_{{ q.id }}" accept="{{ q.accept or '.zip' }}" {% if inputs_locked %}disabled{% endif %}>
               <div class="muted" style="margin-top:6px;">Accepted: {{ q.accept or '.zip' }} • Max size: {{ q.max_mb or 5 }} MB</div>
             </div>
             {% if has_file %}
@@ -173,12 +179,12 @@
               <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: {{ (q.language or 'python')|capitalize }}</div>
-                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}" {% if inputs_locked %}disabled{% endif %}>Reset to starter</button>
                 </div>
                 {% if saved_code_differs %}
                   <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
                 {% endif %}
-                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
+                <textarea name="answer_{{ q.id }}" rows="14" data-code-input="{{ q.id }}" data-code-language="{{ q.language or 'python' }}" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if inputs_locked %}disabled{% endif %}>{{ editor_code }}</textarea>
               </div>
             </div>
 
@@ -190,7 +196,7 @@
                     <span class="muted" style="font-size:0.9rem; padding:4px 8px; border-radius:12px; border:1px solid #334155;" data-sample-summary="{{ q.id }}">Not run</span>
                   </div>
                   {% if public_samples %}
-                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" data-samples='{{ public_samples|tojson|e }}' {% if not can_submit %}disabled{% endif %}>Run all samples</button>
+                    <button type="button" class="btn btn-primary" data-run-samples data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" data-samples='{{ public_samples|tojson|e }}' {% if inputs_locked %}disabled{% endif %}>Run all samples</button>
                   {% endif %}
                 </div>
                 {% if public_samples %}
@@ -251,18 +257,18 @@
                 </div>
                 {% if q.mode == "function" %}
                   <label style="display:block; margin-top:6px;">Function call</label>
-                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="my_func(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" {% if inputs_locked %}disabled{% endif %}>
                 {% elif q.mode == "class" %}
                   <label style="display:block; margin-top:6px;">Method call / expression</label>
-                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="obj.my_method(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                  <input type="text" data-custom-call="{{ q.id }}" class="fill-input" placeholder="obj.my_method(123)" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" {% if inputs_locked %}disabled{% endif %}>
                   {% if q.class_init %}
                     <div class="muted" style="margin-top:6px;">A fresh object is created before each run: <code>obj = {{ q.class_init }}</code></div>
                   {% endif %}
                 {% else %}
                   <label style="display:block; margin-top:6px;">Standard input</label>
-                  <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here"></textarea>
+                  <textarea rows="4" style="width:100%; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" data-custom-stdin="{{ q.id }}" placeholder="Enter stdin lines here" {% if inputs_locked %}disabled{% endif %}></textarea>
                 {% endif %}
-                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" {% if not can_submit %}disabled{% endif %}>Run custom input</button>
+                <button type="button" class="btn" style="margin-top:8px;" data-run-custom data-question="{{ q.id }}" data-mode="{{ q.mode or 'script' }}" data-class-init="{{ q.class_init|default('', true)|e }}" {% if inputs_locked %}disabled{% endif %}>Run custom input</button>
                 <div data-custom-results="{{ q.id }}" class="code-custom-results" style="margin-top:8px; font-size:0.95rem;"></div>
               </div>
             </div>
@@ -301,12 +307,12 @@
               <div class="code-question-editor" style="padding:10px; border:1px solid #1f2937; border-radius:10px; background:#0b1220;">
                 <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px;">
                   <div class="muted" style="font-size:0.9rem;">Language: Python</div>
-                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}">Reset to starter</button>
+                  <button type="button" class="btn" data-code-reset data-target="{{ q.id }}" data-initial="{{ current_starter|e }}" {% if inputs_locked %}disabled{% endif %}>Reset to starter</button>
                 </div>
                 {% if saved_plot_differs %}
                   <p class="muted" style="margin:0 0 8px 0;">Showing saved work from an earlier visit. Use Reset to starter to load the current starter code.</p>
                 {% endif %}
-                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if not can_submit %}disabled{% endif %}>{{ editor_code }}</textarea>
+                <textarea name="answer_{{ q.id }}" rows="20" data-code-input="{{ q.id }}" data-code-language="python" data-code-initial="{{ current_starter|e }}" style="width:100%;" {% if inputs_locked %}disabled{% endif %}>{{ editor_code }}</textarea>
               </div>
             </div>
 
@@ -322,7 +328,7 @@
                   {% if plot_preview_url %}
                     <a class="btn" href="{{ url_for('project_task_plot_download', submission_id=submission_id, question_id=q.id, download=1) }}">Download PNG</a>
                   {% endif %}
-                  <button type="button" class="btn btn-primary" data-run-plot data-question="{{ q.id }}" {% if not can_submit %}disabled{% endif %}>Run plot</button>
+                  <button type="button" class="btn btn-primary" data-run-plot data-question="{{ q.id }}" {% if inputs_locked %}disabled{% endif %}>Run plot</button>
                 </div>
               </div>
               <div
@@ -369,14 +375,14 @@
           {% set existing_value = previous_answers.get(q.id, '') or '' %}
           {% set filled = existing_value.split('||') if existing_value else [] %}
           <div data-token-question>
-            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;">{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
+            <pre class="token-expression" style="padding:10px; border:1px solid #1f2937; border-radius:8px; background:#0b1220; white-space:pre-wrap; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;"><code style="white-space:pre-wrap;">{% for segment in segments -%}{% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}{% if not loop.last %}{% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}<button type="button" class="token-slot" data-token-slot data-placeholder="____" style="min-width:4ch; font-family:inherit; font-size:0.9rem; padding:4px 8px; border-radius:8px; border:1px solid #334155; background:#111827; color:inherit;" {% if inputs_locked %}disabled{% endif %}>{{ slot_val or '____' }}</button>{% endif %}{%- endfor %}</code></pre>
             <input type="hidden" name="answer_{{ q.id }}" data-token-answer value="{{ existing_value }}">
             <div class="token-bank" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:6px;">
               {% set base_tokens = q.correct_tokens or [] %}
               {% set extra_tokens = q.distractor_tokens or [] %}
               {% set options = q.token_options if q.token_options else (base_tokens + extra_tokens) %}
               {% for opt in options %}
-                <button type="button" class="token-option" data-token-option data-token-value="{{ opt|e }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;" data-markdown-inline>{{ opt }}</button>
+                <button type="button" class="token-option" data-token-option data-token-value="{{ opt|e }}" style="font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace; font-size:0.9rem;" data-markdown-inline {% if inputs_locked %}disabled{% endif %}>{{ opt }}</button>
               {% endfor %}
             </div>
           </div>
@@ -391,7 +397,7 @@
                 {% if segment %}<span data-markdown-inline>{{ segment }}</span>{% endif %}
                 {% if not loop.last %}
                   {% set slot_val = filled[loop.index0] if loop.index0 < filled|length else '' %}
-                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}" style="min-width:4ch; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;">
+                  <input type="text" class="fill-input" data-fill-input value="{{ slot_val }}" style="min-width:4ch; font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;" {% if inputs_locked %}readonly{% endif %}>
                 {% endif %}
               {% endfor %}
             </div>
@@ -408,20 +414,20 @@
     <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-top:12px;">
       <div class="row" style="gap:8px;">
         {% if has_prev %}
-          {% if preview %}
-            <a class="btn" href="{{ url_for('exam_take', code=exam.code, q=current_index - 1) }}">Previous</a>
+          {% if preview or read_only %}
+            <a class="btn" href="{{ nav_prev_url or url_for('exam_take', code=exam.code, q=current_index - 1) }}">Previous</a>
           {% else %}
             <button class="btn" type="submit" name="nav_action" value="prev">Previous</button>
           {% endif %}
         {% endif %}
       </div>
       <div class="row" style="gap:8px;">
-        {% if exam.kind == "project_task" and not preview %}
+        {% if exam.kind == "project_task" and not preview and not read_only %}
           <button class="btn" type="submit" name="nav_action" value="save">Save without submitting</button>
         {% endif %}
-        {% if preview %}
+        {% if preview or read_only %}
           {% if has_next %}
-            <a class="btn btn-primary" href="{{ url_for('exam_take', code=exam.code, q=current_index + 1) }}">Next</a>
+            <a class="btn btn-primary" href="{{ nav_next_url or url_for('exam_take', code=exam.code, q=current_index + 1) }}">Next</a>
           {% endif %}
         {% else %}
           {% if has_next %}

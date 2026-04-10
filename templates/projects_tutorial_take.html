@@ -9,9 +9,18 @@
         <div class="muted markdown-block" style="margin:8px 0 0 0;">{{ task.description|markdown }}</div>
       {% endif %}
       <p class="muted" style="margin:8px 0 0 0;">
-        Completed by reading.
-        {% if submission and submission.submitted_at %}
+        {% if deadline_passed %}
+          Read-only after the project deadline.
+          {% if submission and submission.submitted_at %}
+            First opened {{ submission.submitted_at.strftime("%b %d %H:%M UTC") }}.
+          {% else %}
+            Viewing it now does not update your progress.
+          {% endif %}
+        {% else %}
+          Completed by reading.
+          {% if submission and submission.submitted_at %}
           First opened {{ submission.submitted_at.strftime("%b %d %H:%M UTC") }}.
+          {% endif %}
         {% endif %}
       </p>
     </div>

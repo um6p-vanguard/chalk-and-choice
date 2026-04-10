@@ -134,6 +134,8 @@
             <p class="muted" style="margin:4px 0;">
               {% if row.completed %}
                 <span style="color:#4ade80;">Completed</span>
+              {% elif row.deadline_passed %}
+                <span style="color:#f87171;">Deadline passed</span>
               {% else %}
                 <span style="color:#fde047;">In progress</span>
               {% endif %}
