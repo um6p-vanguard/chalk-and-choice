@@ -39,7 +39,7 @@
 
 {% if group_rows %}
   {% for row in group_rows %}
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card" style="margin-bottom:16px; min-width:0;">
       <div class="row" style="justify-content:space-between; align-items:flex-start;">
         <div>
           <h3 style="margin:0;">{{ row.group.name }}</h3>
@@ -48,50 +48,52 @@
         </div>
       </div>
       {% if row.student_rows %}
-        <table style="margin-top:12px;">
-          <thead>
-            <tr>
-              <th>Student</th>
-              <th>Pending reviews</th>
-              <th>Private notes</th>
-              <th>Latest note</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for student_row in row.student_rows %}
+        <div class="table-scroll" style="margin-top:12px;">
+          <table>
+            <thead>
               <tr>
-                <td>
-                  <div><strong>{{ student_row.student.name }}</strong></div>
-                  <div class="muted" style="font-size:0.9rem;">{{ student_row.student.email }}</div>
-                </td>
-                <td>
-                  {% if student_row.pending_count %}
-                    <span style="color:#fde047; font-weight:600;">{{ student_row.pending_count }} waiting</span>
-                  {% else %}
-                    <span style="color:#4ade80;">None</span>
-                  {% endif %}
-                </td>
-                <td>{{ student_row.note_count }}</td>
-                <td>
-                  {% if student_row.latest_note %}
-                    <div class="muted" style="font-size:0.9rem; white-space:pre-line;">{{ student_row.latest_note.body[:120] }}{% if student_row.latest_note.body|length > 120 %}...{% endif %}</div>
-                  {% else %}
-                    <span class="muted">No notes yet</span>
-                  {% endif %}
-                </td>
-                <td style="text-align:right;">
-                  <div class="row" style="gap:8px; justify-content:flex-end;">
-                    <a class="btn" href="{{ url_for('student_private_notes', student_id=student_row.student.id) }}">Notes</a>
-                    {% if student_row.latest_pending %}
-                      <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=student_row.latest_pending.id) }}">Review</a>
-                    {% endif %}
-                  </div>
-                </td>
+                <th>Student</th>
+                <th>Pending reviews</th>
+                <th>Private notes</th>
+                <th>Latest note</th>
+                <th></th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {% for student_row in row.student_rows %}
+                <tr>
+                  <td class="cell-wrap">
+                    <div><strong>{{ student_row.student.name }}</strong></div>
+                    <div class="muted cell-wrap" style="font-size:0.9rem;">{{ student_row.student.email }}</div>
+                  </td>
+                  <td>
+                    {% if student_row.pending_count %}
+                      <span style="color:#fde047; font-weight:600;">{{ student_row.pending_count }} waiting</span>
+                    {% else %}
+                      <span style="color:#4ade80;">None</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ student_row.note_count }}</td>
+                  <td>
+                    {% if student_row.latest_note %}
+                      <div class="muted cell-wrap" style="font-size:0.9rem; white-space:pre-line;">{{ student_row.latest_note.body[:120] }}{% if student_row.latest_note.body|length > 120 %}...{% endif %}</div>
+                    {% else %}
+                      <span class="muted">No notes yet</span>
+                    {% endif %}
+                  </td>
+                  <td style="text-align:right;">
+                    <div class="row" style="gap:8px; justify-content:flex-end;">
+                      <a class="btn" href="{{ url_for('student_private_notes', student_id=student_row.student.id) }}">Notes</a>
+                      {% if student_row.latest_pending %}
+                        <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=student_row.latest_pending.id) }}">Review</a>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       {% else %}
         <p class="muted" style="margin:12px 0 0 0;">No students are currently assigned to this group.</p>
       {% endif %}
@@ -105,52 +107,54 @@
 
 <div class="sp"></div>
 
-<div class="row" style="gap:16px; align-items:flex-start;">
-  <div class="card" style="flex:1; min-width:320px;">
+<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:16px; align-items:start;">
+  <div class="card" style="min-width:0;">
     <div class="row" style="justify-content:space-between; align-items:center;">
       <h3 style="margin:0;">Pending reviews</h3>
       <a class="btn" href="{{ url_for('projects_reviews') }}">Open queue</a>
     </div>
     {% if pending_reviews %}
-      <table style="margin-top:12px;">
-        <thead>
-          <tr>
-            <th>Student</th>
-            <th>Project</th>
-            <th>Task</th>
-            <th>Submitted</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for sub in pending_reviews %}
+      <div class="table-scroll" style="margin-top:12px;">
+        <table>
+          <thead>
             <tr>
-              <td>
-                <div><strong>{{ sub.student_name or "Unknown" }}</strong></div>
-                {% if sub.visible_groups %}
-                  <div class="muted" style="font-size:0.85rem;">
-                    {% for group in sub.visible_groups %}
-                      {{ group.name }}{% if not loop.last %}, {% endif %}
-                    {% endfor %}
-                  </div>
-                {% endif %}
-              </td>
-              <td>{{ sub.project.title if sub.project else "—" }}</td>
-              <td>{{ sub.task.title if sub.task else "—" }}</td>
-              <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>
-              <td style="text-align:right;">
-                <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=sub.id) }}">Review</a>
-              </td>
+              <th>Student</th>
+              <th>Project</th>
+              <th>Task</th>
+              <th>Submitted</th>
+              <th></th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for sub in pending_reviews %}
+              <tr>
+                <td class="cell-wrap">
+                  <div><strong>{{ sub.student_name or "Unknown" }}</strong></div>
+                  {% if sub.visible_groups %}
+                    <div class="muted cell-wrap" style="font-size:0.85rem;">
+                      {% for group in sub.visible_groups %}
+                        {{ group.name }}{% if not loop.last %}, {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                </td>
+                <td class="cell-wrap">{{ sub.project.title if sub.project else "—" }}</td>
+                <td class="cell-wrap">{{ sub.task.title if sub.task else "—" }}</td>
+                <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>
+                <td style="text-align:right;">
+                  <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=sub.id) }}">Review</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% else %}
       <p class="muted" style="margin:12px 0 0 0;">No pending reviews in your assigned groups.</p>
     {% endif %}
   </div>
 
-  <div class="card" style="flex:1; min-width:320px;">
+  <div class="card" style="min-width:0;">
     <h3 style="margin:0;">Recent private notes</h3>
     {% if recent_notes %}
       <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
