@@ -48,8 +48,8 @@
         </div>
       </div>
       {% if row.student_rows %}
-        <div class="table-scroll" style="margin-top:12px;">
-          <table>
+        <div class="table-scroll" style="margin-top:12px; max-height:340px;">
+          <table style="min-width:860px;">
             <thead>
               <tr>
                 <th>Student</th>
@@ -62,9 +62,9 @@
             <tbody>
               {% for student_row in row.student_rows %}
                 <tr>
-                  <td class="cell-wrap">
-                    <div><strong>{{ student_row.student.name }}</strong></div>
-                    <div class="muted cell-wrap" style="font-size:0.9rem;">{{ student_row.student.email }}</div>
+                  <td>
+                    <div style="white-space:nowrap;"><strong>{{ student_row.student.name }}</strong></div>
+                    <div class="muted" style="font-size:0.9rem; white-space:nowrap;">{{ student_row.student.email }}</div>
                   </td>
                   <td>
                     {% if student_row.pending_count %}
@@ -76,7 +76,7 @@
                   <td>{{ student_row.note_count }}</td>
                   <td>
                     {% if student_row.latest_note %}
-                      <div class="muted cell-wrap" style="font-size:0.9rem; white-space:pre-line;">{{ student_row.latest_note.body[:120] }}{% if student_row.latest_note.body|length > 120 %}...{% endif %}</div>
+                      <div class="muted cell-scroll" style="font-size:0.9rem;">{{ student_row.latest_note.body[:120] }}{% if student_row.latest_note.body|length > 120 %}...{% endif %}</div>
                     {% else %}
                       <span class="muted">No notes yet</span>
                     {% endif %}
@@ -114,8 +114,8 @@
       <a class="btn" href="{{ url_for('projects_reviews') }}">Open queue</a>
     </div>
     {% if pending_reviews %}
-      <div class="table-scroll" style="margin-top:12px;">
-        <table>
+      <div class="table-scroll" style="margin-top:12px; max-height:340px;">
+        <table style="min-width:760px;">
           <thead>
             <tr>
               <th>Student</th>
@@ -128,18 +128,18 @@
           <tbody>
             {% for sub in pending_reviews %}
               <tr>
-                <td class="cell-wrap">
-                  <div><strong>{{ sub.student_name or "Unknown" }}</strong></div>
+                <td>
+                  <div style="white-space:nowrap;"><strong>{{ sub.student_name or "Unknown" }}</strong></div>
                   {% if sub.visible_groups %}
-                    <div class="muted cell-wrap" style="font-size:0.85rem;">
+                    <div class="muted" style="font-size:0.85rem; white-space:nowrap;">
                       {% for group in sub.visible_groups %}
                         {{ group.name }}{% if not loop.last %}, {% endif %}
                       {% endfor %}
                     </div>
                   {% endif %}
                 </td>
-                <td class="cell-wrap">{{ sub.project.title if sub.project else "—" }}</td>
-                <td class="cell-wrap">{{ sub.task.title if sub.task else "—" }}</td>
+                <td style="white-space:nowrap;">{{ sub.project.title if sub.project else "—" }}</td>
+                <td style="white-space:nowrap;">{{ sub.task.title if sub.task else "—" }}</td>
                 <td>{{ sub.submitted_at.strftime("%b %d %H:%M") if sub.submitted_at else "—" }}</td>
                 <td style="text-align:right;">
                   <a class="btn btn-primary" href="{{ url_for('projects_review_detail', submission_id=sub.id) }}">Review</a>
@@ -157,7 +157,7 @@
   <div class="card" style="min-width:0;">
     <h3 style="margin:0;">Recent private notes</h3>
     {% if recent_notes %}
-      <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px;">
+      <div style="margin-top:12px; display:flex; flex-direction:column; gap:12px; max-height:340px; overflow:auto; padding-right:4px;">
         {% for note in recent_notes %}
           <div style="border:1px solid var(--border); border-radius:10px; padding:12px; background:#0b1220;">
             <div class="row" style="justify-content:space-between; align-items:flex-start;">
