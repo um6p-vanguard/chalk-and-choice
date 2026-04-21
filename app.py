@@ -2956,6 +2956,7 @@ def _sanitize_md_html(rendered):
             "a": ["href", "title", "rel", "target"],
             "code": ["class"],
             "img": ["src", "alt", "title"],
+            "ol": ["start", "reversed"],
         }
     )
     allowed_protocols = set(getattr(bleach.sanitizer, "ALLOWED_PROTOCOLS", {"http", "https", "mailto"}))

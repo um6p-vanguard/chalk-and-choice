@@ -13,6 +13,7 @@
   const inlineMarkdown = (text) => {
     let t = escapeHtml(text || "");
     t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+    t = t.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     t = t.replace(/\*([^*]+)\*/g, "<em>$1</em>");
     return t;
@@ -21,12 +22,23 @@
   const renderMarkdownText = (text) => {
     const lines = (text || "").replace(/\r\n/g, "\n").split("\n");
     const parts = [];
-    let inList = false;
+    let listKind = null;
     let inCode = false;
     let inMath = false;
     let codeLines = [];
     let codeLang = "";
     let mathLines = [];
+    let paragraphLines = [];
+    const flushParagraph = () => {
+      if (!paragraphLines.length) return;
+      parts.push(`<p class="md-p">${paragraphLines.map((line) => inlineMarkdown(line)).join("<br>")}</p>`);
+      paragraphLines = [];
+    };
+    const flushList = () => {
+      if (!listKind) return;
+      parts.push(`</${listKind}>`);
+      listKind = null;
+    };
     const flushCode = () => {
       const langAttr = codeLang ? ` data-lang="${escapeHtml(codeLang)}"` : "";
       const codeHtml = escapeHtml(codeLines.join("\n"));
@@ -42,14 +54,12 @@
     lines.forEach((line) => {
       const fence = line.trim().match(/^```(.*)$/);
       if (fence) {
+        flushParagraph();
         if (inCode) {
           flushCode();
           inCode = false;
         } else {
-          if (inList) {
-            parts.push("</ul>");
-            inList = false;
-          }
+          flushList();
           inCode = true;
           codeLang = (fence[1] || "").trim();
         }
@@ -62,20 +72,16 @@
       const trimmed = line.trim();
       if (!inMath) {
         if (trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4) {
-          if (inList) {
-            parts.push("</ul>");
-            inList = false;
-          }
+          flushParagraph();
+          flushList();
           const content = trimmed.slice(2, -2).trim();
           const mathHtml = escapeHtml(content);
           parts.push(`<div class="md-math">$$\n${mathHtml}\n$$</div>`);
           return;
         }
         if (trimmed === "$$") {
-          if (inList) {
-            parts.push("</ul>");
-            inList = false;
-          }
+          flushParagraph();
+          flushList();
           inMath = true;
           mathLines = [];
           return;
@@ -91,40 +97,65 @@
       }
       const heading = line.match(/^(#{1,6})\s+(.*)$/);
       if (heading) {
-        if (inList) {
-          parts.push("</ul>");
-          inList = false;
-        }
+        flushParagraph();
+        flushList();
         const level = heading[1].length;
         parts.push(`<h${level} class="md-heading">${inlineMarkdown(heading[2].trim())}</h${level}>`);
         return;
       }
-      const listMatch = line.match(/^\s*-\s+(.*)/);
-      if (listMatch) {
-        if (!inList) {
-          parts.push("<ul class=\"md-list\">");
-          inList = true;
-        }
-        parts.push(`<li>${inlineMarkdown(listMatch[1])}</li>`);
+      if (/^\s{0,3}(?:[-*_]\s*){3,}$/.test(trimmed)) {
+        flushParagraph();
+        flushList();
+        parts.push("<hr>");
         return;
       }
-      if (inList) {
-        parts.push("</ul>");
-        inList = false;
+      const blockquote = line.match(/^\s*>\s?(.*)$/);
+      if (blockquote) {
+        flushParagraph();
+        flushList();
+        parts.push(`<blockquote>${inlineMarkdown(blockquote[1])}</blockquote>`);
+        return;
       }
-      if (!line.trim()) {
-        parts.push("<br>");
-      } else {
-        parts.push(`<p class="md-p">${inlineMarkdown(line)}</p>`);
+      const unordered = line.match(/^\s*[-*+]\s+(.*)$/);
+      const ordered = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+      if (unordered || ordered) {
+        flushParagraph();
+        const nextKind = unordered ? "ul" : "ol";
+        if (listKind && listKind !== nextKind) {
+          flushList();
+        }
+        if (!listKind) {
+          const attrs = nextKind === "ol"
+            ? [`class="md-list md-list-ol"`]
+            : [`class="md-list"`];
+          if (ordered) {
+            const start = parseInt(ordered[1], 10);
+            if (Number.isFinite(start) && start > 1) {
+              attrs.push(`start="${start}"`);
+            }
+          }
+          parts.push(`<${nextKind} ${attrs.join(" ")}>`);
+          listKind = nextKind;
+        }
+        parts.push(`<li>${inlineMarkdown(unordered ? unordered[1] : ordered[2])}</li>`);
+        return;
       }
+      if (!trimmed) {
+        flushParagraph();
+        flushList();
+        return;
+      }
+      flushList();
+      paragraphLines.push(line);
     });
+    flushParagraph();
     if (inCode) {
       flushCode();
     }
     if (inMath) {
       flushMath();
     }
-    if (inList) parts.push("</ul>");
+    flushList();
     return parts.join("");
   };
 
@@ -2937,6 +2968,7 @@ json.dumps(results)
       const qid = area.dataset.markdownAnswer;
       const preview = document.querySelector(`[data-markdown-preview="${qid}"]`);
       if (!preview) return;
+      preview.classList.add("md-block");
       preview.innerHTML = renderMarkdownText(area.value || "");
       typesetMath(preview);
     };
@@ -2951,10 +2983,10 @@ json.dumps(results)
     const blockSelectors = "[data-markdown-prompt], [data-markdown-statement], [data-markdown-instructions], [data-markdown-block]";
     const blocks = document.querySelectorAll(blockSelectors);
     blocks.forEach((block) => {
-      const content = (block.textContent || "").trim();
+      const content = block.textContent || "";
+      block.classList.add("md-block");
       block.innerHTML = renderMarkdownText(content);
       block.style.whiteSpace = "normal";
-      block.style.fontFamily = "system-ui, -apple-system, 'Segoe UI', sans-serif";
     });
     const inlineNodes = document.querySelectorAll("[data-markdown-inline]");
     inlineNodes.forEach((node) => {

@@ -65,7 +65,7 @@
         <div class="row" style="justify-content:space-between; align-items:flex-start;">
           <div>
             <h4 style="margin:0 0 4px 0;">{{ exam.title }}</h4>
-            {% if exam.description %}<p class="muted" style="margin:0 0 8px 0;">{{ exam.description }}</p>{% endif %}
+            {% if exam.description %}<div class="muted" style="margin:0 0 8px 0;">{{ exam.description|markdown }}</div>{% endif %}
             <p class="muted" style="margin:0;">
               {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }},{% else %}Open now,{% endif %}
               {% if exam.ends_at %} closes {{ exam.ends_at.strftime("%b %d %H:%M UTC") }}{% else %} no end date{% endif %}

@@ -4,7 +4,7 @@
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
       <h3 style="margin:0;">Student attempts — {{ project.title }}</h3>
-      {% if project.description %}<p class="muted" style="margin:6px 0;">{{ project.description }}</p>{% endif %}
+      {% if project.description %}<div class="muted" style="margin:6px 0;">{{ project.description|markdown }}</div>{% endif %}
       <p class="muted" style="margin:6px 0;">{{ project.tasks|length }} task(s) • Code: <code>{{ project.code }}</code></p>
       {% if review_scope_limited %}
         <p class="muted" style="margin:6px 0 0 0;">Showing only students from groups assigned to you.</p>

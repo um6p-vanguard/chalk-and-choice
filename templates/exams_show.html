@@ -5,7 +5,7 @@
   <div class="row" style="justify-content:space-between; align-items:flex-start;">
     <div>
       <h3 style="margin:0;">{{ exam.title }}</h3>
-      {% if exam.description %}<p class="muted" style="margin:6px 0;">{{ exam.description }}</p>{% endif %}
+      {% if exam.description %}<div class="muted" style="margin:6px 0;">{{ exam.description|markdown }}</div>{% endif %}
       <p class="muted" style="margin:6px 0;">Code: <code>{{ exam.code }}</code></p>
       <p class="muted" style="margin:6px 0;">
         {% if exam.starts_at %}Opens {{ exam.starts_at.strftime("%b %d %H:%M UTC") }}{% else %}Opens immediately{% endif %} •
@@ -15,7 +15,7 @@
       {% if exam.instructions %}
         <div style="margin-top:12px; padding:12px; border:1px dashed #334155; border-radius:10px;">
           <strong>Student instructions</strong>
-          <p class="muted" style="margin:6px 0 0 0;">{{ exam.instructions }}</p>
+          <div class="muted" style="margin:6px 0 0 0;">{{ exam.instructions|markdown }}</div>
         </div>
       {% endif %}
       <div style="margin-top:12px;">

@@ -40,7 +40,7 @@
           <div class="muted">{{ row.completed_count }} / {{ row.total_tasks }} tasks done</div>
         </summary>
         <div style="margin-top:10px;">
-          {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
+          {% if row.project.description %}<div class="muted" style="margin:4px 0;">{{ row.project.description|markdown }}</div>{% endif %}
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project was optional for your group.</span></p>
           {% endif %}
@@ -100,7 +100,7 @@
           {% if row.project.instructions %}
             <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
               <strong>Instructions</strong>
-              <div class="muted markdown-block" style="margin:6px 0 0 0;" data-markdown-project>{{ row.project.instructions }}</div>
+              <div class="muted" style="margin:6px 0 0 0;">{{ row.project.instructions|markdown }}</div>
             </div>
           {% endif %}
         </div>
@@ -149,7 +149,7 @@
           {% endif %}
         </summary>
         <div style="margin-top:10px;">
-          {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
+          {% if row.project.description %}<div class="muted" style="margin:4px 0;">{{ row.project.description|markdown }}</div>{% endif %}
           {% if not row.required %}
             <p class="muted" style="margin:4px 0;"><span>This project is optional for your group.</span></p>
           {% endif %}
@@ -159,7 +159,7 @@
           {% if row.project.instructions %}
             <div style="margin-top:10px; padding:10px; border:1px dashed #334155; border-radius:10px;">
               <strong>Instructions</strong>
-              <div class="muted markdown-block" style="margin:6px 0 0 0;" data-markdown-project>{{ row.project.instructions }}</div>
+              <div class="muted" style="margin:6px 0 0 0;">{{ row.project.instructions|markdown }}</div>
             </div>
           {% endif %}
           {% if row.tasks %}
@@ -246,7 +246,7 @@
             <details style="border:1px solid var(--border); border-radius:10px; padding:12px; margin-top:12px;">
             <summary style="cursor:pointer;"><strong>{{ row.project.title }}</strong></summary>
             <div style="margin-top:8px;">
-              {% if row.project.description %}<div class="muted markdown-block" style="margin:4px 0;" data-markdown-project>{{ row.project.description }}</div>{% endif %}
+              {% if row.project.description %}<div class="muted" style="margin:4px 0;">{{ row.project.description|markdown }}</div>{% endif %}
               {% if row.project.deadline_at %}
                 <p class="muted" style="margin:4px 0;" data-project-deadline data-deadline-iso="{{ row.project.deadline_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">Deadline: {{ row.project.deadline_at.strftime("%b %d %H:%M UTC") }}</p>
               {% endif %}
@@ -277,29 +277,6 @@
 {% block scripts %}
 <script>
 (function(){
-  const blocks = document.querySelectorAll("[data-markdown-project]");
-  const escapeHtml = (str) => (str || "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[ch] || ch));
-  const inline = (text) => escapeHtml(text || "").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  const render = (text) => {
-    const lines = (text || "").split(/\n/);
-    const parts = [];
-    let inList = false;
-    lines.forEach((line) => {
-      const m = line.match(/^\s*-\s+(.*)/);
-      if (m) {
-        if (!inList) { parts.push("<ul style='margin:6px 0 6px 18px; padding:0;'>"); inList = true; }
-        parts.push(`<li style="margin:2px 0;">${inline(m[1])}</li>`);
-      } else {
-        if (inList) { parts.push("</ul>"); inList = false; }
-        if (!line.trim()) { parts.push("<br>"); }
-        else { parts.push(`<p style="margin:4px 0;">${inline(line)}</p>`); }
-      }
-    });
-    if (inList) parts.push("</ul>");
-    return parts.join("");
-  };
-  blocks.forEach((el) => { el.innerHTML = render(el.textContent || ""); el.style.whiteSpace = "normal"; });
-
   const deadlineEls = document.querySelectorAll("[data-project-deadline]");
   if (!deadlineEls.length) return;
 
