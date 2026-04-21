@@ -1,4 +1,4 @@
-import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct
+import os, io, base64, secrets, argparse, csv, random, functools, time, json, hmac, hashlib, traceback, builtins, sys, multiprocessing, re, ast, uuid, importlib, signal, struct, html
 from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import (
@@ -2983,7 +2983,13 @@ def _sanitize_md_html(rendered):
         attrs[(None, "rel")] = " ".join(sorted(rel))
         return attrs
 
-    return bleach.linkify(cleaned, callbacks=[link_attrs_callback], skip_tags=["pre", "code"])
+    linkified = bleach.linkify(cleaned, callbacks=[link_attrs_callback], skip_tags=["pre", "code"])
+    return re.sub(
+        r"(<code\b[^>]*>)(.*?)(</code>)",
+        lambda match: f"{match.group(1)}{html.unescape(match.group(2))}{match.group(3)}",
+        linkified,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
 
 
 def _render_md_basic(raw):
