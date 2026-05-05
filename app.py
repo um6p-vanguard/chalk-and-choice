@@ -24,7 +24,7 @@ from models import (db, Student, User, Form,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
                     Project, ProjectDeadlineOverride, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
-                    AttendanceSheet, AttendanceEntry, StudentLogSession, SubmissionTelemetryEvent,
+                    AttendanceSheet, AttendanceEntry, StudentLogSession,
                     Announcement, AnnouncementDelivery,
                     BlogPost, BlogComment, Leaderboard)
 import qrcode
@@ -365,10 +365,6 @@ WARNING_SPEED_THRESHOLD_SEC = 60  # Completing task in less than this triggers w
 WARNING_IP_CHANGE_ENABLED = True  # Detect IP changes during exam/project
 WARNING_SIMILARITY_THRESHOLD = 0.90  # Code similarity threshold (0-1)
 WARNING_AUTO_FLAG_COUNT = 3  # Auto-flag student after this many warnings
-TELEMETRY_BATCH_LIMIT = 100
-TELEMETRY_STRING_LIMIT = 200000
-TELEMETRY_RECENT_EVENT_LIMIT = 60
-
 ATTENDANCE_STATUS_OPTIONS = [
     ("present", "Present"),
     ("late", "Late"),
@@ -1229,9 +1225,6 @@ def create_app(db_path=DB_URI):
 
 app = create_app()
 
-# --------------------------------------------------------------------
-# Telemetry helpers
-# --------------------------------------------------------------------
 def _json_request_payload():
     data = request.get_json(silent=True)
     if isinstance(data, dict):
@@ -1244,794 +1237,6 @@ def _json_request_payload():
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
-
-def _sanitize_telemetry_value(value, depth=0):
-    if depth > 8:
-        return None
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        return value[:TELEMETRY_STRING_LIMIT]
-    if isinstance(value, list):
-        return [_sanitize_telemetry_value(item, depth + 1) for item in value[:250]]
-    if isinstance(value, dict):
-        clean = {}
-        for idx, (key, item) in enumerate(value.items()):
-            if idx >= 100:
-                break
-            clean[str(key)[:128]] = _sanitize_telemetry_value(item, depth + 1)
-        return clean
-    return str(value)[:TELEMETRY_STRING_LIMIT]
-
-def _telemetry_attempt_ref_for_submission(submission):
-    if not submission:
-        return None
-    if isinstance(submission, ExamSubmission):
-        return submission.started_at.isoformat() if submission.started_at else "exam-current"
-    if isinstance(submission, ProjectTaskSubmission):
-        attempt_number = _next_task_attempt_number(submission.id) if getattr(submission, "id", None) else 1
-        return f"task-attempt-{attempt_number}"
-    return None
-
-def _telemetry_query_for_submission(submission):
-    if isinstance(submission, ExamSubmission):
-        return SubmissionTelemetryEvent.query.filter_by(exam_submission_id=submission.id)
-    if isinstance(submission, ProjectTaskSubmission):
-        return SubmissionTelemetryEvent.query.filter_by(project_task_submission_id=submission.id)
-    return SubmissionTelemetryEvent.query.filter(text("1 = 0"))
-
-def _append_submission_telemetry_events(submission, events):
-    if not submission or not isinstance(events, list):
-        return 0
-    default_attempt_ref = _telemetry_attempt_ref_for_submission(submission)
-    rows = []
-    for raw in events[:TELEMETRY_BATCH_LIMIT]:
-        if not isinstance(raw, dict):
-            continue
-        event_type = (raw.get("type") or "").strip().lower()
-        if not event_type or not re.fullmatch(r"[a-z0-9_.:-]{1,48}", event_type):
-            continue
-        payload = raw.get("payload")
-        if isinstance(payload, dict):
-            payload_json = _sanitize_telemetry_value(payload)
-        else:
-            payload_json = {}
-        question_id = raw.get("question_id")
-        if question_id in (None, ""):
-            question_id = None
-        else:
-            question_id = str(question_id)[:64]
-        attempt_ref = str(raw.get("attempt_ref") or default_attempt_ref or "")[:80] or None
-        session_key = str(raw.get("session_key") or "")[:80] or None
-        client_ts = str(raw.get("client_ts") or "")[:48] or None
-        row = SubmissionTelemetryEvent(
-            exam_submission_id=(submission.id if isinstance(submission, ExamSubmission) else None),
-            project_task_submission_id=(submission.id if isinstance(submission, ProjectTaskSubmission) else None),
-            question_id=question_id,
-            attempt_ref=attempt_ref,
-            session_key=session_key,
-            client_ts=client_ts,
-            event_type=event_type,
-            payload_json=payload_json,
-        )
-        rows.append(row)
-    if rows:
-        db.session.add_all(rows)
-    return len(rows)
-
-def _question_label_map(questions):
-    mapping = {}
-    if not isinstance(questions, list):
-        return mapping
-    for idx, question in enumerate(questions, start=1):
-        if not isinstance(question, dict):
-            continue
-        qid = question.get("id")
-        if qid in (None, ""):
-            continue
-        label = f"Question {idx}"
-        title = (question.get("title") or "").strip()
-        if title:
-            label = f"{label} • {title}"
-        mapping[str(qid)] = label
-    return mapping
-
-def _format_duration_ms(value):
-    try:
-        total_seconds = max(0, int(round((value or 0) / 1000.0)))
-    except Exception:
-        total_seconds = 0
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    if hours:
-        return f"{hours}h {minutes}m {seconds}s"
-    if minutes:
-        return f"{minutes}m {seconds}s"
-    return f"{seconds}s"
-
-def _telemetry_char_count(payload):
-    if not isinstance(payload, dict):
-        return 0
-    try:
-        if payload.get("text_length") is not None:
-            return max(0, int(payload.get("text_length")))
-        if payload.get("text_len") is not None:
-            return max(0, int(payload.get("text_len")))
-    except Exception:
-        pass
-    text_value = payload.get("text")
-    return len(text_value) if isinstance(text_value, str) else 0
-
-def _telemetry_text_excerpt(text_value, limit=80):
-    if not isinstance(text_value, str):
-        return ""
-    clean = " ".join(text_value.split())
-    if len(clean) <= limit:
-        return clean
-    return clean[: max(0, limit - 1)] + "…"
-
-def _telemetry_event_payload(event):
-    return event.payload_json if isinstance(getattr(event, "payload_json", None), dict) else {}
-
-def _telemetry_event_ts(event):
-    value = getattr(event, "event_ts", None)
-    return value if isinstance(value, datetime) else None
-
-def _telemetry_event_ts_label(event_or_ts):
-    ts = event_or_ts if isinstance(event_or_ts, datetime) else _telemetry_event_ts(event_or_ts)
-    return ts.strftime("%b %d %H:%M:%S") if ts else "—"
-
-def _telemetry_action_label(action):
-    action_key = (action or "").strip().lower()
-    mapping = {
-        "submit": "Submitted",
-        "next": "Saved and moved next",
-        "prev": "Saved and moved previous",
-        "save": "Saved without submitting",
-        "autosubmit": "Auto-submitted",
-        "auto-submit": "Auto-submitted",
-        "auto": "Auto-submitted",
-    }
-    if action_key in mapping:
-        return mapping[action_key]
-    if not action_key:
-        return "Submitted"
-    return action_key.replace("_", " ").replace("-", " ").title()
-
-def _telemetry_code_text(payload, *keys):
-    if not isinstance(payload, dict):
-        return ""
-    for key in keys or ("code", "text"):
-        value = payload.get(key)
-        if isinstance(value, str):
-            return value
-    return ""
-
-def _telemetry_code_preview(text_value, max_lines=5, max_chars=320):
-    if not isinstance(text_value, str):
-        return ""
-    trimmed = text_value.strip("\n")
-    if not trimmed:
-        return ""
-    lines = trimmed.splitlines()
-    excerpt = "\n".join(lines[:max_lines])
-    if len(excerpt) > max_chars:
-        excerpt = excerpt[:max_chars].rstrip()
-    if len(lines) > max_lines or len(excerpt) < len(trimmed):
-        excerpt = excerpt.rstrip() + "\n..."
-    return excerpt
-
-def _telemetry_change_stats(payload):
-    stats = {
-        "edit_count": 0,
-        "inserted": 0,
-        "deleted": 0,
-        "largest_change": 0,
-        "first_snippet": "",
-    }
-    if not isinstance(payload, dict):
-        return stats
-    changes = payload.get("changes") if isinstance(payload.get("changes"), list) else []
-    try:
-        stats["edit_count"] = max(0, int(payload.get("change_count") or len(changes) or 0))
-    except Exception:
-        stats["edit_count"] = len(changes)
-    for change in changes:
-        if not isinstance(change, dict):
-            continue
-        inserted_text = change.get("text") or ""
-        deleted_text = change.get("deleted_text") or ""
-        inserted_len = len(inserted_text)
-        deleted_len = len(deleted_text)
-        stats["inserted"] += inserted_len
-        stats["deleted"] += deleted_len
-        stats["largest_change"] = max(stats["largest_change"], inserted_len, deleted_len)
-        if not stats["first_snippet"]:
-            stats["first_snippet"] = _telemetry_text_excerpt(inserted_text or deleted_text, limit=60)
-    return stats
-
-def _telemetry_ms_between(start, end):
-    if not isinstance(start, datetime) or not isinstance(end, datetime):
-        return None
-    return max(0, int((end - start).total_seconds() * 1000))
-
-def _telemetry_length_delta_label(before_length, after_length):
-    try:
-        before_value = int(before_length or 0)
-        after_value = int(after_length or 0)
-    except Exception:
-        return ""
-    delta = after_value - before_value
-    if delta > 0:
-        return f"+{delta} chars"
-    if delta < 0:
-        return f"{delta} chars"
-    return "No size change"
-
-def _telemetry_build_signal(level, title, description, question_label=None, ts=None):
-    return {
-        "level": level,
-        "title": title,
-        "description": description,
-        "question_label": question_label or "",
-        "ts": _telemetry_event_ts_label(ts),
-        "sort_ts": (ts.isoformat() if isinstance(ts, datetime) else ""),
-    }
-
-def _telemetry_build_timeline_entry(ts, question_label, title, description, tone="normal"):
-    return {
-        "ts": _telemetry_event_ts_label(ts),
-        "sort_ts": (ts.isoformat() if isinstance(ts, datetime) else ""),
-        "question_label": question_label or "General",
-        "title": title,
-        "description": description,
-        "tone": tone,
-    }
-
-def _describe_telemetry_event(event, question_labels=None):
-    question_labels = question_labels or {}
-    payload = _telemetry_event_payload(event)
-    changes = payload.get("changes") if isinstance(payload.get("changes"), list) else []
-    if event.event_type == "time_spent":
-        parts = [
-            f"page {_format_duration_ms(payload.get('page_ms') or 0)}",
-            f"active {_format_duration_ms(payload.get('active_ms') or 0)}",
-        ]
-        editor_ms = int(payload.get("editor_ms") or 0)
-        if editor_ms:
-            parts.append(f"editor {_format_duration_ms(editor_ms)}")
-        return ", ".join(parts)
-    if event.event_type == "editor_change":
-        stats = _telemetry_change_stats(payload)
-        flags = []
-        if payload.get("is_undoing"):
-            flags.append("undo")
-        if payload.get("is_redoing"):
-            flags.append("redo")
-        if payload.get("is_flush"):
-            flags.append("flush")
-        label = f"+{stats['inserted']}/-{stats['deleted']} chars across {stats['edit_count'] or len(changes) or 1} edit(s)"
-        if flags:
-            label += f" ({', '.join(flags)})"
-        if stats["first_snippet"]:
-            label += f" • “{stats['first_snippet']}”"
-        return label
-    if event.event_type in ("editor_paste", "editor_copy", "editor_cut", "editor_drop"):
-        verb = {
-            "editor_paste": "pasted",
-            "editor_copy": "copied",
-            "editor_cut": "cut",
-            "editor_drop": "dropped",
-        }[event.event_type]
-        snippet = _telemetry_text_excerpt(payload.get("text"), limit=60)
-        label = f"{verb} {_telemetry_char_count(payload)} chars"
-        if snippet:
-            label += f" • “{snippet}”"
-        return label
-    if event.event_type == "editor_focus":
-        return "focused editor"
-    if event.event_type == "editor_blur":
-        return "left editor"
-    if event.event_type == "code_reset":
-        after_length = payload.get("after_length") or payload.get("code_length") or 0
-        before_length = payload.get("before_length") or len(_telemetry_code_text(payload, "before_code"))
-        delta_label = _telemetry_length_delta_label(before_length, after_length)
-        return f"reset code to {after_length} chars ({delta_label})"
-    if event.event_type == "editor_init":
-        return f"opened editor ({payload.get('code_length') or 0} chars)"
-    if event.event_type == "editor_submit":
-        return f"{_telemetry_action_label(payload.get('action'))} snapshot ({payload.get('code_length') or 0} chars)"
-    if event.event_type in ("code_run_samples", "code_run_custom"):
-        run_label = "ran samples" if event.event_type == "code_run_samples" else "ran custom input"
-        passed = payload.get("passed_count")
-        total = payload.get("result_count")
-        if passed is not None and total is not None:
-            run_label += f" ({passed}/{total} passed)"
-        return run_label
-    if event.event_type == "code_run_error":
-        message = (payload.get("message") or "").strip()
-        if message:
-            return f"code run failed • {message}"
-        return "code run failed"
-    if event.event_type == "form_submit":
-        action = payload.get("action") or "submit"
-        return _telemetry_action_label(action)
-    if event.event_type == "question_view":
-        page = payload.get("question_index")
-        if page:
-            return f"opened question {page}"
-        return "opened question"
-    return event.event_type.replace("_", " ")
-
-def _summarize_telemetry_events(events, questions=None):
-    ordered_events = [event for event in (events or []) if event]
-    labels = _question_label_map(questions)
-    code_question_ids = {
-        str(question.get("id"))
-        for question in (questions or [])
-        if isinstance(question, dict) and question.get("type") == "code" and question.get("id") not in (None, "")
-    }
-    question_rows = {}
-    counts = {}
-    summary = {
-        "total_events": len(ordered_events),
-        "total_page_ms": 0,
-        "total_active_ms": 0,
-        "total_editor_ms": 0,
-        "paste_count": 0,
-        "copy_count": 0,
-        "cut_count": 0,
-        "drop_count": 0,
-        "run_count": 0,
-        "session_count": 0,
-        "attempt_count": 0,
-        "question_rows": [],
-        "headline": "",
-        "compact_summary": "",
-        "signals": [],
-        "timeline_events": [],
-        "timeline_omitted_count": 0,
-        "checkpoint_groups": [],
-        "top_signal": None,
-        "last_meaningful_event": None,
-        "recent_events": [],
-    }
-    session_keys = set()
-    attempt_refs = set()
-    meaningful_events = []
-    latest_submit_event = None
-    latest_submit_ts = None
-    latest_submit_action = ""
-    prior_meaningful_ts = None
-    idle_gap_signals = []
-    idle_timeline_events = []
-    submission_gap_candidates = []
-    code_question_ids_seen = set()
-
-    for event in ordered_events:
-        counts[event.event_type] = counts.get(event.event_type, 0) + 1
-        if event.session_key:
-            session_keys.add(event.session_key)
-        if event.attempt_ref:
-            attempt_refs.add(event.attempt_ref)
-        payload = _telemetry_event_payload(event)
-        event_ts = _telemetry_event_ts(event)
-        qid = str(event.question_id) if event.question_id not in (None, "") else ""
-        row = question_rows.setdefault(qid, {
-            "question_id": qid,
-            "label": labels.get(qid) or ("General" if not qid else f"Question {qid}"),
-            "event_count": 0,
-            "page_ms": 0,
-            "active_ms": 0,
-            "editor_ms": 0,
-            "change_count": 0,
-            "paste_count": 0,
-            "copy_count": 0,
-            "cut_count": 0,
-            "drop_count": 0,
-            "run_count": 0,
-            "reset_count": 0,
-            "largest_paste_chars": 0,
-            "largest_insert_chars": 0,
-            "largest_delete_chars": 0,
-            "first_ts": None,
-            "last_ts": None,
-            "first_edit_ts": None,
-            "last_edit_ts": None,
-            "last_paste_ts": None,
-            "first_run_ts": None,
-            "last_run_ts": None,
-            "last_reset_ts": None,
-            "last_submit_ts": None,
-            "submit_action": "",
-            "initial_code": None,
-            "initial_code_length": None,
-            "initial_code_ts": None,
-            "latest_reset_code": None,
-            "latest_reset_length": None,
-            "latest_reset_ts": None,
-            "submitted_code": None,
-            "submitted_code_length": None,
-            "submitted_code_ts": None,
-            "summary_text": "",
-            "flag_texts": [],
-        })
-        row["event_count"] += 1
-        if event_ts and not row["first_ts"]:
-            row["first_ts"] = event_ts
-        if event_ts:
-            row["last_ts"] = event_ts
-
-        if event.event_type != "time_spent":
-            meaningful_events.append(event)
-            if prior_meaningful_ts and event_ts:
-                idle_ms = _telemetry_ms_between(prior_meaningful_ts, event_ts)
-                if idle_ms and idle_ms >= 5 * 60 * 1000:
-                    description = f"Returned after {_format_duration_ms(idle_ms)} without recorded activity."
-                    idle_gap_signals.append(_telemetry_build_signal(
-                        "info",
-                        "Long idle gap",
-                        description,
-                        question_label=row["label"],
-                        ts=event_ts,
-                    ))
-                    idle_timeline_events.append(_telemetry_build_timeline_entry(
-                        event_ts,
-                        row["label"],
-                        "Returned after idle gap",
-                        description,
-                        tone="quiet",
-                    ))
-            if event_ts:
-                prior_meaningful_ts = event_ts
-
-        if event.event_type == "time_spent":
-            page_ms = max(0, int(payload.get("page_ms") or 0))
-            active_ms = max(0, int(payload.get("active_ms") or 0))
-            editor_ms = max(0, int(payload.get("editor_ms") or 0))
-            row["page_ms"] += page_ms
-            row["active_ms"] += active_ms
-            row["editor_ms"] += editor_ms
-            summary["total_page_ms"] += page_ms
-            summary["total_active_ms"] += active_ms
-            summary["total_editor_ms"] += editor_ms
-        elif event.event_type == "editor_change":
-            stats = _telemetry_change_stats(payload)
-            row["change_count"] += stats["edit_count"]
-            row["largest_insert_chars"] = max(row["largest_insert_chars"], stats["inserted"])
-            row["largest_delete_chars"] = max(row["largest_delete_chars"], stats["deleted"])
-            if event_ts and not row["first_edit_ts"]:
-                row["first_edit_ts"] = event_ts
-            if event_ts:
-                row["last_edit_ts"] = event_ts
-        elif event.event_type == "editor_paste":
-            row["paste_count"] += 1
-            summary["paste_count"] += 1
-            row["largest_paste_chars"] = max(row["largest_paste_chars"], _telemetry_char_count(payload))
-            if event_ts:
-                row["last_paste_ts"] = event_ts
-            submission_gap_candidates.append((event, row, "paste"))
-        elif event.event_type == "editor_copy":
-            row["copy_count"] += 1
-            summary["copy_count"] += 1
-        elif event.event_type == "editor_cut":
-            row["cut_count"] += 1
-            summary["cut_count"] += 1
-        elif event.event_type == "editor_drop":
-            row["drop_count"] += 1
-            summary["drop_count"] += 1
-            row["largest_paste_chars"] = max(row["largest_paste_chars"], _telemetry_char_count(payload))
-            if event_ts:
-                row["last_paste_ts"] = event_ts
-            submission_gap_candidates.append((event, row, "drop"))
-        elif event.event_type in ("code_run_samples", "code_run_custom"):
-            row["run_count"] += 1
-            summary["run_count"] += 1
-            code_question_ids_seen.add(qid)
-            if event_ts and not row["first_run_ts"]:
-                row["first_run_ts"] = event_ts
-            if event_ts:
-                row["last_run_ts"] = event_ts
-        elif event.event_type == "editor_init":
-            code_text = _telemetry_code_text(payload, "code")
-            if row["initial_code"] is None:
-                row["initial_code"] = code_text
-                row["initial_code_length"] = payload.get("code_length") if payload.get("code_length") is not None else len(code_text)
-                row["initial_code_ts"] = event_ts
-        elif event.event_type == "code_reset":
-            row["reset_count"] += 1
-            code_text = _telemetry_code_text(payload, "code")
-            row["latest_reset_code"] = code_text
-            row["latest_reset_length"] = payload.get("after_length") if payload.get("after_length") is not None else len(code_text)
-            row["latest_reset_ts"] = event_ts
-            row["last_reset_ts"] = event_ts
-        elif event.event_type == "editor_submit":
-            code_text = _telemetry_code_text(payload, "code")
-            row["submitted_code"] = code_text
-            row["submitted_code_length"] = payload.get("code_length") if payload.get("code_length") is not None else len(code_text)
-            row["submitted_code_ts"] = event_ts
-            row["last_submit_ts"] = event_ts
-            row["submit_action"] = (payload.get("action") or "").strip().lower()
-        elif event.event_type == "form_submit":
-            latest_submit_event = event
-            latest_submit_ts = event_ts
-            latest_submit_action = (payload.get("action") or "").strip().lower()
-            row["last_submit_ts"] = event_ts
-        elif event.event_type == "question_view" and qid in code_question_ids:
-            code_question_ids_seen.add(qid)
-
-    def _question_sort_key(item):
-        qid = item["question_id"]
-        try:
-            return (0, int(qid))
-        except Exception:
-            return (1, qid)
-
-    summary["session_count"] = len(session_keys)
-    summary["attempt_count"] = len(attempt_refs)
-    summary["question_rows"] = sorted(question_rows.values(), key=_question_sort_key)
-    for row in summary["question_rows"]:
-        row["page_label"] = _format_duration_ms(row["page_ms"])
-        row["active_label"] = _format_duration_ms(row["active_ms"])
-        row["editor_label"] = _format_duration_ms(row["editor_ms"])
-        row["first_ts_label"] = _telemetry_event_ts_label(row["first_ts"])
-        row["last_ts_label"] = _telemetry_event_ts_label(row["last_ts"])
-        row["first_edit_label"] = _telemetry_event_ts_label(row["first_edit_ts"])
-        row["last_run_label"] = _telemetry_event_ts_label(row["last_run_ts"])
-        row["last_submit_label"] = _telemetry_event_ts_label(row["last_submit_ts"])
-        row["largest_paste_label"] = f"{row['largest_paste_chars']} chars" if row["largest_paste_chars"] else "—"
-        row["summary_text"] = (
-            f"{row['active_label']} active, {row['editor_label']} in editor, "
-            f"{row['change_count']} edits, {row['paste_count']} paste, {row['run_count']} runs"
-        )
-        flag_texts = []
-        if row["largest_paste_chars"]:
-            flag_texts.append(f"Largest paste/drop: {row['largest_paste_chars']} chars")
-        if row["reset_count"]:
-            flag_texts.append(f"Reset {row['reset_count']} time{'s' if row['reset_count'] != 1 else ''}")
-        if row["last_paste_ts"] and row["last_submit_ts"]:
-            paste_to_submit_ms = _telemetry_ms_between(row["last_paste_ts"], row["last_submit_ts"])
-            if paste_to_submit_ms is not None and paste_to_submit_ms <= 2 * 60 * 1000:
-                flag_texts.append(f"Last paste/drop was {_format_duration_ms(paste_to_submit_ms)} before save/submit")
-        if row["change_count"] and not row["run_count"] and row["question_id"] in code_question_ids:
-            flag_texts.append("No sample runs recorded")
-        row["flag_texts"] = flag_texts
-
-    summary["page_time_label"] = _format_duration_ms(summary["total_page_ms"])
-    summary["active_time_label"] = _format_duration_ms(summary["total_active_ms"])
-    summary["editor_time_label"] = _format_duration_ms(summary["total_editor_ms"])
-    summary["counts"] = counts
-
-    if latest_submit_ts is None:
-        latest_submit_ts = max(
-            (row["submitted_code_ts"] for row in question_rows.values() if row.get("submitted_code_ts")),
-            default=None,
-        )
-    code_rows = [row for row in summary["question_rows"] if row["question_id"] in code_question_ids_seen or row["question_id"] in code_question_ids]
-    headline_parts = [
-        f"{summary['active_time_label']} active",
-        f"{summary['editor_time_label']} in editor",
-    ]
-    if summary["question_rows"]:
-        headline_parts.append(f"{len([row for row in summary['question_rows'] if row['event_count']])} question{'s' if len(summary['question_rows']) != 1 else ''}")
-    if summary["run_count"]:
-        headline_parts.append(f"{summary['run_count']} run{'s' if summary['run_count'] != 1 else ''}")
-    if summary["paste_count"] or summary["drop_count"]:
-        paste_total = summary["paste_count"] + summary["drop_count"]
-        headline_parts.append(f"{paste_total} paste/drop event{'s' if paste_total != 1 else ''}")
-    summary["headline"] = ", ".join(headline_parts)
-    summary["compact_summary"] = summary["headline"]
-
-    signals = []
-    for event, row, action_kind in submission_gap_candidates:
-        chars = _telemetry_char_count(_telemetry_event_payload(event))
-        if chars < 80:
-            continue
-        event_ts = _telemetry_event_ts(event)
-        near_submit_text = ""
-        if latest_submit_ts and event_ts:
-            delta_ms = _telemetry_ms_between(event_ts, latest_submit_ts)
-            if delta_ms is not None and delta_ms <= 2 * 60 * 1000:
-                near_submit_text = f", {_format_duration_ms(delta_ms)} before the final save/submit"
-        signals.append(_telemetry_build_signal(
-            "warn" if chars >= 200 else "info",
-            f"Large {action_kind} event",
-            f"{row['label']} received {chars} chars via {action_kind}{near_submit_text}.",
-            question_label=row["label"],
-            ts=event_ts,
-        ))
-    if latest_submit_ts:
-        for row in code_rows:
-            if row["last_paste_ts"]:
-                delta_ms = _telemetry_ms_between(row["last_paste_ts"], latest_submit_ts)
-                if delta_ms is not None and delta_ms <= 60 * 1000:
-                    signals.append(_telemetry_build_signal(
-                        "warn",
-                        "Final save happened soon after paste/drop",
-                        f"{row['label']} was saved/submitted {_format_duration_ms(delta_ms)} after the last paste/drop.",
-                        question_label=row["label"],
-                        ts=row["last_submit_ts"] or latest_submit_ts,
-                    ))
-            if row["change_count"] and not row["run_count"]:
-                signals.append(_telemetry_build_signal(
-                    "info",
-                    "Code submitted without sample runs",
-                    f"{row['label']} has edits recorded but no sample or custom runs before the latest save/submit.",
-                    question_label=row["label"],
-                    ts=row["last_submit_ts"] or latest_submit_ts,
-                ))
-            if row["reset_count"] and row["last_reset_ts"]:
-                delta_ms = _telemetry_ms_between(row["last_reset_ts"], latest_submit_ts)
-                if delta_ms is not None and delta_ms <= 90 * 1000:
-                    signals.append(_telemetry_build_signal(
-                        "info",
-                        "Recent reset before final save",
-                        f"{row['label']} was reset {_format_duration_ms(delta_ms)} before the latest save/submit.",
-                        question_label=row["label"],
-                        ts=row["last_reset_ts"],
-                    ))
-    signals.extend(idle_gap_signals[:3])
-
-    deduped_signals = []
-    seen_signal_keys = set()
-    for signal in signals:
-        key = (signal.get("title"), signal.get("question_label"), signal.get("description"))
-        if key in seen_signal_keys:
-            continue
-        seen_signal_keys.add(key)
-        deduped_signals.append(signal)
-    warn_signals = [item for item in deduped_signals if item.get("level") == "warn"]
-    info_signals = [item for item in deduped_signals if item.get("level") != "warn"]
-    warn_signals.sort(key=lambda item: item.get("sort_ts") or "", reverse=True)
-    info_signals.sort(key=lambda item: item.get("sort_ts") or "", reverse=True)
-    summary["signals"] = (warn_signals + info_signals)[:8]
-    summary["top_signal"] = summary["signals"][0] if summary["signals"] else None
-
-    timeline_entries = []
-    seen_first_edit = set()
-    seen_first_run = set()
-    seen_first_view = set()
-    for event in meaningful_events:
-        payload = _telemetry_event_payload(event)
-        event_ts = _telemetry_event_ts(event)
-        qid = str(event.question_id) if event.question_id not in (None, "") else ""
-        question_label = labels.get(qid) or ("General" if not qid else f"Question {qid}")
-        event_type = event.event_type
-        if event_type == "question_view" and qid not in seen_first_view:
-            seen_first_view.add(qid)
-            timeline_entries.append(_telemetry_build_timeline_entry(
-                event_ts,
-                question_label,
-                "Opened question",
-                _describe_telemetry_event(event, labels),
-                tone="quiet",
-            ))
-        elif event_type == "editor_change" and qid not in seen_first_edit:
-            seen_first_edit.add(qid)
-            timeline_entries.append(_telemetry_build_timeline_entry(
-                event_ts,
-                question_label,
-                "Started editing",
-                _describe_telemetry_event(event, labels),
-            ))
-        elif event_type in ("editor_paste", "editor_drop"):
-            chars = _telemetry_char_count(payload)
-            if chars >= 40:
-                timeline_entries.append(_telemetry_build_timeline_entry(
-                    event_ts,
-                    question_label,
-                    "Inserted external text",
-                    _describe_telemetry_event(event, labels),
-                    tone="warn" if chars >= 200 else "normal",
-                ))
-        elif event_type == "code_reset":
-            timeline_entries.append(_telemetry_build_timeline_entry(
-                event_ts,
-                question_label,
-                "Reset code",
-                _describe_telemetry_event(event, labels),
-                tone="quiet",
-            ))
-        elif event_type in ("code_run_samples", "code_run_custom") and qid not in seen_first_run:
-            seen_first_run.add(qid)
-            timeline_entries.append(_telemetry_build_timeline_entry(
-                event_ts,
-                question_label,
-                "Ran code",
-                _describe_telemetry_event(event, labels),
-            ))
-        elif event_type == "form_submit":
-            timeline_entries.append(_telemetry_build_timeline_entry(
-                event_ts,
-                question_label,
-                _telemetry_action_label(payload.get("action")),
-                "Form submit captured for this attempt.",
-                tone="warn" if (payload.get("action") or "").strip().lower() == "submit" else "normal",
-            ))
-    timeline_entries.extend(idle_timeline_events)
-    timeline_entries.sort(key=lambda item: item.get("sort_ts") or "")
-    if len(timeline_entries) > 24:
-        summary["timeline_omitted_count"] = len(timeline_entries) - 24
-        timeline_entries = timeline_entries[:12] + timeline_entries[-12:]
-    summary["timeline_events"] = timeline_entries
-
-    checkpoint_groups = []
-    for row in summary["question_rows"]:
-        checkpoints = []
-        if row["initial_code"] is not None:
-            checkpoints.append({
-                "title": "Opened editor",
-                "ts": _telemetry_event_ts_label(row["initial_code_ts"]),
-                "code_length": row["initial_code_length"] or 0,
-                "delta_label": "Starting point",
-                "preview": _telemetry_code_preview(row["initial_code"]),
-            })
-        if row["latest_reset_code"] is not None:
-            before_length = row["initial_code_length"] if row["initial_code_length"] is not None else len(row["initial_code"] or "")
-            checkpoints.append({
-                "title": "Latest reset state",
-                "ts": _telemetry_event_ts_label(row["latest_reset_ts"]),
-                "code_length": row["latest_reset_length"] or 0,
-                "delta_label": _telemetry_length_delta_label(before_length, row["latest_reset_length"] or 0),
-                "preview": _telemetry_code_preview(row["latest_reset_code"]),
-            })
-        if row["submitted_code"] is not None:
-            baseline_length = row["initial_code_length"] if row["initial_code_length"] is not None else len(row["initial_code"] or "")
-            checkpoints.append({
-                "title": f"{_telemetry_action_label(row['submit_action'])} snapshot",
-                "ts": _telemetry_event_ts_label(row["submitted_code_ts"]),
-                "code_length": row["submitted_code_length"] or 0,
-                "delta_label": _telemetry_length_delta_label(baseline_length, row["submitted_code_length"] or 0),
-                "preview": _telemetry_code_preview(row["submitted_code"]),
-            })
-        if not checkpoints:
-            continue
-        overview = ""
-        if row["submitted_code"] is not None and row["initial_code_length"] is not None:
-            overview = (
-                f"From {row['initial_code_length']} to {row['submitted_code_length'] or 0} chars, "
-                f"{row['change_count']} edits, {row['run_count']} runs."
-            )
-        checkpoint_groups.append({
-            "question_label": row["label"],
-            "overview": overview,
-            "checkpoints": checkpoints,
-        })
-    summary["checkpoint_groups"] = checkpoint_groups
-
-    non_time_events = [event for event in meaningful_events if event.event_type not in ("editor_focus", "editor_blur")]
-    if non_time_events:
-        summary["last_meaningful_event"] = {
-            "ts": _telemetry_event_ts_label(non_time_events[-1]),
-            "question_label": labels.get(str(non_time_events[-1].question_id)) or (
-                "General" if non_time_events[-1].question_id in (None, "") else f"Question {non_time_events[-1].question_id}"
-            ),
-            "description": _describe_telemetry_event(non_time_events[-1], labels),
-        }
-
-    recent_slice = meaningful_events[-TELEMETRY_RECENT_EVENT_LIMIT:]
-    recent_items = []
-    for event in reversed(recent_slice):
-        qid = str(event.question_id) if event.question_id not in (None, "") else ""
-        recent_items.append({
-            "ts": _telemetry_event_ts_label(event),
-            "question_label": labels.get(qid) or ("General" if not qid else f"Question {qid}"),
-            "event_type": event.event_type.replace("_", " "),
-            "description": _describe_telemetry_event(event, labels),
-        })
-    summary["recent_events"] = recent_items
-    return summary
-
-def _task_attempt_ref(attempt_number):
-    try:
-        return f"task-attempt-{int(attempt_number)}"
-    except Exception:
-        return None
-
-def _telemetry_events_for_attempt(events, attempt_ref):
-    if not attempt_ref:
-        return list(events or [])
-    return [event for event in (events or []) if event.attempt_ref == attempt_ref]
 
 # --------------------------------------------------------------------
 # Upload helpers
@@ -2706,7 +1911,7 @@ def _detect_code_similarity(student, submission, question_id, submitted_code):
     return similar_found
 
 def _detect_paste_pattern(student, submission, answers_data):
-    """Detect copy/paste-style inserts using telemetry, with a length fallback."""
+    """Detect unusually large submitted answers."""
     if not isinstance(answers_data, dict):
         return False
     
@@ -2726,40 +1931,6 @@ def _detect_paste_pattern(student, submission, answers_data):
             if hasattr(submission.task, 'project') and submission.task.project:
                 context['project_code'] = submission.task.project.code
     
-    try:
-        attempt_ref = _telemetry_attempt_ref_for_submission(submission)
-        telemetry_events = (
-            _telemetry_query_for_submission(submission)
-            .filter(SubmissionTelemetryEvent.event_type.in_(["editor_paste", "editor_drop"]))
-            .filter(SubmissionTelemetryEvent.attempt_ref == attempt_ref)
-            .order_by(SubmissionTelemetryEvent.event_ts.asc(), SubmissionTelemetryEvent.id.asc())
-            .all()
-        )
-    except Exception:
-        telemetry_events = []
-
-    if telemetry_events:
-        total_chars = 0
-        largest_chars = 0
-        question_id = None
-        for event in telemetry_events:
-            payload = event.payload_json if isinstance(event.payload_json, dict) else {}
-            chars = _telemetry_char_count(payload)
-            total_chars += chars
-            if chars >= largest_chars:
-                largest_chars = chars
-                question_id = event.question_id or question_id
-        if largest_chars >= 200 or total_chars >= 500:
-            location = f" in question {question_id}" if question_id else ""
-            _add_warning(
-                student,
-                "paste_pattern",
-                f"Observed {len(telemetry_events)} paste/drop event(s){location}; total {total_chars} chars, largest {largest_chars} chars",
-                severity="low",
-                **context
-            )
-            return True
-
     for qid, answer in answers_data.items():
         if isinstance(answer, str) and len(answer) > 500:
             lines = answer.count('\n')
@@ -4973,24 +4144,6 @@ def _run_logs_by_question(logs):
         mapping.setdefault(str(qid), []).append(log)
     return mapping
 
-def _telemetry_summary_map_for_exam_submissions(submissions, questions=None):
-    submission_ids = [sub.id for sub in (submissions or []) if getattr(sub, "id", None)]
-    if not submission_ids:
-        return {}
-    events = (
-        SubmissionTelemetryEvent.query
-        .filter(SubmissionTelemetryEvent.exam_submission_id.in_(submission_ids))
-        .order_by(SubmissionTelemetryEvent.event_ts.asc(), SubmissionTelemetryEvent.id.asc())
-        .all()
-    )
-    grouped = {}
-    for event in events:
-        grouped.setdefault(event.exam_submission_id, []).append(event)
-    return {
-        submission_id: _summarize_telemetry_events(grouped.get(submission_id, []), questions=questions)
-        for submission_id in submission_ids
-    }
-
 # --------------------------------------------------------------------
 # Safe builtins for student code
 # --------------------------------------------------------------------
@@ -5693,12 +4846,10 @@ def exams_show(code):
     exam = Exam.query.filter_by(code=code).first_or_404()
     submissions = ExamSubmission.query.filter_by(exam_id=exam.id).order_by(ExamSubmission.started_at.asc()).all()
     questions = exam.questions_json if isinstance(exam.questions_json, list) else []
-    telemetry_summary_map = _telemetry_summary_map_for_exam_submissions(submissions, questions=questions)
     return render_template(
         "exams_show.html",
         exam=exam,
         submissions=submissions,
-        telemetry_summary_map=telemetry_summary_map,
         share_url=_exam_share_url(exam),
         questions=questions,
         user=current_user(),
@@ -5922,8 +5073,6 @@ def exam_take(code):
         can_submit = can_submit and (time_remaining > 0)
 
     run_log_url = url_for("exams_log_run", code=code) if student else ""
-    telemetry_url = url_for("exams_log_telemetry", code=code) if student else ""
-    telemetry_attempt_ref = _telemetry_attempt_ref_for_submission(submission) if submission else None
 
     # ------------------------------------------------------------------
     # POST: save to draft (session) + optional final submit
@@ -6018,8 +5167,6 @@ def exam_take(code):
                     already_submitted=True,
                     previous_answers=previous_answers,
                     run_log_url=run_log_url,
-                    telemetry_url=telemetry_url,
-                    telemetry_attempt_ref=telemetry_attempt_ref,
                     user=user,
                     student_name=session.get("student_name"),
                 ), 403
@@ -6118,8 +5265,6 @@ def exam_take(code):
         previous_answers=previous_answers,
         time_remaining_seconds=time_remaining if time_remaining is not None else None,
         run_log_url=run_log_url,
-        telemetry_url=telemetry_url,
-        telemetry_attempt_ref=telemetry_attempt_ref,
         submission_id=(submission.id if submission else None),
         upload_error=upload_error,
         user=user,
@@ -6164,34 +5309,6 @@ def exams_log_run(code):
     submission.last_activity_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
-
-@app.route("/api/exams/<code>/telemetry", methods=["POST"])
-def exams_log_telemetry(code):
-    exam = Exam.query.filter_by(code=code).first_or_404()
-    student = current_student()
-    if not student:
-        abort(401)
-    if exam.access_password_hash and not _exam_has_access(exam.id):
-        abort(403)
-    submission = ExamSubmission.query.filter_by(exam_id=exam.id, student_id=student.id).first()
-    if not submission:
-        submission = ExamSubmission(
-            exam_id=exam.id,
-            student_id=student.id,
-            student_name=student.name,
-            answers_json={},
-            run_logs=[],
-            ip_address=(request.remote_addr or "")[:64],
-        )
-        db.session.add(submission)
-        db.session.commit()
-    data = _json_request_payload()
-    if not verify_json_csrf(data):
-        abort(400, "bad csrf")
-    inserted = _append_submission_telemetry_events(submission, data.get("events") or [])
-    submission.last_activity_at = datetime.utcnow()
-    db.session.commit()
-    return jsonify({"ok": True, "event_count": inserted})
 
 @app.route("/api/exams/<code>/run-code", methods=["POST"])
 def exams_run_code(code):
@@ -7900,8 +7017,6 @@ def project_task_take(code, task_id):
     previous_answers = dict(base_answers)
     previous_answers.update(draft_answers)
     run_log_url = "" if read_only else url_for("projects_task_log_run", code=project.code, task_id=task.id)
-    telemetry_url = "" if read_only else url_for("projects_task_log_telemetry", code=project.code, task_id=task.id)
-    telemetry_attempt_ref = _telemetry_attempt_ref_for_submission(submission) if submission else None
     preview = False
     read_only_message = None
     if read_only:
@@ -7932,8 +7047,6 @@ def project_task_take(code, task_id):
             user=current_user(),
             student_name=student.name,
             run_log_url=run_log_url,
-            telemetry_url=telemetry_url,
-            telemetry_attempt_ref=telemetry_attempt_ref,
             cooldown_seconds_remaining=cooldown_seconds_remaining,
             submission_id=(submission.id if submission else None),
             persisted_answers=base_answers,
@@ -8148,14 +7261,6 @@ def project_task_submission_self_view(code, task_id):
         answers = submission.answers_json if isinstance(submission.answers_json, dict) else {}
     logs_source = latest_attempt.run_logs if latest_attempt and hasattr(latest_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
-    all_telemetry_events = _telemetry_query_for_submission(submission).order_by(
-        SubmissionTelemetryEvent.event_ts.asc(), SubmissionTelemetryEvent.id.asc()
-    ).all()
-    active_attempt_ref = _task_attempt_ref(latest_attempt.attempt_number) if latest_attempt else _telemetry_attempt_ref_for_submission(submission)
-    telemetry_summary = _summarize_telemetry_events(
-        _telemetry_events_for_attempt(all_telemetry_events, active_attempt_ref),
-        questions=questions,
-    )
     return render_template(
         "projects_submission_task_detail.html",
         project=project,
@@ -8165,7 +7270,6 @@ def project_task_submission_self_view(code, task_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
-        telemetry_summary=telemetry_summary,
         grading_by_question={},
         attempt_rows=[],
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
@@ -8456,39 +7560,6 @@ def projects_task_log_run(code, task_id):
     db.session.commit()
     return jsonify({"ok": True, "log_count": len(logs)})
 
-@app.route("/api/projects/<code>/tasks/<int:task_id>/telemetry", methods=["POST"])
-def projects_task_log_telemetry(code, task_id):
-    project = Project.query.filter_by(code=code).first_or_404()
-    task = ProjectTask.query.filter_by(id=task_id, project_id=project.id).first_or_404()
-    student = current_student()
-    if not student:
-        abort(401)
-    if not _project_visible_to_student(project, student):
-        abort(403)
-    if not _project_dependencies_met(project, student):
-        abort(403)
-    if _project_deadline_passed_for_student(project, student):
-        return jsonify({"ok": False, "error": "deadline_passed"}), 403
-    submission = _project_task_submission(task, student)
-    if not submission:
-        submission = ProjectTaskSubmission(
-            task_id=task.id,
-            project_id=project.id,
-            student_id=student.id,
-            student_name=student.name,
-            answers_json={},
-            run_logs=[],
-        )
-        db.session.add(submission)
-        db.session.commit()
-    data = _json_request_payload()
-    if not verify_json_csrf(data):
-        abort(400, "bad csrf")
-    inserted = _append_submission_telemetry_events(submission, data.get("events") or [])
-    submission.last_activity_at = datetime.utcnow()
-    db.session.commit()
-    return jsonify({"ok": True, "event_count": inserted})
-
 @app.route("/projects/<code>/submissions")
 @require_user()
 def projects_submissions_overview(code):
@@ -8591,26 +7662,13 @@ def projects_submission_task_detail(code, student_id, task_id):
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
     grading_by_question = _grading_by_question(latest_attempt.grading_json) if latest_attempt else {}
     attempts = ProjectTaskAttempt.query.filter_by(submission_id=submission.id).order_by(ProjectTaskAttempt.attempt_number.desc()).all()
-    all_telemetry_events = _telemetry_query_for_submission(submission).order_by(
-        SubmissionTelemetryEvent.event_ts.asc(), SubmissionTelemetryEvent.id.asc()
-    ).all()
-    active_attempt_ref = _task_attempt_ref(latest_attempt.attempt_number) if latest_attempt else _telemetry_attempt_ref_for_submission(submission)
-    telemetry_summary = _summarize_telemetry_events(
-        _telemetry_events_for_attempt(all_telemetry_events, active_attempt_ref),
-        questions=questions,
-    )
     attempt_rows = []
     for attempt in attempts:
-        attempt_ref = _task_attempt_ref(attempt.attempt_number)
         attempt_rows.append({
             "attempt": attempt,
             "answers": attempt.answers_json if isinstance(attempt.answers_json, dict) else {},
             "logs_by_question": _run_logs_by_question(attempt.run_logs if isinstance(attempt.run_logs, list) else None),
             "grading_by_question": _grading_by_question(attempt.grading_json),
-            "telemetry_summary": _summarize_telemetry_events(
-                _telemetry_events_for_attempt(all_telemetry_events, attempt_ref),
-                questions=questions,
-            ),
         })
     return render_template(
         "projects_submission_task_detail.html",
@@ -8621,7 +7679,6 @@ def projects_submission_task_detail(code, student_id, task_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
-        telemetry_summary=telemetry_summary,
         grading_by_question=grading_by_question,
         attempt_rows=attempt_rows,
         latest_attempt_id=(latest_attempt.id if latest_attempt else None),
@@ -8803,14 +7860,6 @@ def projects_review_detail(submission_id):
     logs_source = active_attempt.run_logs if active_attempt and hasattr(active_attempt, "run_logs") else submission.run_logs
     logs_by_question = _run_logs_by_question(logs_source if isinstance(logs_source, list) else None)
     grading_by_question = _grading_by_question(active_attempt.grading_json) if active_attempt else {}
-    all_telemetry_events = _telemetry_query_for_submission(submission).order_by(
-        SubmissionTelemetryEvent.event_ts.asc(), SubmissionTelemetryEvent.id.asc()
-    ).all()
-    active_attempt_ref = _task_attempt_ref(active_attempt.attempt_number) if active_attempt else _telemetry_attempt_ref_for_submission(submission)
-    telemetry_summary = _summarize_telemetry_events(
-        _telemetry_events_for_attempt(all_telemetry_events, active_attempt_ref),
-        questions=questions,
-    )
     has_code_questions = any((q.get("type") == "code") for q in questions)
     if not grading_by_question and task and questions and has_code_questions and ENABLE_BACKEND_CODE_RUNS:
         try:
@@ -8826,7 +7875,6 @@ def projects_review_detail(submission_id):
         questions=questions,
         answers=answers,
         logs_by_question=logs_by_question,
-        telemetry_summary=telemetry_summary,
         grading_by_question=grading_by_question,
         latest_attempt_id=(active_attempt.id if active_attempt else None),
         review_attempt=review_attempt,
