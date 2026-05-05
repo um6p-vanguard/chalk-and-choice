@@ -22,7 +22,7 @@ except Exception:
 from models import (db, Student, User, Form,
                     FormResponse,
                     StudentStats, Intervention, Exam, ExamSubmission, Grade,
-                    Project, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
+                    Project, ProjectDeadlineOverride, ProjectTask, ProjectTaskSubmission, ProjectTaskAttempt, ProjectDependency,
                     StudentGroup, StudentGroupMembership, StudentGroupReviewer, StudentPrivateNote, ProjectGroupAssignment,
                     AttendanceSheet, AttendanceEntry, StudentLogSession, SubmissionTelemetryEvent,
                     Announcement, AnnouncementDelivery,
@@ -4370,6 +4370,27 @@ def _project_deadline_passed(project, now=None):
     current_time = now or datetime.utcnow()
     return project.deadline_at <= current_time
 
+def _project_deadline_override_for_student(project, student):
+    if not project or not student or not getattr(student, "id", None):
+        return None
+    return ProjectDeadlineOverride.query.filter_by(
+        project_id=project.id,
+        student_id=student.id,
+    ).first()
+
+def _project_deadline_for_student(project, student):
+    override = _project_deadline_override_for_student(project, student)
+    if override and override.deadline_at:
+        return override.deadline_at
+    return project.deadline_at if project else None
+
+def _project_deadline_passed_for_student(project, student, now=None):
+    deadline = _project_deadline_for_student(project, student)
+    if not deadline:
+        return False
+    current_time = now or datetime.utcnow()
+    return deadline <= current_time
+
 def _project_dependencies_met(project, student):
     deps = project.dependencies or []
     for dep in deps:
@@ -6239,6 +6260,8 @@ def projects_run_code(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
+    if _project_deadline_passed_for_student(project, student):
+        return jsonify({"ok": False, "error": "deadline_passed"}), 403
     token = request.headers.get("X-CSRF", "")
     if not hmac.compare_digest(token, csrf_token()):
         abort(400, "bad csrf")
@@ -7003,6 +7026,32 @@ def projects_show(code):
     other_projects = Project.query.filter(Project.id != project.id).order_by(Project.title.asc()).all()
     assignments = ProjectGroupAssignment.query.filter_by(project_id=project.id).order_by(ProjectGroupAssignment.applies_to_all.desc(), ProjectGroupAssignment.created_at.asc()).all()
     student_groups = StudentGroup.query.order_by(StudentGroup.name.asc()).all()
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    deadline_students = _apply_review_scope_to_student_query(
+        Student.query,
+        user,
+        allowed_student_ids=allowed_student_ids,
+    ).order_by(Student.name.asc(), Student.email.asc()).all()
+    deadline_students = [
+        student for student in deadline_students
+        if _project_visible_to_student(project, student)
+    ]
+    deadline_overrides_query = ProjectDeadlineOverride.query.filter_by(project_id=project.id)
+    if allowed_student_ids is not None:
+        if allowed_student_ids:
+            deadline_overrides_query = deadline_overrides_query.filter(ProjectDeadlineOverride.student_id.in_(allowed_student_ids))
+        else:
+            deadline_overrides_query = deadline_overrides_query.filter(ProjectDeadlineOverride.id == -1)
+    deadline_overrides = deadline_overrides_query.all()
+    deadline_overrides = sorted(
+        deadline_overrides,
+        key=lambda override: (
+            ((override.student.name or "") if override.student else "").lower(),
+            ((override.student.email or "") if override.student else "").lower(),
+            override.id,
+        ),
+    )
     status_message = session.pop("projects_status", None)
     return render_template(
         "projects_show.html",
@@ -7012,8 +7061,10 @@ def projects_show(code):
         other_projects=other_projects,
         group_assignments=assignments,
         student_groups=student_groups,
+        deadline_students=deadline_students,
+        deadline_overrides=deadline_overrides,
         status_message=status_message,
-        user=current_user(),
+        user=user,
         student_name=session.get("student_name"),
     )
 
@@ -7284,6 +7335,67 @@ def projects_remove_group_assignment(code, assignment_id):
         db.session.commit()
     return redirect(url_for("projects_show", code=project.code))
 
+@app.post("/projects/<code>/deadline-overrides")
+@require_user()
+def projects_add_deadline_override(code):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    user = current_user()
+    try:
+        student_id = int(request.form.get("student_id") or "0")
+    except Exception:
+        student_id = 0
+    student = Student.query.get(student_id) if student_id else None
+    if not student:
+        session["projects_status"] = "Choose a valid student for the custom deadline."
+        return redirect(url_for("projects_show", code=project.code))
+    allowed_student_ids = _restricted_review_student_ids(user)
+    if not _can_user_review_student(user, student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    if not _project_visible_to_student(project, student):
+        session["projects_status"] = "That student is not in this project's audience."
+        return redirect(url_for("projects_show", code=project.code))
+    deadline_raw = (request.form.get("deadline_at") or "").strip()
+    deadline_at = parse_dt_local(deadline_raw)
+    if not deadline_at:
+        session["projects_status"] = "Custom deadline must be a valid date and time."
+        return redirect(url_for("projects_show", code=project.code))
+    override = ProjectDeadlineOverride.query.filter_by(
+        project_id=project.id,
+        student_id=student.id,
+    ).first()
+    action = "Updated"
+    if not override:
+        override = ProjectDeadlineOverride(
+            project_id=project.id,
+            student_id=student.id,
+            created_by_user_id=(user.id if user else None),
+        )
+        db.session.add(override)
+        action = "Added"
+    override.deadline_at = deadline_at
+    db.session.commit()
+    session["projects_status"] = f"{action} custom deadline for {student.name}."
+    return redirect(url_for("projects_show", code=project.code))
+
+@app.post("/projects/<code>/deadline-overrides/<int:override_id>/remove")
+@require_user()
+def projects_remove_deadline_override(code, override_id):
+    if not verify_csrf():
+        abort(400, "bad csrf")
+    project = Project.query.filter_by(code=code).first_or_404()
+    override = ProjectDeadlineOverride.query.filter_by(id=override_id, project_id=project.id).first_or_404()
+    user = current_user()
+    allowed_student_ids = _restricted_review_student_ids(user)
+    if not _can_user_review_student(user, override.student, allowed_student_ids=allowed_student_ids):
+        abort(403)
+    student_name = override.student.name if override.student else "student"
+    db.session.delete(override)
+    db.session.commit()
+    session["projects_status"] = f"Removed custom deadline for {student_name}."
+    return redirect(url_for("projects_show", code=project.code))
+
 @app.route("/projects/tasks/schema")
 @require_user()
 def projects_tasks_schema():
@@ -7550,7 +7662,8 @@ def student_projects():
     for project in projects:
         if not _project_visible_to_student(project, student):
             continue
-        deadline_passed = _project_deadline_passed(project)
+        effective_deadline = _project_deadline_for_student(project, student)
+        deadline_passed = _project_deadline_passed_for_student(project, student)
         unlocked = _project_dependencies_met(project, student)
         completed = _project_completed(project, student) if unlocked else False
         tasks = []
@@ -7601,6 +7714,7 @@ def student_projects():
             "total_tasks": len(tasks),
             "required": _project_required_for_student(project, student),
             "dependencies": [dep.prerequisite.title for dep in (project.dependencies or []) if dep.prerequisite],
+            "effective_deadline": effective_deadline,
             "deadline_passed": deadline_passed,
         }
         if completed:
@@ -7646,7 +7760,8 @@ def student_project_detail(code):
     if not _project_visible_to_student(project, student):
         abort(403)
     unlocked = _project_dependencies_met(project, student)
-    deadline_passed = _project_deadline_passed(project)
+    effective_deadline = _project_deadline_for_student(project, student)
+    deadline_passed = _project_deadline_passed_for_student(project, student)
     tasks = []
     for task in project.tasks:
         submission = _project_task_submission(task, student)
@@ -7688,6 +7803,7 @@ def student_project_detail(code):
         project=project,
         unlocked=unlocked,
         deadline_passed=deadline_passed,
+        effective_deadline=effective_deadline,
         tasks=tasks,
         user=current_user(),
         student_name=student.name,
@@ -7720,7 +7836,8 @@ def project_task_take(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
-    deadline_passed = _project_deadline_passed(project)
+    effective_deadline = _project_deadline_for_student(project, student)
+    deadline_passed = _project_deadline_passed_for_student(project, student)
     submission = _project_task_submission(task, student)
 
     if _is_tutorial_task(task):
@@ -7736,6 +7853,7 @@ def project_task_take(code, task_id):
             task=task,
             submission=submission,
             deadline_passed=deadline_passed,
+            effective_deadline=effective_deadline,
             user=current_user(),
             student_name=student.name,
         )
@@ -8309,7 +8427,7 @@ def projects_task_log_run(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
-    if _project_deadline_passed(project):
+    if _project_deadline_passed_for_student(project, student):
         return jsonify({"ok": False, "error": "deadline_passed"}), 403
     submission = _project_task_submission(task, student)
     if not submission:
@@ -8349,7 +8467,7 @@ def projects_task_log_telemetry(code, task_id):
         abort(403)
     if not _project_dependencies_met(project, student):
         abort(403)
-    if _project_deadline_passed(project):
+    if _project_deadline_passed_for_student(project, student):
         return jsonify({"ok": False, "error": "deadline_passed"}), 403
     submission = _project_task_submission(task, student)
     if not submission:

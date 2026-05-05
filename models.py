@@ -354,6 +354,24 @@ class Project(db.Model):
     points = db.Column(db.Integer, nullable=False, default=0)
     retry_cooldown_minutes = db.Column(db.Integer, nullable=False, default=0)
 
+class ProjectDeadlineOverride(db.Model):
+    __tablename__ = "project_deadline_overrides"
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('projects.id', ondelete="CASCADE"), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete="CASCADE"), nullable=False)
+    deadline_at = db.Column(db.DateTime, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    project = db.relationship('Project', backref=db.backref('deadline_overrides', cascade="all,delete-orphan"))
+    student = db.relationship('Student')
+    created_by = db.relationship('User')
+
+    __table_args__ = (
+        UniqueConstraint('project_id', 'student_id', name='uq_project_deadline_override_student'),
+    )
+
 # --------------------------
 # Blog
 # --------------------------
