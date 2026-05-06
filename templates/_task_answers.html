@@ -1,4 +1,4 @@
-{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True, submission_id=None, attempt_id=None) %}
+{% macro render(questions, answers, logs_by_question=None, grading_by_question=None, show_meta=False, task_auto_grade=True, code_runs_enabled=True, submission_id=None, attempt_id=None, collapse_questions=False, questions_open=True) %}
   {% set logs_by_question = logs_by_question or {} %}
   {% set grading_by_question = grading_by_question or {} %}
   {% if not questions %}
@@ -30,6 +30,16 @@
       {% elif qtype == "code" and has_samples %}
         {% set auto_status = "Auto-graded" %}
         {% set auto_color = "#10b981" %}
+      {% endif %}
+      {% if collapse_questions %}
+        <details style="border:1px solid #1f2937; border-radius:12px; padding:12px; background:#0b1220;" {% if questions_open %}open{% endif %}>
+          <summary style="cursor:pointer; user-select:none;">
+            <span style="font-weight:600;">Question {{ loop.index }}</span>
+            {% if q.title %}<span class="muted"> • {{ q.title|markdown_inline }}</span>{% endif %}
+            <span class="muted" style="margin-left:8px;">{{ qtype|capitalize }}</span>
+            {% if show_meta %}<span class="muted" style="margin-left:8px;">{{ auto_status }}</span>{% endif %}
+          </summary>
+          <div style="margin-top:12px;">
       {% endif %}
       <div style="border:1px solid #1f2937; border-radius:12px; padding:14px; background:#0b1220;">
         <div class="row" style="justify-content:space-between; align-items:flex-start; gap:10px;">
@@ -458,6 +468,10 @@
           </details>
         {% endif %}
       </div>
+      {% if collapse_questions %}
+          </div>
+        </details>
+      {% endif %}
     {% endfor %}
   </div>
   {% endif %}
