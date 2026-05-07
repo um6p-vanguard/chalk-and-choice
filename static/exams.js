@@ -2198,13 +2198,19 @@ json.dumps(results)
           replayingNativeSubmit = false;
           return;
         }
+        event.preventDefault();
         const submitter = event.submitter;
         const artifacts = await getNamespaceArtifacts(artifactNamespace);
         if (!artifacts.length) {
           clearInjectedPlotFields();
+          replayingNativeSubmit = true;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit(submitter || undefined);
+          } else {
+            form.submit();
+          }
           return;
         }
-        event.preventDefault();
         const injected = injectPlotArtifactsIntoForm(artifacts);
         if (!injected) {
           clearInjectedPlotFields();

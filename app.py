@@ -1601,6 +1601,9 @@ def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, requ
         current_answer = prepared.get(qid, "")
         prior_answer = persisted_answers.get(qid)
         code_text = _plot_answer_code(current_answer)
+        if not code_text:
+            prepared[qid] = _build_plot_answer_payload("", None, {}, now_iso)
+            continue
 
         if isinstance(current_answer, dict) and code_text == _plot_answer_code(current_answer):
             payload = dict(current_answer)
@@ -1616,7 +1619,7 @@ def _prepare_plot_answers_for_submit(questions, answers, persisted_answers, requ
             prepared[qid] = payload
             continue
 
-        return None, f"{_plot_label(question, idx)}: run the code to generate a plot before submitting."
+        prepared[qid] = _build_plot_answer_payload(code_text, None, {}, now_iso)
     return prepared, None
 
 def _touch_student_log_session(student, now):
