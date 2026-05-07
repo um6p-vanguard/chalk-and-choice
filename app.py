@@ -346,7 +346,7 @@ SHARE_HOST = os.environ.get("CLASSVOTE_SHARE_HOST")  # optional override for QR 
 ALLOW_MULTI_ATTEMPTS = os.environ.get("ALLOW_MULTI_ATTEMPTS", "0") == "1"
 ENABLE_BACKEND_CODE_RUNS = os.environ.get("ENABLE_BACKEND_CODE_RUNS", "1") == "1"
 CODE_RUN_TIME_LIMIT_SEC = float(os.environ.get("CODE_RUN_TIME_LIMIT_SEC", "3.0"))
-UPLOAD_ROOT = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_ROOT = os.path.abspath(os.environ.get("UPLOAD_ROOT", os.path.join(os.path.dirname(__file__), "uploads")))
 UPLOAD_MAX_MB = 5
 UPLOAD_MAX_BYTES = UPLOAD_MAX_MB * 1024 * 1024
 UPLOAD_DEFAULT_ACCEPT = ".zip"
